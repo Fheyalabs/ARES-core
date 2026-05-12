@@ -338,6 +338,69 @@ func (r *SessionRunner) advance(tracker *sessionTracker) (bool, error) {
 	return true, nil
 }
 
+// AdvanceToState walks the runner's tracked session forward until
+// the current phase's EntryState equals the target, calling Exit
+// on each completed phase and Enter on each newly-entered phase.
+// Use it when an external authority (e.g., the legacy engine) has
+// already advanced the session and the runner needs to catch up
+// to maintain a parallel view.
+//
+// Returns nil when the runner is already at the target (no-op).
+// Returns an error if the target is not reachable from the
+// current state walking forward (the caller passed a target that
+// no later phase claims, or the target is "behind" the current
+// runner position — runners never rewind).
+func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) error {
+	r.mu.RLock()
+	tracker, ok := r.sessions[sessionID]
+	r.mu.RUnlock()
+	if !ok {
+		return fmt.Errorf("phase: AdvanceToState: session %q is not active", sessionID)
+	}
+	if tracker.state == target {
+		return nil
+	}
+	// Walk forward at most len(phases) hops to avoid infinite
+	// loops if the chain has cycles (shouldn't, but defensive).
+	for hop := 0; hop < len(r.phases)+1; hop++ {
+		if tracker.state == target {
+			return nil
+		}
+		current := tracker.current
+		if current == nil {
+			return fmt.Errorf("phase: AdvanceToState: session %q has no current phase but target %q not reached", sessionID, target)
+		}
+		// Exit current and step to next.
+		if err := current.Exit(tracker.ctx); err != nil {
+			return fmt.Errorf("phase %q: Exit during AdvanceToState: %w", current.Name(), err)
+		}
+		next := current.ExitState()
+		if next == StateNone {
+			// Reached the terminal phase but never saw target.
+			return fmt.Errorf("phase: AdvanceToState: session %q reached terminal phase %q without entering target %q",
+				sessionID, current.Name(), target)
+		}
+		r.mu.RLock()
+		nextPhase, ok := r.byEntryState[next]
+		r.mu.RUnlock()
+		if !ok {
+			return fmt.Errorf("phase: AdvanceToState: no phase claims state %q", next)
+		}
+		r.mu.Lock()
+		tracker.state = next
+		tracker.current = nextPhase
+		tracker.entered = false
+		r.mu.Unlock()
+		if err := nextPhase.Enter(tracker.ctx); err != nil {
+			return fmt.Errorf("phase %q: Enter during AdvanceToState: %w", nextPhase.Name(), err)
+		}
+		r.mu.Lock()
+		tracker.entered = true
+		r.mu.Unlock()
+	}
+	return fmt.Errorf("phase: AdvanceToState: hop limit exceeded for session %q (target %q)", sessionID, target)
+}
+
 // EndSession releases the runner's tracking for the given session.
 // Callers should call this when the session terminates (gracefully or
 // otherwise) to release the SessionContext for garbage collection.
