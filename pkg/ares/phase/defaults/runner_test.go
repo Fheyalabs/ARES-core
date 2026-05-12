@@ -43,9 +43,16 @@ func TestNewARESDefaultRunner_BuildsAndConnects(t *testing.T) {
 		}
 	}
 
-	// Confirm CLOSED has no owning phase.
-	if _, ok := r.PhaseForState(StateClosed); ok {
-		t.Errorf("CLOSED should be the terminal state with no owning phase")
+	// Confirm CLOSED is now claimed by Phase D as an internal
+	// state (it was previously unclaimed, which broke
+	// AdvanceToState during the homelab smoke).
+	if p, ok := r.PhaseForState(StateClosed); !ok || p.Name() != "phase-d-anonymous-broadcast" {
+		t.Errorf("PhaseForState(CLOSED) should resolve to phase-d-anonymous-broadcast via InternalStates, got %v ok=%v", p, ok)
+	}
+
+	// Phase 0a should claim KEYGEN as an internal state.
+	if p, ok := r.PhaseForState(StateKeygen); !ok || p.Name() != "phase-0a-threshold-keygen" {
+		t.Errorf("PhaseForState(KEYGEN) should resolve to phase-0a-threshold-keygen via InternalStates, got %v ok=%v", p, ok)
 	}
 }
 

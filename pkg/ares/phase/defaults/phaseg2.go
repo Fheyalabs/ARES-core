@@ -27,6 +27,7 @@ func (PhaseG2Verification) ConsumedMessageTypes() []string {
 		"verify.submit_slot",
 	}
 }
+func (PhaseG2Verification) InternalStates() []phase.SessionState { return nil }
 
 func (PhaseG2Verification) Requires() phase.ContextSchema {
 	return phase.ContextSchema{

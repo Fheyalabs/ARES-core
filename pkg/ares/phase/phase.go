@@ -48,6 +48,18 @@ type Phase interface {
 	// terminal phase of a runner.
 	ExitState() SessionState
 
+	// InternalStates returns sub-states that the phase covers
+	// internally without advancing. Some protocols use multiple
+	// fine-grained engine states for one logical phase — for
+	// example ARES has LOCKED ("ready to start keygen") and
+	// KEYGEN ("accumulating shares") as distinct sub-states of
+	// the single keygen phase. The framework runner treats
+	// EntryState plus every value in InternalStates as
+	// "still inside this phase" for state-lookup and
+	// AdvanceToState purposes. Returning nil is fine for phases
+	// without sub-states.
+	InternalStates() []SessionState
+
 	// ConsumedMessageTypes lists the WebSocket message types this
 	// phase handles via OnMessage. The runner routes inbound
 	// messages by intersecting current-phase consumption with the

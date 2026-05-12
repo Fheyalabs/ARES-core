@@ -28,6 +28,7 @@ func (Phase3ThresholdDecrypt) ExitState() phase.SessionState  { return StateBroa
 func (Phase3ThresholdDecrypt) ConsumedMessageTypes() []string {
 	return []string{"decrypt.partial"}
 }
+func (Phase3ThresholdDecrypt) InternalStates() []phase.SessionState { return nil }
 
 func (Phase3ThresholdDecrypt) Requires() phase.ContextSchema {
 	return phase.ContextSchema{

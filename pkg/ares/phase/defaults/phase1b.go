@@ -28,6 +28,7 @@ func (Phase1bEncryptedSubmit) ExitState() phase.SessionState  { return StateScor
 func (Phase1bEncryptedSubmit) ConsumedMessageTypes() []string {
 	return []string{"submit.distance", "submit.initiator"}
 }
+func (Phase1bEncryptedSubmit) InternalStates() []phase.SessionState { return nil }
 
 func (Phase1bEncryptedSubmit) Requires() phase.ContextSchema {
 	return phase.ContextSchema{

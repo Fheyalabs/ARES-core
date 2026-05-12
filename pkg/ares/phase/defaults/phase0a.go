@@ -38,6 +38,19 @@ func (Phase0aThresholdKeygen) RunsAt() phase.RunsAt           { return phase.Run
 func (Phase0aThresholdKeygen) EntryState() phase.SessionState { return StateLocked }
 func (Phase0aThresholdKeygen) ExitState() phase.SessionState  { return StateGossip }
 
+// InternalStates declares that Phase 0a covers the engine's KEYGEN
+// sub-state in addition to its LOCKED EntryState. The legacy ARES
+// engine moves LOCKED → KEYGEN on the first KeyShareSubmitted and
+// then accumulates remaining shares + eval-round-1 + eval-round-2
+// within KEYGEN before transitioning to GOSSIP on KeygenComplete.
+// The framework folds that whole sequence into one logical phase;
+// declaring KEYGEN as internal here lets the SessionRunner's
+// PhaseForState lookup and AdvanceToState walker recognize KEYGEN
+// as "still inside Phase 0a" instead of a missing state.
+func (Phase0aThresholdKeygen) InternalStates() []phase.SessionState {
+	return []phase.SessionState{StateKeygen}
+}
+
 func (Phase0aThresholdKeygen) ConsumedMessageTypes() []string {
 	// keygen.share carries both the PK-only (Phase A) and PK+eval
 	// (Phase B) variants from the two-phase keygen split landed in

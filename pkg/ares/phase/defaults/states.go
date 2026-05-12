@@ -30,6 +30,16 @@ import "github.com/fheya/ares/pkg/ares/phase"
 const (
 	StateInviting     phase.SessionState = "INVITING"
 	StateLocked       phase.SessionState = "LOCKED"
+	// StateKeygen is an internal sub-state of Phase 0a — the
+	// engine transitions LOCKED → KEYGEN on the first
+	// KeyShareSubmitted event and accumulates remaining keyshare
+	// and eval-round events within KEYGEN before transitioning
+	// to GOSSIP on KeygenComplete. The framework folds the whole
+	// sequence into Phase 0a; KEYGEN is declared as an
+	// InternalState there so PhaseForState and AdvanceToState
+	// treat it as "still inside Phase 0a" rather than a missing
+	// phase.
+	StateKeygen       phase.SessionState = "KEYGEN"
 	StateGossip       phase.SessionState = "GOSSIP"
 	StateVerifying    phase.SessionState = "VERIFYING"
 	StateSubmitting   phase.SessionState = "SUBMITTING"

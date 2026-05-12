@@ -32,6 +32,7 @@ func (Phase1aSessionInitiation) ExitState() phase.SessionState  { return StateLo
 func (Phase1aSessionInitiation) ConsumedMessageTypes() []string {
 	return []string{"session.accept"}
 }
+func (Phase1aSessionInitiation) InternalStates() []phase.SessionState { return nil }
 
 func (Phase1aSessionInitiation) Requires() phase.ContextSchema { return nil }
 

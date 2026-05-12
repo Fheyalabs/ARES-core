@@ -24,9 +24,10 @@ import (
 // constraint chain) returns an error immediately so misconfigurations
 // fail fast at service startup rather than at session start.
 type SessionRunner struct {
-	phases       []Phase
-	byName       map[string]Phase
-	byEntryState map[SessionState]Phase
+	phases          []Phase
+	byName          map[string]Phase
+	byEntryState    map[SessionState]Phase
+	byInternalState map[SessionState]Phase
 
 	// initialState is the EntryState of the first inline phase.
 	initialState SessionState
@@ -69,10 +70,11 @@ func NewSessionRunner(phases ...Phase) (*SessionRunner, error) {
 	}
 
 	r := &SessionRunner{
-		phases:       append([]Phase(nil), phases...),
-		byName:       make(map[string]Phase, len(phases)),
-		byEntryState: make(map[SessionState]Phase),
-		sessions:     make(map[string]*sessionTracker),
+		phases:          append([]Phase(nil), phases...),
+		byName:          make(map[string]Phase, len(phases)),
+		byEntryState:    make(map[SessionState]Phase),
+		byInternalState: make(map[SessionState]Phase),
+		sessions:        make(map[string]*sessionTracker),
 	}
 
 	provided := make(map[string]ContextKeyType)
@@ -104,6 +106,22 @@ func NewSessionRunner(phases ...Phase) (*SessionRunner, error) {
 				return nil, fmt.Errorf("phase: entry state %q claimed by both %q and %q", entry, existing.Name(), name)
 			}
 			r.byEntryState[entry] = p
+
+			for _, sub := range p.InternalStates() {
+				if sub == StateNone {
+					return nil, fmt.Errorf("phase %q: InternalStates contains StateNone", name)
+				}
+				if sub == entry {
+					return nil, fmt.Errorf("phase %q: InternalStates duplicates EntryState %q", name, sub)
+				}
+				if existing, ok := r.byEntryState[sub]; ok {
+					return nil, fmt.Errorf("phase %q: internal state %q is also EntryState of %q", name, sub, existing.Name())
+				}
+				if existing, ok := r.byInternalState[sub]; ok {
+					return nil, fmt.Errorf("phase %q: internal state %q is also an internal state of %q", name, sub, existing.Name())
+				}
+				r.byInternalState[sub] = p
+			}
 
 			if prevInline == nil {
 				r.initialState = entry
@@ -229,11 +247,17 @@ func (r *SessionRunner) InitialState() SessionState {
 }
 
 // PhaseForState returns the inline phase that owns the given session
-// state. The second return value is false when no inline phase claims
-// the state (typically the terminal "done" state).
+// state — either as its EntryState or as one of its declared
+// InternalStates. The second return value is false when no inline
+// phase claims the state (typically the terminal "done" state).
 func (r *SessionRunner) PhaseForState(s SessionState) (Phase, bool) {
-	p, ok := r.byEntryState[s]
-	return p, ok
+	if p, ok := r.byEntryState[s]; ok {
+		return p, true
+	}
+	if p, ok := r.byInternalState[s]; ok {
+		return p, true
+	}
+	return nil, false
 }
 
 // BeginSession creates a tracker for a new session, places it in the
@@ -359,6 +383,18 @@ func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) er
 	}
 	if tracker.state == target {
 		return nil
+	}
+	// If target is an internal state of the current phase, the
+	// session is still inside this phase — no advancement
+	// required. This handles ARES's LOCKED → KEYGEN sub-state
+	// (KEYGEN is internal to Phase 0a) and any other
+	// coarse-phase / fine-state mismatches.
+	if tracker.current != nil {
+		for _, sub := range tracker.current.InternalStates() {
+			if sub == target {
+				return nil
+			}
+		}
 	}
 	// Walk forward at most len(phases) hops to avoid infinite
 	// loops if the chain has cycles (shouldn't, but defensive).

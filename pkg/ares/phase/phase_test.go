@@ -18,6 +18,7 @@ type mockPhase struct {
 	runsAt    RunsAt
 	entry     SessionState
 	exit      SessionState
+	internals []SessionState
 	messages  []string
 	requires  ContextSchema
 	provides  ContextSchema
@@ -39,6 +40,7 @@ func (m *mockPhase) Lifetime() Lifetime             { return m.lifetime }
 func (m *mockPhase) RunsAt() RunsAt                 { return m.runsAt }
 func (m *mockPhase) EntryState() SessionState       { return m.entry }
 func (m *mockPhase) ExitState() SessionState        { return m.exit }
+func (m *mockPhase) InternalStates() []SessionState { return m.internals }
 func (m *mockPhase) ConsumedMessageTypes() []string { return m.messages }
 func (m *mockPhase) Requires() ContextSchema        { return m.requires }
 func (m *mockPhase) Provides() ContextSchema        { return m.provides }
@@ -387,6 +389,74 @@ func TestRunner_BubblesPhaseErrors(t *testing.T) {
 	}
 	if _, err := r.HandleMessage("s", "m", "from", nil); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Errorf("expected boom propagated, got %v", err)
+	}
+}
+
+func TestPhaseForState_FindsInternalStates(t *testing.T) {
+	a := &mockPhase{
+		name:      "a",
+		runsAt:    RunsAtInline,
+		entry:     "S1",
+		exit:      "S2",
+		internals: []SessionState{"S1_SUB"},
+		messages:  []string{"m"},
+		completeAfterN: 1,
+	}
+	b := &mockPhase{
+		name:           "b",
+		runsAt:         RunsAtInline,
+		entry:          "S2",
+		exit:           StateNone,
+		messages:       []string{"m2"},
+		completeAfterN: 1,
+	}
+	r, err := NewSessionRunner(a, b)
+	if err != nil {
+		t.Fatalf("constructor: %v", err)
+	}
+	if p, ok := r.PhaseForState("S1_SUB"); !ok || p.Name() != "a" {
+		t.Errorf("PhaseForState(S1_SUB) = %v, %v; want phase a", p, ok)
+	}
+	if p, ok := r.PhaseForState("S1"); !ok || p.Name() != "a" {
+		t.Errorf("PhaseForState(S1) = %v, %v; want phase a", p, ok)
+	}
+}
+
+func TestAdvanceToState_TreatsInternalAsNoOp(t *testing.T) {
+	a := &mockPhase{
+		name:      "a",
+		runsAt:    RunsAtInline,
+		entry:     "S1",
+		exit:      "S2",
+		internals: []SessionState{"S1_SUB"},
+		messages:  []string{"m"},
+		completeAfterN: 1,
+	}
+	b := &mockPhase{
+		name:           "b",
+		runsAt:         RunsAtInline,
+		entry:          "S2",
+		exit:           StateNone,
+		messages:       []string{"m2"},
+		completeAfterN: 1,
+	}
+	r, err := NewSessionRunner(a, b)
+	if err != nil {
+		t.Fatalf("constructor: %v", err)
+	}
+	if _, err := r.BeginSession("s", ""); err != nil {
+		t.Fatalf("BeginSession: %v", err)
+	}
+	if err := r.AdvanceToState("s", "S1_SUB"); err != nil {
+		t.Errorf("AdvanceToState(S1_SUB) should be a no-op for internal state, got: %v", err)
+	}
+	state, _ := r.CurrentState("s")
+	if state != "S1" {
+		t.Errorf("session moved off S1 unexpectedly: now at %q", state)
+	}
+	// Phase a should NOT have called Exit yet.
+	if a.exitCount != 0 {
+		t.Errorf("phase a Exit called %d times during internal-state advance, want 0", a.exitCount)
 	}
 }
 

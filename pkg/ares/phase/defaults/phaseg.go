@@ -29,6 +29,7 @@ func (PhaseGOnionShuffle) ConsumedMessageTypes() []string {
 	// accumulate within the GOSSIP → VERIFYING arc.
 	return []string{"gossip.onion_batch", "gossip.peel_forward"}
 }
+func (PhaseGOnionShuffle) InternalStates() []phase.SessionState { return nil }
 func (PhaseGOnionShuffle) Requires() phase.ContextSchema {
 	return phase.ContextSchema{CtxParticipants: {TypeName: "[]string", Required: true}}
 }

@@ -35,7 +35,8 @@ func (Phase0bRegistration) Lifetime() phase.Lifetime       { return phase.Lifeti
 func (Phase0bRegistration) RunsAt() phase.RunsAt           { return phase.RunsAtRegistration }
 func (Phase0bRegistration) EntryState() phase.SessionState { return phase.StateNone }
 func (Phase0bRegistration) ExitState() phase.SessionState  { return phase.StateNone }
-func (Phase0bRegistration) ConsumedMessageTypes() []string { return nil }
+func (Phase0bRegistration) ConsumedMessageTypes() []string       { return nil }
+func (Phase0bRegistration) InternalStates() []phase.SessionState { return nil }
 
 func (Phase0bRegistration) Requires() phase.ContextSchema { return nil }
 

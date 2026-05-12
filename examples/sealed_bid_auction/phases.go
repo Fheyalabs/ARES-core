@@ -22,6 +22,7 @@ func (PhaseInvitation) RunsAt() phase.RunsAt                                    
 func (PhaseInvitation) EntryState() phase.SessionState                                            { return StateAuctionInviting }
 func (PhaseInvitation) ExitState() phase.SessionState                                             { return StateAuctionLocked }
 func (PhaseInvitation) ConsumedMessageTypes() []string                                            { return nil }
+func (PhaseInvitation) InternalStates() []phase.SessionState                                      { return nil }
 func (PhaseInvitation) Requires() phase.ContextSchema                                             { return nil }
 func (PhaseInvitation) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
@@ -60,7 +61,8 @@ func (PhaseKeygen) Lifetime() phase.Lifetime       { return phase.LifetimePerSes
 func (PhaseKeygen) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
 func (PhaseKeygen) EntryState() phase.SessionState { return StateAuctionLocked }
 func (PhaseKeygen) ExitState() phase.SessionState  { return StateAuctionBidding }
-func (PhaseKeygen) ConsumedMessageTypes() []string { return []string{"auction.keygen.share"} }
+func (PhaseKeygen) ConsumedMessageTypes() []string             { return []string{"auction.keygen.share"} }
+func (PhaseKeygen) InternalStates() []phase.SessionState       { return nil }
 func (PhaseKeygen) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionParticipants:   {TypeName: "[]string", Required: true},
@@ -99,7 +101,8 @@ func (PhaseScalarBid) Lifetime() phase.Lifetime       { return phase.LifetimePer
 func (PhaseScalarBid) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
 func (PhaseScalarBid) EntryState() phase.SessionState { return StateAuctionBidding }
 func (PhaseScalarBid) ExitState() phase.SessionState  { return StateAuctionScoring }
-func (PhaseScalarBid) ConsumedMessageTypes() []string { return []string{"auction.bid"} }
+func (PhaseScalarBid) ConsumedMessageTypes() []string             { return []string{"auction.bid"} }
+func (PhaseScalarBid) InternalStates() []phase.SessionState       { return nil }
 func (PhaseScalarBid) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionParticipants:        {TypeName: "[]string", Required: true},
@@ -139,7 +142,8 @@ func (PhaseArgmax) Lifetime() phase.Lifetime       { return phase.LifetimePerSes
 func (PhaseArgmax) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
 func (PhaseArgmax) EntryState() phase.SessionState { return StateAuctionScoring }
 func (PhaseArgmax) ExitState() phase.SessionState  { return StateAuctionDecrypting }
-func (PhaseArgmax) ConsumedMessageTypes() []string { return nil }
+func (PhaseArgmax) ConsumedMessageTypes() []string             { return nil }
+func (PhaseArgmax) InternalStates() []phase.SessionState       { return nil }
 func (PhaseArgmax) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionParticipants:   {TypeName: "[]string", Required: true},
@@ -176,7 +180,8 @@ func (PhaseDecrypt) Lifetime() phase.Lifetime       { return phase.LifetimePerSe
 func (PhaseDecrypt) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
 func (PhaseDecrypt) EntryState() phase.SessionState { return StateAuctionDecrypting }
 func (PhaseDecrypt) ExitState() phase.SessionState  { return StateAuctionSettled }
-func (PhaseDecrypt) ConsumedMessageTypes() []string { return []string{"auction.decrypt.partial"} }
+func (PhaseDecrypt) ConsumedMessageTypes() []string             { return []string{"auction.decrypt.partial"} }
+func (PhaseDecrypt) InternalStates() []phase.SessionState       { return nil }
 func (PhaseDecrypt) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionParticipants:    {TypeName: "[]string", Required: true},
@@ -216,7 +221,8 @@ func (PhaseSettlement) Lifetime() phase.Lifetime       { return phase.LifetimePe
 func (PhaseSettlement) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
 func (PhaseSettlement) EntryState() phase.SessionState { return StateAuctionSettled }
 func (PhaseSettlement) ExitState() phase.SessionState  { return phase.StateNone }
-func (PhaseSettlement) ConsumedMessageTypes() []string { return nil }
+func (PhaseSettlement) ConsumedMessageTypes() []string             { return nil }
+func (PhaseSettlement) InternalStates() []phase.SessionState       { return nil }
 func (PhaseSettlement) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionWinnerBid: {TypeName: "WinnerBid", Required: true},

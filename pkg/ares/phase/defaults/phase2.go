@@ -37,7 +37,8 @@ func (Phase2FHEScoring) ExitState() phase.SessionState  { return StateDecrypting
 // ConsumedMessageTypes is empty: Phase 2 is server-side compute.
 // Participants neither send nor receive Phase 2 messages until
 // `scoring.complete` is broadcast on transition.
-func (Phase2FHEScoring) ConsumedMessageTypes() []string { return nil }
+func (Phase2FHEScoring) ConsumedMessageTypes() []string       { return nil }
+func (Phase2FHEScoring) InternalStates() []phase.SessionState { return nil }
 
 func (Phase2FHEScoring) Requires() phase.ContextSchema {
 	return phase.ContextSchema{

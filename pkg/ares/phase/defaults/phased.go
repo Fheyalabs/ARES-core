@@ -34,6 +34,22 @@ func (PhaseDAnonymousBroadcast) ConsumedMessageTypes() []string {
 	return []string{"phased.message", "rating.submit"}
 }
 
+// InternalStates declares the post-Phase-D sub-states the engine
+// uses for outcome tracking (CLOSED is the immediate exit; MATCHED
+// and COOLDOWN are reached on outcome events; EXPIRED follows
+// MATCHED on unmatch/expiry). The framework folds the entire
+// post-result outcome window into Phase D so the lifecycle tracker
+// stays aligned through the smoke linger period without raising
+// drift on these post-keygen states.
+func (PhaseDAnonymousBroadcast) InternalStates() []phase.SessionState {
+	return []phase.SessionState{
+		"CLOSED",
+		"MATCHED",
+		"COOLDOWN",
+		"EXPIRED",
+	}
+}
+
 func (PhaseDAnonymousBroadcast) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxParticipants:  {TypeName: "[]string", Required: true},

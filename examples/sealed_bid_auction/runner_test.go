@@ -89,6 +89,7 @@ func (fakeArgmaxRequiringDeepCircuit) Lifetime() phase.Lifetime       { return p
 func (fakeArgmaxRequiringDeepCircuit) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
 func (fakeArgmaxRequiringDeepCircuit) EntryState() phase.SessionState { return StateAuctionScoring }
 func (fakeArgmaxRequiringDeepCircuit) ExitState() phase.SessionState  { return StateAuctionDecrypting }
+func (fakeArgmaxRequiringDeepCircuit) InternalStates() []phase.SessionState { return nil }
 func (fakeArgmaxRequiringDeepCircuit) ConsumedMessageTypes() []string { return nil }
 func (fakeArgmaxRequiringDeepCircuit) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
