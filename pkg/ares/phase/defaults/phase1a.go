@@ -24,12 +24,14 @@ func (Phase1aSessionInitiation) RunsAt() phase.RunsAt           { return phase.R
 func (Phase1aSessionInitiation) EntryState() phase.SessionState { return StateInviting }
 func (Phase1aSessionInitiation) ExitState() phase.SessionState  { return StateLocked }
 
-// ConsumedMessageTypes is empty: Phase 1a is server-side. The
-// participants reply over HTTP to `session.invitation` (not via WS),
-// and the orchestrator transitions the session out of INVITING when
-// enough acceptances arrive. The framework registers no WS handler
-// here.
-func (Phase1aSessionInitiation) ConsumedMessageTypes() []string { return nil }
+// ConsumedMessageTypes covers participant acceptances. After the
+// coordinator broadcasts `session.invitation`, each invited
+// participant replies with `session.accept` over the WebSocket; the
+// session leaves INVITING for LOCKED when every participant has
+// accepted.
+func (Phase1aSessionInitiation) ConsumedMessageTypes() []string {
+	return []string{"session.accept"}
+}
 
 func (Phase1aSessionInitiation) Requires() phase.ContextSchema { return nil }
 

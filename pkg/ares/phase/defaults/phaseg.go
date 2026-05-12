@@ -23,7 +23,12 @@ func (PhaseGOnionShuffle) Lifetime() phase.Lifetime         { return phase.Lifet
 func (PhaseGOnionShuffle) RunsAt() phase.RunsAt             { return phase.RunsAtInline }
 func (PhaseGOnionShuffle) EntryState() phase.SessionState   { return StateGossip }
 func (PhaseGOnionShuffle) ExitState() phase.SessionState    { return StateVerifying }
-func (PhaseGOnionShuffle) ConsumedMessageTypes() []string   { return []string{"gossip.onion_batch"} }
+func (PhaseGOnionShuffle) ConsumedMessageTypes() []string {
+	// gossip.onion_batch is the initial batched onion submission;
+	// gossip.peel_forward is each subsequent forwarding step. Both
+	// accumulate within the GOSSIP → VERIFYING arc.
+	return []string{"gossip.onion_batch", "gossip.peel_forward"}
+}
 func (PhaseGOnionShuffle) Requires() phase.ContextSchema {
 	return phase.ContextSchema{CtxParticipants: {TypeName: "[]string", Required: true}}
 }

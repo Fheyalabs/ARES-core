@@ -24,7 +24,14 @@ func (PhaseDAnonymousBroadcast) EntryState() phase.SessionState { return StateBr
 func (PhaseDAnonymousBroadcast) ExitState() phase.SessionState  { return StateClosed }
 
 func (PhaseDAnonymousBroadcast) ConsumedMessageTypes() []string {
-	return []string{"phased.message"}
+	// phased.message is the in-window encrypted broadcast frame
+	// (winner package fragments and cover traffic). rating.submit
+	// is the per-participant rating submitted after the result is
+	// known and before the matched / cooldown transition; today's
+	// engine accumulates it in StateMatched but the framework
+	// folds the rating window into Phase D's exit-state arc
+	// because that is where the post-result interaction lives.
+	return []string{"phased.message", "rating.submit"}
 }
 
 func (PhaseDAnonymousBroadcast) Requires() phase.ContextSchema {

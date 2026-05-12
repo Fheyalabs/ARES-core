@@ -44,7 +44,15 @@ func (Phase0aThresholdKeygen) ConsumedMessageTypes() []string {
 	// commit 93ecadb. The phase implementation distinguishes them
 	// by inspecting payload fields; the WS routing only cares
 	// about the type string.
-	return []string{"keygen.share"}
+	//
+	// keygen.eval_share is the eval-round-2 final share each
+	// participant emits after the server broadcasts
+	// keygen.eval_round1_complete. All eval shares for the session
+	// belong to this same phase — they accumulate inside the
+	// LOCKED → GOSSIP arc, transitioning out only when the
+	// orchestrator has fused the round-2 shares into the joint
+	// evaluation keys.
+	return []string{"keygen.share", "keygen.eval_share"}
 }
 
 func (Phase0aThresholdKeygen) Requires() phase.ContextSchema {
