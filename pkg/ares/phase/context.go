@@ -97,6 +97,18 @@ func MustGet[T any](c *SessionContext, key string) T {
 	return typed
 }
 
+// MissingContextError is returned by a phase when context keys it
+// requires are absent at Enter time. The runner treats this as a
+// session-start failure (does not proceed past Enter).
+type MissingContextError struct {
+	Key   string
+	Phase string
+}
+
+func (e *MissingContextError) Error() string {
+	return "phase: " + e.Phase + " requires context key " + e.Key + " which is not set"
+}
+
 // TryGet returns the typed value stored under key together with a
 // boolean indicating whether the key was present and assignable to T.
 func TryGet[T any](c *SessionContext, key string) (T, bool) {
