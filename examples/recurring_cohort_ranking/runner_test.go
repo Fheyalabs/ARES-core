@@ -3,7 +3,7 @@ package recurringcohortranking
 import (
 	"testing"
 
-	"github.com/fheya/ares/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
 // TestCohortFormationRunner_Composes verifies the three-phase

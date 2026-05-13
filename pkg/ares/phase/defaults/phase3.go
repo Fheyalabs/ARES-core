@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Phase3ThresholdDecrypt is ARES v2.4 §"Phase 3 — Threshold
 // Decrypt". Each participant submits a partial decryption of

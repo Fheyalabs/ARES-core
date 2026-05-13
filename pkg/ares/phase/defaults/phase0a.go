@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Phase0aThresholdKeygen is ARES v2.4 §"Phase 0a — Per-Session
 // Threshold Key Generation". N participants perform a chained

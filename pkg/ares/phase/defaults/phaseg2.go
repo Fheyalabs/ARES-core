@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // PhaseG2Verification is ARES v2.4 §"Phase G.2 — Verification
 // Round". After onion shuffling, participants exchange contribution

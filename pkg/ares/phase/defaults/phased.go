@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // PhaseDAnonymousBroadcast is ARES v2.4 §"Phase D — Anonymous
 // All-N Broadcast". The decrypted winner package plus a fixed

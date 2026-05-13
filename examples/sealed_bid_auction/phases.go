@@ -1,6 +1,6 @@
 package sealedbidauction
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // PhaseInvitation opens an auction. The auctioneer picks N bidders
 // from the registered pool, pins the CKKS parameters appropriate to

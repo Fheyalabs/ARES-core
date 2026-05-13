@@ -1,4 +1,4 @@
-module github.com/fheya/ares
+module github.com/Fheyalabs/ares-core
 
 go 1.23.3
 

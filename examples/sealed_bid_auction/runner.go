@@ -1,6 +1,6 @@
 package sealedbidauction
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // NewSealedBidAuctionRunner builds a SessionRunner over the auction
 // pipeline:

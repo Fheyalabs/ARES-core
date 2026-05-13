@@ -22,7 +22,7 @@
 // values into the runner's phase list.
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // SessionState labels for the canonical ARES pipeline. These match
 // the existing internal/engine SessionState constants so the framework

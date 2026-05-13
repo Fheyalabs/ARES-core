@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // PhaseGOnionShuffle is ARES v2.4 §"Phase G — Gossip Round". A
 // fixed number of onion-shuffle rounds anonymizes the mapping

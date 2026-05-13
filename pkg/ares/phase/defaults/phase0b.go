@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Phase0bRegistration is the registration-time phase from ARES v2.4
 // §"Phase 0b — Registration". A participant registers with the

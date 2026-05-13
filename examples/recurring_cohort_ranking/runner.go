@@ -1,6 +1,6 @@
 package recurringcohortranking
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // NewCohortFormationRunner builds a SessionRunner for the one-time
 // cohort formation sequence. Run it once per cohort lifecycle:

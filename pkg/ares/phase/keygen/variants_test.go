@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fheya/ares/pkg/ares/phase"
-	"github.com/fheya/ares/pkg/ares/phase/defaults"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
 
 // TestSinglePartyKeygen_ComposesIntoDefaultRunner verifies
@@ -109,8 +109,13 @@ func TestPreSharedKeygen_ComposesIntoDefaultRunner(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected constructor to reject PreSharedKeygen without a preceding context-providing phase")
 	}
-	if !strings.Contains(err.Error(), defaults.CtxCollectivePublicKey) {
-		t.Errorf("expected error about %s, got: %v", defaults.CtxCollectivePublicKey, err)
+	// Any of the three required-absent keys is correct — Go map
+	// iteration order is non-deterministic.
+	ok := strings.Contains(err.Error(), defaults.CtxCollectivePublicKey) ||
+		strings.Contains(err.Error(), defaults.CtxSecretShares) ||
+		strings.Contains(err.Error(), defaults.CtxEvalKeys)
+	if !ok {
+		t.Errorf("expected error about one of [collective_pk, secret_shares, eval_keys], got: %v", err)
 	}
 }
 

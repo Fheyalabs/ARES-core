@@ -24,7 +24,7 @@
 // keys, distinct pipeline.
 package recurringcohortranking
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Cohort formation states.
 const (

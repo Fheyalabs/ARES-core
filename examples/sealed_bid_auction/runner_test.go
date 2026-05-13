@@ -3,7 +3,7 @@ package sealedbidauction
 import (
 	"testing"
 
-	"github.com/fheya/ares/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
 // TestNewSealedBidAuctionRunner_Composes is the framework-validity

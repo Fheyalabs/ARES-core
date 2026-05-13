@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // NewARESDefaultRunner builds a SessionRunner over the canonical
 // ARES v2.4 phase pipeline:

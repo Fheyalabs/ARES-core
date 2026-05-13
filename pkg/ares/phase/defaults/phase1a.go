@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Phase1aSessionInitiation is ARES v2.4 §"Phase 1a — Session
 // Initiation". The coordinator selects N eligible participants from

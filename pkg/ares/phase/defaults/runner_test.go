@@ -3,7 +3,7 @@ package defaults
 import (
 	"testing"
 
-	"github.com/fheya/ares/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
 // TestNewARESDefaultRunner_BuildsAndConnects verifies that the

@@ -25,8 +25,8 @@
 package keygen
 
 import (
-	"github.com/fheya/ares/pkg/ares/phase"
-	"github.com/fheya/ares/pkg/ares/phase/defaults"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
 
 // ── Shared context key names ──────────────────────────────────────

@@ -27,7 +27,7 @@
 // signed transcript and terminates.
 package sealedbidauction
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // SessionState labels for the auction pipeline. Distinct from the
 // Fheya defaults so the two pipelines could in principle run in the

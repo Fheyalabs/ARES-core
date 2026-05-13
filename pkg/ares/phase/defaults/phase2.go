@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Phase2FHEScoring is ARES v2.4 §"Phase 2 — Homomorphic Scoring".
 // The server runs the encrypted scoring circuit on the

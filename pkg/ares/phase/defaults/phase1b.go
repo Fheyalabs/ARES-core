@@ -1,6 +1,6 @@
 package defaults
 
-import "github.com/fheya/ares/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
 // Phase1bEncryptedSubmit is ARES v2.4 §"Phase 1b — Distance,
 // Profile, and Winner Package". Each non-initiator submits its
