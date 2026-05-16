@@ -1,0 +1,28 @@
+package rideshare
+
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+
+// NewRideShareRunner builds a SessionRunner for the inDrive-style
+// ride-share pipeline:
+//
+//   Invite → Keygen → Submit → Score → Decrypt → Settle
+//
+// Six phases. Depth=12 circuit (price_fitness × proximity_fitness
+// composite score — shallower than Fheya's depth=30 cosine chain
+// but deeper than the auction's depth=10 scalar argmax).
+//
+// Roles are assigned by PhaseInvite: one rider, N drivers.
+// The scorer computes a composite (weighted sum of price
+// fitness and proximity) for each driver and selects the
+// argmax. The winner package reveals (agreed_price,
+// driver_id, rider_id) to both parties.
+func NewRideShareRunner() (*phase.SessionRunner, error) {
+	return phase.NewSessionRunner(
+		NewPhaseInvite(),
+		NewPhaseKeygen(),
+		NewPhaseSubmit(),
+		NewPhaseScore(),
+		NewPhaseDecrypt(),
+		NewPhaseSettle(),
+	)
+}
