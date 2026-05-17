@@ -864,6 +864,24 @@ CiphertextHandle EvalChebyshevSign(CryptoContextHandle ctx, CiphertextHandle ct,
     }
 }
 
+CiphertextHandle EvalPolynomial(CryptoContextHandle ctx, CiphertextHandle ct, double* coeffs, int n_coeffs) {
+    try {
+        if (n_coeffs <= 0 || coeffs == nullptr) {
+            return nullptr;
+        }
+        auto* c = as_ctx(ctx);
+        std::vector<double> coefficients(coeffs, coeffs + n_coeffs);
+        return reinterpret_cast<CiphertextHandle>(new ARESCiphertext{
+            c->cc->EvalPoly(as_ct(ct)->ct, coefficients)
+        });
+    } catch (const std::exception& e) {
+        std::cerr << "[openfhe] EvalPolynomial failed: " << e.what() << std::endl;
+        return nullptr;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len) {
     try {
         return serialize_object(as_ct(ct)->ct, out_data, out_len);

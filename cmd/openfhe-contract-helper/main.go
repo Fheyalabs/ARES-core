@@ -37,6 +37,16 @@ type request struct {
 	Lead           bool               `json:"lead,omitempty"`
 	Partials       []string           `json:"partials,omitempty"`
 	NSlots         int                `json:"n_slots,omitempty"`
+
+	// Decomposable scoring primitives. See helperclient/scoring_ops.go.
+	EvalKeys       string             `json:"eval_keys,omitempty"`
+	CiphertextA    string             `json:"ciphertext_a,omitempty"`
+	CiphertextB    string             `json:"ciphertext_b,omitempty"`
+	Scalar         float64            `json:"scalar,omitempty"`
+	Coefficients   []float64          `json:"coefficients,omitempty"`
+	PolyLowerBound float64            `json:"poly_lower_bound,omitempty"`
+	PolyUpperBound float64            `json:"poly_upper_bound,omitempty"`
+	Ciphertexts    []string           `json:"ciphertexts,omitempty"`
 }
 
 type response struct {
@@ -220,14 +230,27 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{Values: values}, nil
-	case "eval_add", "eval_sub", "eval_mult", "eval_const_mult", "eval_poly", "argmax":
-		// Decomposable scoring primitives. The Go-side API in
-		// pkg/ares/crypto/helperclient is stable; the C++ wrappers
-		// will land in a follow-up. Returning a structured "not
-		// implemented" lets callers wire their scoring-phase code
-		// against the helperclient API today and treat the error
-		// as a feature gate.
-		return response{}, fmt.Errorf("op %q: not yet implemented (see ARES-core helperclient/scoring_ops.go for the planned API)", req.Op)
+	case "eval_poly":
+		evalKeys, err := decodeB64("eval_keys", req.EvalKeys)
+		if err != nil {
+			return response{}, err
+		}
+		ct, err := decodeB64("ciphertext", req.Ciphertext)
+		if err != nil {
+			return response{}, err
+		}
+		if len(req.Coefficients) == 0 {
+			return response{}, errors.New("eval_poly requires coefficients")
+		}
+		result, err := openfhe.EvalPolyCKKSForContract(params, evalKeys, ct, req.Coefficients)
+		if err != nil {
+			return response{}, err
+		}
+		return response{Ciphertext: encodeB64(result)}, nil
+	case "eval_add", "eval_sub", "eval_mult", "eval_const_mult", "argmax":
+		// Remaining decomposable primitives. Wrappers land in a
+		// follow-up; Go-side API in helperclient is stable.
+		return response{}, fmt.Errorf("op %q: not yet implemented (see helperclient/scoring_ops.go)", req.Op)
 	default:
 		return response{}, fmt.Errorf("unsupported op %q", req.Op)
 	}

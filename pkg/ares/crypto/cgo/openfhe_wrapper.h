@@ -90,6 +90,13 @@ CiphertextHandle EvalMultConst(CryptoContextHandle ctx,
 CiphertextHandle EvalChebyshevSign(CryptoContextHandle ctx,
     CiphertextHandle ct, int degree);
 
+// Polynomial evaluation: applies p(x) = sum(coeffs[i] * x^i) slot-wise.
+// coeffs is in ascending order (coeffs[0] is the constant term). The
+// CryptoContext must have an eval-mult key registered for any
+// polynomial with degree >= 2. Returns nullptr on failure.
+CiphertextHandle EvalPolynomial(CryptoContextHandle ctx,
+    CiphertextHandle ct, double* coeffs, int n_coeffs);
+
 // Serialization
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx,

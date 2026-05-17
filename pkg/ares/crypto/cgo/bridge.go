@@ -533,6 +533,70 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 	return copyCBytes(out, outLen), nil
 }
 
+// EvalPolyCKKSForContract evaluates a polynomial p(x) = Σ coeffs[i]·xⁱ
+// slot-wise on a ciphertext. coefficients is in ascending order
+// (coefficients[0] is the constant term). evalMultKey is the joint
+// eval-mult key from the keygen rounds; required for any polynomial
+// with degree ≥ 2.
+func EvalPolyCKKSForContract(
+	params ContractParams,
+	evalMultKey []byte,
+	ciphertext []byte,
+	coefficients []float64,
+) ([]byte, error) {
+	if len(ciphertext) == 0 {
+		return nil, fmt.Errorf("ciphertext is required")
+	}
+	if len(coefficients) == 0 {
+		return nil, fmt.Errorf("coefficients are required")
+	}
+	if len(evalMultKey) == 0 && hasNonConstantTerm(coefficients) {
+		return nil, fmt.Errorf("eval-mult key is required for non-constant polynomials")
+	}
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	if len(evalMultKey) > 0 {
+		multKey, err := deserializeEvalMultKey(ctx, evalMultKey)
+		if err != nil {
+			return nil, err
+		}
+		defer C.FreeEvalMultKey(multKey)
+		if rc := C.InsertEvalMultKey(ctx, multKey); rc != 0 {
+			return nil, fmt.Errorf("insert eval-mult key failed")
+		}
+	}
+
+	ct, err := deserializeCiphertext(ctx, ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(ct)
+
+	out := C.EvalPolynomial(
+		ctx, ct,
+		(*C.double)(unsafe.Pointer(&coefficients[0])),
+		C.int(len(coefficients)),
+	)
+	if out == nil {
+		return nil, fmt.Errorf("eval poly failed")
+	}
+	defer C.FreeCiphertext(out)
+	return serializeCiphertext(out)
+}
+
+func hasNonConstantTerm(coeffs []float64) bool {
+	for i := 1; i < len(coeffs); i++ {
+		if coeffs[i] != 0 {
+			return true
+		}
+	}
+	return false
+}
+
 func EncryptCKKSForContract(params ContractParams, jointPublicKey []byte, values []float64) ([]byte, error) {
 	if len(jointPublicKey) == 0 {
 		return nil, fmt.Errorf("joint public key is required")
