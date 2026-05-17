@@ -58,6 +58,21 @@ func (c *SessionContext) Set(key string, value any) {
 	c.values[key] = value
 }
 
+// Update applies fn to the current value under key atomically, storing
+// fn's return value back at the same key. Useful for read-modify-write
+// patterns (e.g. accumulating per-sender submissions) that would race if
+// implemented as separate Get + Set calls, since the WebSocket hub can
+// invoke OnMessage concurrently for messages from different participants.
+//
+// fn receives the current value (nil if absent) and returns the updated
+// value. fn must not call other SessionContext methods on c (it would
+// deadlock).
+func (c *SessionContext) Update(key string, fn func(current any) any) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.values[key] = fn(c.values[key])
+}
+
 // Has returns true if key has been set.
 func (c *SessionContext) Has(key string) bool {
 	c.mu.RLock()

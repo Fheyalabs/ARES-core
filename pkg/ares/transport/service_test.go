@@ -57,10 +57,14 @@ func newDispatchRunner(t *testing.T, gotMsg func()) *phase.SessionRunner {
 		consumes: []string{"advance"},
 		gotMsgsFn: gotMsg,
 	}
+	// `second` declares a consumed type to stop the runner's cascade
+	// behavior at this state (without a consumed type, CheckComplete=
+	// true would auto-advance through this phase too).
 	second := &twoStatePhase{
-		name:  "second",
-		entry: "SECOND",
-		exit:  phase.StateNone,
+		name:     "second",
+		entry:    "SECOND",
+		exit:     phase.StateNone,
+		consumes: []string{"finalize"},
 	}
 	r, err := phase.NewSessionRunner(first, second)
 	if err != nil {

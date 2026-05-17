@@ -55,4 +55,9 @@ const (
 	CtxWinnerRating     = "ranking.ct_winner"
 	CtxWinner           = "ranking.winner"
 	CtxTranscript       = "ranking.transcript"
+
+	// Accumulator bucket keys.
+	bucketCohortKeygenShares = "cohort.bucket.keygen_shares"
+	bucketRatings            = "ranking.bucket.ratings"
+	bucketDecryptPartials    = "ranking.bucket.decrypt_partials"
 )

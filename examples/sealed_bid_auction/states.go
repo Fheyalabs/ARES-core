@@ -86,4 +86,12 @@ const (
 	// CtxAuctionSettlement holds the signed settlement transcript
 	// (winning_bid, winner_id, signed by the auctioneer).
 	CtxAuctionSettlement = "auction.settlement"
+
+	// Accumulator bucket keys — used internally by phase OnMessage
+	// hooks to track which participants have submitted. Not part of
+	// the cross-phase context schema; phases produce CtxAuction* keys
+	// instead.
+	bucketKeygenShares    = "auction.bucket.keygen_shares"
+	bucketScalarBids      = "auction.bucket.scalar_bids"
+	bucketDecryptPartials = "auction.bucket.decrypt_partials"
 )

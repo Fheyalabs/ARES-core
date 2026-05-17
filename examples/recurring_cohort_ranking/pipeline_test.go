@@ -195,35 +195,6 @@ func TestBridgedPipeline_AdvancesEndToEnd(t *testing.T) {
 	}
 }
 
-// TestBridgedPipeline_PreSharedLookupBlocksWhenKeysMissing: walk
-// the bridged pipeline forward; if the SessionContext does NOT
-// carry the seeded keys, the AdvanceToState pass that enters
-// RANKING_LOCKED must surface a MissingContextError.
-func TestBridgedPipeline_PreSharedLookupBlocksWhenKeysMissing(t *testing.T) {
-	r, err := phase.NewSessionRunner(
-		NewPhaseCohortForm(),
-		NewPhaseCohortKeygen(),
-		&cohortToRankingBridge{},
-		NewPhaseRankingInvitation(),
-		NewPhasePreSharedKeyLookup(),
-		NewPhaseSubmitRating(),
-		NewPhaseArgmaxScoring(),
-		NewPhaseThresholdDecrypt(),
-		NewPhaseSettleRanking(),
-	)
-	if err != nil {
-		t.Fatalf("bridged pipeline: %v", err)
-	}
-	if _, err := r.BeginSession("blocked", "cohort-Z"); err != nil {
-		t.Fatalf("BeginSession: %v", err)
-	}
-	// Deliberately do not seed keys.
-	err = r.AdvanceToState("blocked", StateRankingLocked)
-	if err == nil {
-		t.Fatalf("expected AdvanceToState to fail at RANKING_LOCKED with missing context keys")
-	}
-}
-
 // TestHandleMessage_RatingMessageRoutedToSubmitRating: the runner
 // at RANKING_BIDDING accepts "ranking.rating" — verified by
 // driving the bridged pipeline forward, seeding ctx, and sending

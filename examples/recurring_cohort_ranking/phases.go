@@ -64,11 +64,25 @@ func (PhaseCohortKeygen) Provides() phase.ContextSchema {
 	}
 }
 func (PhaseCohortKeygen) Enter(*phase.SessionContext) error { return nil }
-func (PhaseCohortKeygen) OnMessage(*phase.SessionContext, string, string, []byte) error {
+func (PhaseCohortKeygen) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketCohortKeygenShares, from, payload)
 	return nil
 }
-func (PhaseCohortKeygen) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseCohortKeygen) Exit(*phase.SessionContext) error         { return nil }
+func (PhaseCohortKeygen) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketCohortKeygenShares, len(participants))
+}
+func (PhaseCohortKeygen) Exit(ctx *phase.SessionContext) error {
+	shares := phase.AccumulatedMessages(ctx, bucketCohortKeygenShares)
+	ctx.Set(CtxCollectivePK, []byte("stub-collective-pk"))
+	ctx.Set(CtxSecretShares, shares)
+	ctx.Set(CtxEvalKeys, []byte("stub-eval-keys"))
+	ctx.Set(CtxCryptoContract, map[string]any{"depth": 10, "ring_dim": 2048})
+	return nil
+}
 
 // ── Per-session ranking phases ────────────────────────────────────
 
@@ -166,11 +180,21 @@ func (PhaseSubmitRating) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxRatings: {TypeName: "map[string][]byte"}}
 }
 func (PhaseSubmitRating) Enter(*phase.SessionContext) error { return nil }
-func (PhaseSubmitRating) OnMessage(*phase.SessionContext, string, string, []byte) error {
+func (PhaseSubmitRating) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketRatings, from, payload)
 	return nil
 }
-func (PhaseSubmitRating) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseSubmitRating) Exit(*phase.SessionContext) error         { return nil }
+func (PhaseSubmitRating) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketRatings, len(participants))
+}
+func (PhaseSubmitRating) Exit(ctx *phase.SessionContext) error {
+	ctx.Set(CtxRatings, phase.AccumulatedMessages(ctx, bucketRatings))
+	return nil
+}
 
 // PhaseArgmaxScoring runs encrypted argmax over the N scalar
 // ratings. RANKING_SCORING → RANKING_DECRYPT.
@@ -196,11 +220,15 @@ func (PhaseArgmaxScoring) Requires() phase.ContextSchema {
 func (PhaseArgmaxScoring) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxWinnerRating: {TypeName: "[]byte"}}
 }
-func (PhaseArgmaxScoring) Enter(*phase.SessionContext) error { return nil }
+func (PhaseArgmaxScoring) Enter(ctx *phase.SessionContext) error {
+	ratings := phase.AccumulatedMessages(ctx, bucketRatings)
+	ctx.Set(CtxWinnerRating, append([]byte("stub-winner-of-"), byte(len(ratings))))
+	return nil
+}
 func (PhaseArgmaxScoring) OnMessage(*phase.SessionContext, string, string, []byte) error {
 	return nil
 }
-func (PhaseArgmaxScoring) CheckComplete(*phase.SessionContext) bool { return false }
+func (PhaseArgmaxScoring) CheckComplete(*phase.SessionContext) bool { return true }
 func (PhaseArgmaxScoring) Exit(*phase.SessionContext) error         { return nil }
 
 // PhaseThresholdDecrypt recovers the cleartext winner rating.
@@ -231,11 +259,24 @@ func (PhaseThresholdDecrypt) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxWinner: {TypeName: "WinnerRating"}}
 }
 func (PhaseThresholdDecrypt) Enter(*phase.SessionContext) error { return nil }
-func (PhaseThresholdDecrypt) OnMessage(*phase.SessionContext, string, string, []byte) error {
+func (PhaseThresholdDecrypt) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketDecryptPartials, from, payload)
 	return nil
 }
-func (PhaseThresholdDecrypt) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseThresholdDecrypt) Exit(*phase.SessionContext) error         { return nil }
+func (PhaseThresholdDecrypt) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketDecryptPartials, len(participants))
+}
+func (PhaseThresholdDecrypt) Exit(ctx *phase.SessionContext) error {
+	ctx.Set(CtxWinner, map[string]any{
+		"winner_rating": 0,
+		"winner_id":     "stub-cohort-winner",
+	})
+	return nil
+}
 
 // PhaseSettleRanking emits a signed transcript and terminates.
 // No post-result back-channel. RANKING_SETTLED → StateNone.
@@ -256,7 +297,14 @@ func (PhaseSettleRanking) Requires() phase.ContextSchema {
 func (PhaseSettleRanking) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxTranscript: {TypeName: "SignedTranscript"}}
 }
-func (PhaseSettleRanking) Enter(*phase.SessionContext) error { return nil }
+func (PhaseSettleRanking) Enter(ctx *phase.SessionContext) error {
+	winner, _ := ctx.Get(CtxWinner)
+	ctx.Set(CtxTranscript, map[string]any{
+		"transcript_for": winner,
+		"signed_by":      "stub-cohort-signature",
+	})
+	return nil
+}
 func (PhaseSettleRanking) OnMessage(*phase.SessionContext, string, string, []byte) error {
 	return nil
 }

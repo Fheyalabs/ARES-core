@@ -59,10 +59,25 @@ func (PhaseKeygen) Provides() phase.ContextSchema {
 		CtxEvalKeys:     {TypeName: "OpenFHEEvalKeys"},
 	}
 }
-func (PhaseKeygen) Enter(*phase.SessionContext) error    { return nil }
-func (PhaseKeygen) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseKeygen) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseKeygen) Exit(*phase.SessionContext) error     { return nil }
+func (PhaseKeygen) Enter(*phase.SessionContext) error { return nil }
+func (PhaseKeygen) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketKeygenShares, from, payload)
+	return nil
+}
+func (PhaseKeygen) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketKeygenShares, len(participants))
+}
+func (PhaseKeygen) Exit(ctx *phase.SessionContext) error {
+	shares := phase.AccumulatedMessages(ctx, bucketKeygenShares)
+	ctx.Set(CtxCollectivePK, []byte("stub-collective-pk"))
+	ctx.Set(CtxSecretShares, shares)
+	ctx.Set(CtxEvalKeys, []byte("stub-eval-keys"))
+	return nil
+}
 
 // ── PhaseSubmit: encrypted driver bids and rider max price + locations ─
 
@@ -92,10 +107,22 @@ func (PhaseSubmit) Provides() phase.ContextSchema {
 		CtxBids: {TypeName: "RideShareBids"},
 	}
 }
-func (PhaseSubmit) Enter(*phase.SessionContext) error    { return nil }
-func (PhaseSubmit) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseSubmit) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseSubmit) Exit(*phase.SessionContext) error     { return nil }
+func (PhaseSubmit) Enter(*phase.SessionContext) error { return nil }
+func (PhaseSubmit) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketBids, from, payload)
+	return nil
+}
+func (PhaseSubmit) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketBids, len(participants))
+}
+func (PhaseSubmit) Exit(ctx *phase.SessionContext) error {
+	ctx.Set(CtxBids, phase.AccumulatedMessages(ctx, bucketBids))
+	return nil
+}
 
 // ── PhaseScore: composite score = α·price_fitness + β·proximity ──
 
@@ -121,10 +148,14 @@ func (PhaseScore) Requires() phase.ContextSchema {
 func (PhaseScore) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxWinner: {TypeName: "[]byte"}}
 }
-func (PhaseScore) Enter(*phase.SessionContext) error    { return nil }
+func (PhaseScore) Enter(ctx *phase.SessionContext) error {
+	bids := phase.AccumulatedMessages(ctx, bucketBids)
+	ctx.Set(CtxWinner, append([]byte("stub-winner-of-"), byte(len(bids))))
+	return nil
+}
 func (PhaseScore) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseScore) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseScore) Exit(*phase.SessionContext) error     { return nil }
+func (PhaseScore) CheckComplete(*phase.SessionContext) bool                       { return true }
+func (PhaseScore) Exit(*phase.SessionContext) error                               { return nil }
 
 // ── PhaseDecrypt: threshold decrypt → (price, driver, rider) ──
 
@@ -151,10 +182,26 @@ func (PhaseDecrypt) Requires() phase.ContextSchema {
 func (PhaseDecrypt) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxResult: {TypeName: "RideShareResult"}}
 }
-func (PhaseDecrypt) Enter(*phase.SessionContext) error    { return nil }
-func (PhaseDecrypt) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseDecrypt) CheckComplete(*phase.SessionContext) bool { return false }
-func (PhaseDecrypt) Exit(*phase.SessionContext) error     { return nil }
+func (PhaseDecrypt) Enter(*phase.SessionContext) error { return nil }
+func (PhaseDecrypt) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketDecryptPartials, from, payload)
+	return nil
+}
+func (PhaseDecrypt) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketDecryptPartials, len(participants))
+}
+func (PhaseDecrypt) Exit(ctx *phase.SessionContext) error {
+	ctx.Set(CtxResult, map[string]any{
+		"agreed_price": 0,
+		"driver_id":    "stub-driver",
+		"rider_id":     "stub-rider",
+	})
+	return nil
+}
 
 // ── PhaseSettle: broadcast result to both parties ──
 
@@ -175,7 +222,14 @@ func (PhaseSettle) Requires() phase.ContextSchema {
 func (PhaseSettle) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxSettlement: {TypeName: "SignedTranscript"}}
 }
-func (PhaseSettle) Enter(*phase.SessionContext) error    { return nil }
+func (PhaseSettle) Enter(ctx *phase.SessionContext) error {
+	result, _ := ctx.Get(CtxResult)
+	ctx.Set(CtxSettlement, map[string]any{
+		"transcript_for": result,
+		"signed_by":      "stub-rideshare-signature",
+	})
+	return nil
+}
 func (PhaseSettle) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseSettle) CheckComplete(*phase.SessionContext) bool { return true }
-func (PhaseSettle) Exit(*phase.SessionContext) error     { return nil }
+func (PhaseSettle) CheckComplete(*phase.SessionContext) bool                       { return true }
+func (PhaseSettle) Exit(*phase.SessionContext) error                               { return nil }

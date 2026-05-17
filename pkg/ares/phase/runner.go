@@ -326,40 +326,57 @@ func (r *SessionRunner) HandleMessage(sessionID, msgType, from string, payload [
 }
 
 // advance runs Exit on the current phase, advances to the next phase
-// in the pipeline (if any), and runs that phase's Enter. Caller holds
-// no locks on entry.
+// in the pipeline (if any), and runs that phase's Enter. After Enter
+// it cascades: if the new phase's CheckComplete returns true with no
+// messages consumed (a pure-compute phase, or one whose work is done
+// in Enter), advance continues through it. This keeps pure-compute
+// phases like Argmax from stalling the session — they declare
+// CheckComplete=true and the runner walks past them on the same call.
+// Caller holds no locks on entry.
 func (r *SessionRunner) advance(tracker *sessionTracker) (bool, error) {
-	current := tracker.current
-	if err := current.Exit(tracker.ctx); err != nil {
-		return false, fmt.Errorf("phase %q: Exit: %w", current.Name(), err)
-	}
-	next := current.ExitState()
-	if next == StateNone {
-		// Terminal phase: session is done.
+	hopCap := len(r.phases) + 1
+	for hop := 0; hop < hopCap; hop++ {
+		current := tracker.current
+		if err := current.Exit(tracker.ctx); err != nil {
+			return false, fmt.Errorf("phase %q: Exit: %w", current.Name(), err)
+		}
+		next := current.ExitState()
+		if next == StateNone {
+			r.mu.Lock()
+			tracker.state = StateNone
+			tracker.current = nil
+			r.mu.Unlock()
+			return true, nil
+		}
+		r.mu.RLock()
+		nextPhase, ok := r.byEntryState[next]
+		r.mu.RUnlock()
+		if !ok {
+			return false, fmt.Errorf("phase: no phase claims state %q (ExitState of %q)", next, current.Name())
+		}
 		r.mu.Lock()
-		tracker.state = StateNone
-		tracker.current = nil
+		tracker.state = next
+		tracker.current = nextPhase
+		tracker.entered = false
 		r.mu.Unlock()
-		return true, nil
+		if err := nextPhase.Enter(tracker.ctx); err != nil {
+			return false, fmt.Errorf("phase %q: Enter: %w", nextPhase.Name(), err)
+		}
+		r.mu.Lock()
+		tracker.entered = true
+		r.mu.Unlock()
+		// Cascade: if this phase consumes no messages and its
+		// CheckComplete fires immediately on Enter, walk past it.
+		// Phases that consume messages stop the cascade — they must
+		// wait for OnMessage to flip CheckComplete.
+		if len(nextPhase.ConsumedMessageTypes()) > 0 {
+			return true, nil
+		}
+		if !nextPhase.CheckComplete(tracker.ctx) {
+			return true, nil
+		}
 	}
-	r.mu.RLock()
-	nextPhase, ok := r.byEntryState[next]
-	r.mu.RUnlock()
-	if !ok {
-		return false, fmt.Errorf("phase: no phase claims state %q (ExitState of %q)", next, current.Name())
-	}
-	r.mu.Lock()
-	tracker.state = next
-	tracker.current = nextPhase
-	tracker.entered = false
-	r.mu.Unlock()
-	if err := nextPhase.Enter(tracker.ctx); err != nil {
-		return false, fmt.Errorf("phase %q: Enter: %w", nextPhase.Name(), err)
-	}
-	r.mu.Lock()
-	tracker.entered = true
-	r.mu.Unlock()
-	return true, nil
+	return false, fmt.Errorf("phase: cascade hop limit exceeded")
 }
 
 // AdvanceToState walks the runner's tracked session forward until

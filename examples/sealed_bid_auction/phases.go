@@ -76,10 +76,30 @@ func (PhaseKeygen) Provides() phase.ContextSchema {
 		CtxAuctionEvalKeys:            {TypeName: "OpenFHEEvalKeys"},
 	}
 }
-func (PhaseKeygen) Enter(*phase.SessionContext) error                       { return nil }
-func (PhaseKeygen) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseKeygen) CheckComplete(*phase.SessionContext) bool                 { return false }
-func (PhaseKeygen) Exit(*phase.SessionContext) error                         { return nil }
+func (PhaseKeygen) Enter(*phase.SessionContext) error { return nil }
+func (PhaseKeygen) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketKeygenShares, from, payload)
+	return nil
+}
+func (PhaseKeygen) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxAuctionParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketKeygenShares, len(participants))
+}
+func (PhaseKeygen) Exit(ctx *phase.SessionContext) error {
+	// Promise: PhaseKeygen produces CtxAuctionCollectivePublicKey,
+	// CtxAuctionSecretShares, CtxAuctionEvalKeys. With stub crypto we
+	// derive placeholders from the accumulated shares so downstream
+	// phases find something under the canonical keys; Phase 4b swaps
+	// in the real openfhe-contract-helper round-2 output.
+	shares := phase.AccumulatedMessages(ctx, bucketKeygenShares)
+	ctx.Set(CtxAuctionCollectivePublicKey, []byte("stub-collective-pk"))
+	ctx.Set(CtxAuctionSecretShares, shares)
+	ctx.Set(CtxAuctionEvalKeys, []byte("stub-eval-keys"))
+	return nil
+}
 
 // PhaseScalarBid collects one encrypted scalar bid from each bidder.
 // The wire shape is dramatically smaller than Fheya's Phase 1b:
@@ -115,10 +135,23 @@ func (PhaseScalarBid) Provides() phase.ContextSchema {
 		CtxAuctionBids: {TypeName: "map[string][]byte"},
 	}
 }
-func (PhaseScalarBid) Enter(*phase.SessionContext) error                       { return nil }
-func (PhaseScalarBid) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseScalarBid) CheckComplete(*phase.SessionContext) bool                 { return false }
-func (PhaseScalarBid) Exit(*phase.SessionContext) error                         { return nil }
+func (PhaseScalarBid) Enter(*phase.SessionContext) error { return nil }
+func (PhaseScalarBid) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketScalarBids, from, payload)
+	return nil
+}
+func (PhaseScalarBid) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxAuctionParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketScalarBids, len(participants))
+}
+func (PhaseScalarBid) Exit(ctx *phase.SessionContext) error {
+	bids := phase.AccumulatedMessages(ctx, bucketScalarBids)
+	ctx.Set(CtxAuctionBids, bids)
+	return nil
+}
 
 // PhaseArgmax runs the encrypted argmax circuit: pairwise comparison
 // of N encrypted scalars, building a one-hot mask of the maximum, and
@@ -157,10 +190,18 @@ func (PhaseArgmax) Provides() phase.ContextSchema {
 		CtxAuctionCipherWinnerBid: {TypeName: "[]byte"},
 	}
 }
-func (PhaseArgmax) Enter(*phase.SessionContext) error                       { return nil }
+func (PhaseArgmax) Enter(ctx *phase.SessionContext) error {
+	// Phase 4b will replace this with a real openfhe-contract-helper
+	// call that runs the depth=30 selector chain over the accumulated
+	// bid ciphertexts. For now we emit a deterministic placeholder so
+	// downstream phases find a CtxAuctionCipherWinnerBid value.
+	bids := phase.AccumulatedMessages(ctx, bucketScalarBids)
+	ctx.Set(CtxAuctionCipherWinnerBid, append([]byte("stub-winner-of-"), byte(len(bids))))
+	return nil
+}
 func (PhaseArgmax) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseArgmax) CheckComplete(*phase.SessionContext) bool                 { return false }
-func (PhaseArgmax) Exit(*phase.SessionContext) error                         { return nil }
+func (PhaseArgmax) CheckComplete(*phase.SessionContext) bool                       { return true }
+func (PhaseArgmax) Exit(*phase.SessionContext) error                               { return nil }
 
 // PhaseDecrypt runs the threshold partial-decryption of the encrypted
 // (winning_bid, winner_id) tuple. Each participant submits a partial
@@ -194,10 +235,26 @@ func (PhaseDecrypt) Provides() phase.ContextSchema {
 		CtxAuctionWinnerBid: {TypeName: "WinnerBid"},
 	}
 }
-func (PhaseDecrypt) Enter(*phase.SessionContext) error                       { return nil }
-func (PhaseDecrypt) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseDecrypt) CheckComplete(*phase.SessionContext) bool                 { return false }
-func (PhaseDecrypt) Exit(*phase.SessionContext) error                         { return nil }
+func (PhaseDecrypt) Enter(*phase.SessionContext) error { return nil }
+func (PhaseDecrypt) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, bucketDecryptPartials, from, payload)
+	return nil
+}
+func (PhaseDecrypt) CheckComplete(ctx *phase.SessionContext) bool {
+	participants, ok := phase.TryGet[[]string](ctx, CtxAuctionParticipants)
+	if !ok {
+		return false
+	}
+	return phase.QuorumReached(ctx, bucketDecryptPartials, len(participants))
+}
+func (PhaseDecrypt) Exit(ctx *phase.SessionContext) error {
+	// Stub fusion of partials → cleartext winner tuple.
+	ctx.Set(CtxAuctionWinnerBid, map[string]any{
+		"winner": "stub-winner",
+		"price":  0,
+	})
+	return nil
+}
 
 // PhaseSettlement emits the signed settlement transcript and
 // terminates the session. There is no post-result interaction — no
@@ -233,7 +290,14 @@ func (PhaseSettlement) Provides() phase.ContextSchema {
 		CtxAuctionSettlement: {TypeName: "SignedTranscript"},
 	}
 }
-func (PhaseSettlement) Enter(*phase.SessionContext) error                       { return nil }
+func (PhaseSettlement) Enter(ctx *phase.SessionContext) error {
+	winner, _ := ctx.Get(CtxAuctionWinnerBid)
+	ctx.Set(CtxAuctionSettlement, map[string]any{
+		"transcript_for": winner,
+		"signed_by":      "stub-auctioneer-signature",
+	})
+	return nil
+}
 func (PhaseSettlement) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseSettlement) CheckComplete(*phase.SessionContext) bool                 { return true }
-func (PhaseSettlement) Exit(*phase.SessionContext) error                         { return nil }
+func (PhaseSettlement) CheckComplete(*phase.SessionContext) bool                       { return true }
+func (PhaseSettlement) Exit(*phase.SessionContext) error                               { return nil }

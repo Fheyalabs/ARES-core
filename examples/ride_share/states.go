@@ -49,4 +49,9 @@ const (
 	CtxWinner         = "ride.ct_winner"
 	CtxResult         = "ride.result"
 	CtxSettlement     = "ride.settlement"
+
+	// Accumulator bucket keys.
+	bucketKeygenShares    = "ride.bucket.keygen_shares"
+	bucketBids            = "ride.bucket.bids"
+	bucketDecryptPartials = "ride.bucket.decrypt_partials"
 )
