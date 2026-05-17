@@ -533,6 +533,190 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 	return copyCBytes(out, outLen), nil
 }
 
+// EvalAddCKKSForContract returns ctA + ctB slot-wise. Pure addition
+// does not require an eval-mult key.
+func EvalAddCKKSForContract(params ContractParams, ctA, ctB []byte) ([]byte, error) {
+	return evalBinaryCKKS(params, nil, ctA, ctB, "EvalAdd")
+}
+
+// EvalSubCKKSForContract returns ctA - ctB slot-wise.
+func EvalSubCKKSForContract(params ContractParams, ctA, ctB []byte) ([]byte, error) {
+	return evalBinaryCKKS(params, nil, ctA, ctB, "EvalSub")
+}
+
+// EvalMultCKKSForContract returns ctA × ctB slot-wise. Requires the
+// joint eval-mult key (consumes one CKKS level).
+func EvalMultCKKSForContract(params ContractParams, evalMultKey, ctA, ctB []byte) ([]byte, error) {
+	if len(evalMultKey) == 0 {
+		return nil, fmt.Errorf("eval-mult key is required")
+	}
+	return evalBinaryCKKS(params, evalMultKey, ctA, ctB, "EvalMult")
+}
+
+// EvalConstMultCKKSForContract multiplies a ciphertext by a cleartext
+// scalar (does not consume a level).
+func EvalConstMultCKKSForContract(params ContractParams, ct []byte, scalar float64) ([]byte, error) {
+	if len(ct) == 0 {
+		return nil, fmt.Errorf("ciphertext is required")
+	}
+	cctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(cctx)
+
+	ctH, err := deserializeCiphertext(cctx, ct)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(ctH)
+
+	out := C.EvalMultConst(cctx, ctH, C.double(scalar))
+	if out == nil {
+		return nil, fmt.Errorf("eval-mult-const failed")
+	}
+	defer C.FreeCiphertext(out)
+	return serializeCiphertext(out)
+}
+
+func evalBinaryCKKS(params ContractParams, evalMultKey, ctA, ctB []byte, op string) ([]byte, error) {
+	if len(ctA) == 0 || len(ctB) == 0 {
+		return nil, fmt.Errorf("%s: both ciphertexts are required", op)
+	}
+	cctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(cctx)
+
+	if len(evalMultKey) > 0 {
+		multKey, err := deserializeEvalMultKey(cctx, evalMultKey)
+		if err != nil {
+			return nil, err
+		}
+		defer C.FreeEvalMultKey(multKey)
+		if rc := C.InsertEvalMultKey(cctx, multKey); rc != 0 {
+			return nil, fmt.Errorf("%s: insert eval-mult key failed", op)
+		}
+	}
+
+	a, err := deserializeCiphertext(cctx, ctA)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(a)
+	b, err := deserializeCiphertext(cctx, ctB)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(b)
+
+	var out C.CiphertextHandle
+	switch op {
+	case "EvalAdd":
+		out = C.EvalAdd(cctx, a, b)
+	case "EvalSub":
+		out = C.EvalSub(cctx, a, b)
+	case "EvalMult":
+		out = C.EvalMult(cctx, a, b)
+	default:
+		return nil, fmt.Errorf("evalBinaryCKKS: unknown op %q", op)
+	}
+	if out == nil {
+		return nil, fmt.Errorf("%s failed", op)
+	}
+	defer C.FreeCiphertext(out)
+	return serializeCiphertext(out)
+}
+
+// EvalArgmaxCKKSForContract returns N "mask" ciphertexts where the
+// argmax candidate's mask is ≈1 and losers' masks are ≈0. The
+// caller supplies the sharpening polynomial whose coefficients
+// approximate a step function on [-1, 1].
+//
+// Implementation: for each ordered pair (i, j), the helper computes
+// sharpen(cts[i] - cts[j]). The product of sharpened differences
+// across j != i gives mask[i]. Depth budget required ≈ log2(N) +
+// depth(sharpening) — fits comfortably under depth=30 for N ≤ 16
+// and degree-9 sharpening.
+func EvalArgmaxCKKSForContract(
+	params ContractParams,
+	evalMultKey []byte,
+	ciphertexts [][]byte,
+	sharpCoeffs []float64,
+) ([][]byte, error) {
+	if len(ciphertexts) < 2 {
+		return nil, fmt.Errorf("argmax needs at least 2 candidates, got %d", len(ciphertexts))
+	}
+	if len(evalMultKey) == 0 {
+		return nil, fmt.Errorf("eval-mult key is required")
+	}
+	if len(sharpCoeffs) < 2 {
+		return nil, fmt.Errorf("sharpening polynomial must have at least 2 coefficients")
+	}
+	cctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(cctx)
+
+	multKey, err := deserializeEvalMultKey(cctx, evalMultKey)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(cctx, multKey); rc != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
+
+	handles := make([]C.CiphertextHandle, len(ciphertexts))
+	freeAll := func() {
+		for _, h := range handles {
+			if h != nil {
+				C.FreeCiphertext(h)
+			}
+		}
+	}
+	defer freeAll()
+	for i, raw := range ciphertexts {
+		h, err := deserializeCiphertext(cctx, raw)
+		if err != nil {
+			return nil, fmt.Errorf("ciphertext[%d]: %w", i, err)
+		}
+		handles[i] = h
+	}
+
+	outHandles := make([]C.CiphertextHandle, len(ciphertexts))
+	rc := C.EvalArgmax(
+		cctx,
+		(*C.CiphertextHandle)(unsafe.Pointer(&handles[0])),
+		C.int(len(handles)),
+		(*C.double)(unsafe.Pointer(&sharpCoeffs[0])),
+		C.int(len(sharpCoeffs)),
+		(*C.CiphertextHandle)(unsafe.Pointer(&outHandles[0])),
+	)
+	if rc != 0 {
+		return nil, fmt.Errorf("eval argmax failed (rc=%d)", int(rc))
+	}
+	defer func() {
+		for _, h := range outHandles {
+			if h != nil {
+				C.FreeCiphertext(h)
+			}
+		}
+	}()
+
+	out := make([][]byte, len(outHandles))
+	for i, h := range outHandles {
+		raw, err := serializeCiphertext(h)
+		if err != nil {
+			return nil, fmt.Errorf("serialize mask[%d]: %w", i, err)
+		}
+		out[i] = raw
+	}
+	return out, nil
+}
+
 // EvalPolyCKKSForContract evaluates a polynomial p(x) = Σ coeffs[i]·xⁱ
 // slot-wise on a ciphertext. coefficients is in ascending order
 // (coefficients[0] is the constant term). evalMultKey is the joint

@@ -850,6 +850,14 @@ CiphertextHandle EvalMultConst(CryptoContextHandle ctx, CiphertextHandle ct, dou
         return nullptr;
     }
 }
+CiphertextHandle EvalSub(CryptoContextHandle ctx, CiphertextHandle a, CiphertextHandle b) {
+    try {
+        auto* c = as_ctx(ctx);
+        return reinterpret_cast<CiphertextHandle>(new ARESCiphertext{c->cc->EvalSub(as_ct(a)->ct, as_ct(b)->ct)});
+    } catch (...) {
+        return nullptr;
+    }
+}
 CiphertextHandle EvalChebyshevSign(CryptoContextHandle ctx, CiphertextHandle ct, int degree) {
     try {
         auto* c = as_ctx(ctx);
@@ -879,6 +887,58 @@ CiphertextHandle EvalPolynomial(CryptoContextHandle ctx, CiphertextHandle ct, do
         return nullptr;
     } catch (...) {
         return nullptr;
+    }
+}
+
+int EvalArgmax(CryptoContextHandle ctx,
+               const CiphertextHandle* cts, int n_cts,
+               const double* sharp_coeffs, int n_sharp_coeffs,
+               CiphertextHandle* out_masks) {
+    try {
+        if (n_cts < 2 || cts == nullptr) return -1;
+        if (n_sharp_coeffs < 2 || sharp_coeffs == nullptr) return -2;
+        if (out_masks == nullptr) return -3;
+        auto* c = as_ctx(ctx);
+        std::vector<double> coeffs(sharp_coeffs, sharp_coeffs + n_sharp_coeffs);
+
+        // Precompute sharp(cts[i] - cts[j]) once per ordered pair.
+        // For i != j: pair[i][j] = p(cts[i] - cts[j]) ≈ 1 if cts[i] > cts[j], ≈ 0 otherwise.
+        // mask[i] = ∏_{j != i} pair[i][j].
+        std::vector<std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>>> pair(
+            n_cts, std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>>(n_cts));
+        for (int i = 0; i < n_cts; ++i) {
+            for (int j = 0; j < n_cts; ++j) {
+                if (i == j) continue;
+                auto diff = c->cc->EvalSub(as_ct(cts[i])->ct, as_ct(cts[j])->ct);
+                pair[i][j] = c->cc->EvalPoly(diff, coeffs);
+            }
+        }
+
+        std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>> masks(n_cts);
+        for (int i = 0; i < n_cts; ++i) {
+            lbcrypto::Ciphertext<lbcrypto::DCRTPoly> acc;
+            bool first = true;
+            for (int j = 0; j < n_cts; ++j) {
+                if (i == j) continue;
+                if (first) {
+                    acc = pair[i][j];
+                    first = false;
+                } else {
+                    acc = c->cc->EvalMult(acc, pair[i][j]);
+                }
+            }
+            masks[i] = acc;
+        }
+
+        for (int i = 0; i < n_cts; ++i) {
+            out_masks[i] = reinterpret_cast<CiphertextHandle>(new ARESCiphertext{masks[i]});
+        }
+        return 0;
+    } catch (const std::exception& e) {
+        std::cerr << "[openfhe] EvalArgmax failed: " << e.what() << std::endl;
+        return -100;
+    } catch (...) {
+        return -101;
     }
 }
 

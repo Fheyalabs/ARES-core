@@ -85,6 +85,8 @@ CiphertextHandle EvalSum(CryptoContextHandle ctx,
     CiphertextHandle ct, int batch_size);
 CiphertextHandle EvalMultConst(CryptoContextHandle ctx,
     CiphertextHandle ct, double scalar);
+CiphertextHandle EvalSub(CryptoContextHandle ctx,
+    CiphertextHandle a, CiphertextHandle b);
 
 // Chebyshev sign approximation for argmax
 CiphertextHandle EvalChebyshevSign(CryptoContextHandle ctx,
@@ -96,6 +98,24 @@ CiphertextHandle EvalChebyshevSign(CryptoContextHandle ctx,
 // polynomial with degree >= 2. Returns nullptr on failure.
 CiphertextHandle EvalPolynomial(CryptoContextHandle ctx,
     CiphertextHandle ct, double* coeffs, int n_coeffs);
+
+// EvalArgmax: composite argmax over N candidate ciphertexts using a
+// caller-supplied sharpening polynomial.
+//
+// For each i ∈ [0, n_cts): mask[i] = ∏_{j != i} p(cts[i] - cts[j]),
+// where p is the polynomial whose coefficients are passed in. The
+// polynomial is expected to approximate a step function on
+// [-1, 1] — positive inputs → ~1, negative → ~0. For inputs whose
+// pairwise differences fall outside [-1, 1] the caller must scale
+// them down before calling.
+//
+// On success returns 0 and writes n_cts new ciphertext handles to
+// out_masks (caller frees with FreeCiphertext). On failure returns
+// non-zero and out_masks is untouched.
+int EvalArgmax(CryptoContextHandle ctx,
+    const CiphertextHandle* cts, int n_cts,
+    const double* sharp_coeffs, int n_sharp_coeffs,
+    CiphertextHandle* out_masks);
 
 // Serialization
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);

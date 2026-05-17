@@ -61,6 +61,9 @@ type response struct {
 	EvalMultShare      string    `json:"eval_mult_share,omitempty"`
 	EvalSumShare       string    `json:"eval_sum_share,omitempty"`
 	EvalMultFinalShare string    `json:"eval_mult_final_share,omitempty"`
+
+	// argmax returns a per-candidate mask ciphertext list.
+	Ciphertexts []string `json:"ciphertexts,omitempty"`
 }
 
 func main() {
@@ -247,13 +250,91 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{Ciphertext: encodeB64(result)}, nil
-	case "eval_add", "eval_sub", "eval_mult", "eval_const_mult", "argmax":
-		// Remaining decomposable primitives. Wrappers land in a
-		// follow-up; Go-side API in helperclient is stable.
-		return response{}, fmt.Errorf("op %q: not yet implemented (see helperclient/scoring_ops.go)", req.Op)
+	case "eval_add":
+		return runEvalBinary(req, params, openfhe.EvalAddCKKSForContract)
+	case "eval_sub":
+		return runEvalBinary(req, params, openfhe.EvalSubCKKSForContract)
+	case "eval_mult":
+		ctA, err := decodeB64("ciphertext_a", req.CiphertextA)
+		if err != nil {
+			return response{}, err
+		}
+		ctB, err := decodeB64("ciphertext_b", req.CiphertextB)
+		if err != nil {
+			return response{}, err
+		}
+		evalKey, err := decodeB64("eval_keys", req.EvalKeys)
+		if err != nil {
+			return response{}, err
+		}
+		out, err := openfhe.EvalMultCKKSForContract(params, evalKey, ctA, ctB)
+		if err != nil {
+			return response{}, err
+		}
+		return response{Ciphertext: encodeB64(out)}, nil
+	case "eval_const_mult":
+		ct, err := decodeB64("ciphertext", req.Ciphertext)
+		if err != nil {
+			return response{}, err
+		}
+		out, err := openfhe.EvalConstMultCKKSForContract(params, ct, req.Scalar)
+		if err != nil {
+			return response{}, err
+		}
+		return response{Ciphertext: encodeB64(out)}, nil
+	case "argmax":
+		evalKey, err := decodeB64("eval_keys", req.EvalKeys)
+		if err != nil {
+			return response{}, err
+		}
+		if len(req.Ciphertexts) < 2 {
+			return response{}, errors.New("argmax requires at least 2 ciphertexts")
+		}
+		cts := make([][]byte, len(req.Ciphertexts))
+		for i, raw := range req.Ciphertexts {
+			ct, err := decodeB64(fmt.Sprintf("ciphertexts[%d]", i), raw)
+			if err != nil {
+				return response{}, err
+			}
+			cts[i] = ct
+		}
+		if len(req.Coefficients) < 2 {
+			return response{}, errors.New("argmax requires sharpening coefficients (>= 2)")
+		}
+		masks, err := openfhe.EvalArgmaxCKKSForContract(params, evalKey, cts, req.Coefficients)
+		if err != nil {
+			return response{}, err
+		}
+		out := make([]string, len(masks))
+		for i, m := range masks {
+			out[i] = encodeB64(m)
+		}
+		return response{Ciphertexts: out}, nil
 	default:
 		return response{}, fmt.Errorf("unsupported op %q", req.Op)
 	}
+}
+
+// runEvalBinary handles eval_add and eval_sub: both take two
+// ciphertexts and no eval-mult key.
+func runEvalBinary(
+	req request,
+	params openfhe.ContractParams,
+	fn func(openfhe.ContractParams, []byte, []byte) ([]byte, error),
+) (response, error) {
+	ctA, err := decodeB64("ciphertext_a", req.CiphertextA)
+	if err != nil {
+		return response{}, err
+	}
+	ctB, err := decodeB64("ciphertext_b", req.CiphertextB)
+	if err != nil {
+		return response{}, err
+	}
+	out, err := fn(params, ctA, ctB)
+	if err != nil {
+		return response{}, err
+	}
+	return response{Ciphertext: encodeB64(out)}, nil
 }
 
 func (p contractParamsJSON) toContractParams() openfhe.ContractParams {
