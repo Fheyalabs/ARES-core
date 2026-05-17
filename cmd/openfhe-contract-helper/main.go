@@ -220,6 +220,14 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{Values: values}, nil
+	case "eval_add", "eval_sub", "eval_mult", "eval_const_mult", "eval_poly", "argmax":
+		// Decomposable scoring primitives. The Go-side API in
+		// pkg/ares/crypto/helperclient is stable; the C++ wrappers
+		// will land in a follow-up. Returning a structured "not
+		// implemented" lets callers wire their scoring-phase code
+		// against the helperclient API today and treat the error
+		// as a feature gate.
+		return response{}, fmt.Errorf("op %q: not yet implemented (see ARES-core helperclient/scoring_ops.go for the planned API)", req.Op)
 	default:
 		return response{}, fmt.Errorf("unsupported op %q", req.Op)
 	}
