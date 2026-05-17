@@ -1,0 +1,14 @@
+# Built binaries
+/openfhe-contract-helper
+/auction-service
+/rideshare-service
+/cohort-service
+/bin/
+
+# Go build artifacts
+*.test
+*.out
+
+# Editor
+.vscode/
+.idea/
