@@ -1,6 +1,14 @@
 package recurringcohortranking
 
-import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+)
 
 // ── Cohort-formation phases ───────────────────────────────────────
 
@@ -196,11 +204,28 @@ func (PhaseSubmitRating) Exit(ctx *phase.SessionContext) error {
 	return nil
 }
 
-// PhaseArgmaxScoring runs encrypted argmax over the N scalar
-// ratings. RANKING_SCORING → RANKING_DECRYPT.
-type PhaseArgmaxScoring struct{}
+// PhaseArgmaxScoring has stub and helper modes. Helper mode runs real
+// CKKS argmax against the participants' encrypted ratings using a
+// caller-supplied sharpening polynomial.
+type PhaseArgmaxScoring struct {
+	helper     *helperclient.Client
+	sharpening helperclient.EvalPolyParams
+}
 
 func NewPhaseArgmaxScoring() *PhaseArgmaxScoring { return &PhaseArgmaxScoring{} }
+
+// NewPhaseArgmaxScoringWithHelper returns a phase that calls
+// helper.Argmax against rating ciphertexts.
+func NewPhaseArgmaxScoringWithHelper(helper *helperclient.Client, sharpening helperclient.EvalPolyParams) *PhaseArgmaxScoring {
+	return &PhaseArgmaxScoring{helper: helper, sharpening: sharpening}
+}
+
+// CohortArgmaxEnvelope wraps the helper-mode mask output stored under
+// CtxWinnerRating.
+type CohortArgmaxEnvelope struct {
+	Bidders []string `json:"bidders"`
+	Masks   []string `json:"masks"`
+}
 
 func (PhaseArgmaxScoring) Name() string              { return "ranking-argmax-scoring" }
 func (PhaseArgmaxScoring) Lifetime() phase.Lifetime   { return phase.LifetimePerSession }
@@ -220,16 +245,127 @@ func (PhaseArgmaxScoring) Requires() phase.ContextSchema {
 func (PhaseArgmaxScoring) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxWinnerRating: {TypeName: "[]byte"}}
 }
-func (PhaseArgmaxScoring) Enter(ctx *phase.SessionContext) error {
+func (p *PhaseArgmaxScoring) Enter(ctx *phase.SessionContext) error {
 	ratings := phase.AccumulatedMessages(ctx, bucketRatings)
-	ctx.Set(CtxWinnerRating, append([]byte("stub-winner-of-"), byte(len(ratings))))
+
+	if p.helper == nil {
+		ctx.Set(CtxWinnerRating, append([]byte("stub-winner-of-"), byte(len(ratings))))
+		return nil
+	}
+
+	params, err := readCohortContractParams(ctx)
+	if err != nil {
+		return err
+	}
+	evalKeys, ok := phase.TryGet[[]byte](ctx, CtxEvalKeys)
+	if !ok || len(evalKeys) == 0 {
+		return fmt.Errorf("PhaseArgmaxScoring: CtxEvalKeys is missing or empty")
+	}
+	bidders := make([]string, 0, len(ratings))
+	for k := range ratings {
+		bidders = append(bidders, k)
+	}
+	sort.Strings(bidders)
+	cts := make([][]byte, len(bidders))
+	for i, b := range bidders {
+		ct, err := decodeRatingCiphertext(ratings[b])
+		if err != nil {
+			return fmt.Errorf("PhaseArgmaxScoring: decode rating from %s: %w", b, err)
+		}
+		cts[i] = ct
+	}
+	masks, err := p.helper.Argmax(params, evalKeys, cts, helperclient.ArgmaxParams{
+		SharpeningPoly: p.sharpening,
+	})
+	if err != nil {
+		return fmt.Errorf("PhaseArgmaxScoring: helper.Argmax: %w", err)
+	}
+	envelope := CohortArgmaxEnvelope{
+		Bidders: bidders,
+		Masks:   make([]string, len(masks)),
+	}
+	for i, m := range masks {
+		envelope.Masks[i] = hex.EncodeToString(m)
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("PhaseArgmaxScoring: marshal: %w", err)
+	}
+	ctx.Set(CtxWinnerRating, body)
 	return nil
 }
-func (PhaseArgmaxScoring) OnMessage(*phase.SessionContext, string, string, []byte) error {
+func (*PhaseArgmaxScoring) OnMessage(*phase.SessionContext, string, string, []byte) error {
 	return nil
 }
-func (PhaseArgmaxScoring) CheckComplete(*phase.SessionContext) bool { return true }
-func (PhaseArgmaxScoring) Exit(*phase.SessionContext) error         { return nil }
+func (*PhaseArgmaxScoring) CheckComplete(*phase.SessionContext) bool { return true }
+func (*PhaseArgmaxScoring) Exit(*phase.SessionContext) error         { return nil }
+
+func readCohortContractParams(ctx *phase.SessionContext) (helperclient.ContractParams, error) {
+	contractAny, ok := ctx.Get(CtxCryptoContract)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxCryptoContract missing")
+	}
+	contract, ok := contractAny.(map[string]any)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxCryptoContract has type %T", contractAny)
+	}
+	asUint := func(k string) (uint32, error) {
+		v, ok := contract[k]
+		if !ok {
+			return 0, fmt.Errorf("crypto_ctx.%s missing", k)
+		}
+		switch n := v.(type) {
+		case int:
+			return uint32(n), nil
+		case int64:
+			return uint32(n), nil
+		case uint32:
+			return n, nil
+		case float64:
+			return uint32(n), nil
+		}
+		return 0, fmt.Errorf("crypto_ctx.%s has type %T", k, contract[k])
+	}
+	asInt := func(k string) int {
+		v, ok := contract[k]
+		if !ok {
+			return 0
+		}
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		}
+		return 0
+	}
+	ringDim, err := asUint("ring_dim")
+	if err != nil {
+		return helperclient.ContractParams{}, err
+	}
+	depth, err := asUint("depth")
+	if err != nil {
+		return helperclient.ContractParams{}, err
+	}
+	return helperclient.ContractParams{
+		RingDim:        ringDim,
+		Depth:          depth,
+		ScalingModSize: asInt("scaling_mod_size"),
+	}, nil
+}
+
+func decodeRatingCiphertext(raw []byte) ([]byte, error) {
+	var msg struct {
+		RatingCT string `json:"rating_ct"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	if msg.RatingCT == "" {
+		return nil, fmt.Errorf("rating_ct is empty")
+	}
+	return hex.DecodeString(msg.RatingCT)
+}
 
 // PhaseThresholdDecrypt recovers the cleartext winner rating.
 // RANKING_DECRYPT → RANKING_SETTLED.

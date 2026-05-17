@@ -1,6 +1,9 @@
 package rideshare
 
-import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+import (
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+)
 
 // NewRideShareRunner builds a SessionRunner for the inDrive-style
 // ride-share pipeline:
@@ -22,6 +25,23 @@ func NewRideShareRunner() (*phase.SessionRunner, error) {
 		NewPhaseKeygen(),
 		NewPhaseSubmit(),
 		NewPhaseScore(),
+		NewPhaseDecrypt(),
+		NewPhaseSettle(),
+	)
+}
+
+// NewRideShareRunnerWithHelper substitutes the helper-backed
+// PhaseScore for the stub. Sharpening polynomial is invoked on every
+// pairwise driver-score difference.
+func NewRideShareRunnerWithHelper(
+	helper *helperclient.Client,
+	sharpening helperclient.EvalPolyParams,
+) (*phase.SessionRunner, error) {
+	return phase.NewSessionRunner(
+		NewPhaseInvite(),
+		NewPhaseKeygen(),
+		NewPhaseSubmit(),
+		NewPhaseScoreWithHelper(helper, sharpening),
 		NewPhaseDecrypt(),
 		NewPhaseSettle(),
 	)

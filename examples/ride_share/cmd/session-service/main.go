@@ -36,6 +36,8 @@ import (
 	"syscall"
 
 	"github.com/Fheyalabs/ares-core/examples/ride_share"
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 	"github.com/Fheyalabs/ares-core/pkg/ares/transport"
 )
 
@@ -48,15 +50,22 @@ func main() {
 
 	logStream := transport.NewLogStream()
 
-	runner, err := rideshare.NewRideShareRunner()
+	ctx, cancel := signalContext()
+	defer cancel()
+
+	var helper *helperclient.Client
+	runner, err := buildRideShareRunner(ctx, os.Getenv("ARES_HELPER_BINARY"), &helper)
 	if err != nil {
 		log.Fatalf("build ride-share runner: %v", err)
+	}
+	if helper != nil {
+		defer helper.Close()
 	}
 
 	cryptoCtx := map[string]any{
 		"depth":            depth,
 		"ring_dim":         ringDim,
-		"scaling_mod_size": 40,
+		"scaling_mod_size": 50,
 	}
 
 	innerTrigger := transport.NewManualAdminTrigger(runner, nil, "ride.invitation")
@@ -80,14 +89,31 @@ func main() {
 	}
 	innerTrigger.Hub = svc.Hub()
 
-	ctx, cancel := signalContext()
-	defer cancel()
-
-	log.Printf("[rideshare] session-service starting on :%s (depth=%d ring_dim=%d dev_bypass=%v)",
-		port, depth, ringDim, devBypass)
+	mode := "stub"
+	if helper != nil {
+		mode = "helper"
+	}
+	log.Printf("[rideshare] session-service starting on :%s (mode=%s depth=%d ring_dim=%d dev_bypass=%v)",
+		port, mode, depth, ringDim, devBypass)
 	if err := svc.Run(ctx); err != nil {
 		log.Fatalf("service.Run: %v", err)
 	}
+}
+
+func buildRideShareRunner(ctx context.Context, helperPath string, helperOut **helperclient.Client) (*phase.SessionRunner, error) {
+	if helperPath == "" {
+		return rideshare.NewRideShareRunner()
+	}
+	client, err := helperclient.Start(ctx, helperPath)
+	if err != nil {
+		return nil, err
+	}
+	*helperOut = client
+	sharpening := helperclient.EvalPolyParams{
+		Coefficients: []float64{0.5, 0.75, 0, -0.25},
+		LowerBound:   -1, UpperBound: 1,
+	}
+	return rideshare.NewRideShareRunnerWithHelper(client, sharpening)
 }
 
 // rideShareTrigger turns the friendly admin POST into the canonical

@@ -1,6 +1,14 @@
 package rideshare
 
-import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+)
 
 // ── PhaseInvite: assemble participants, assign roles, pin contract ─
 
@@ -126,18 +134,42 @@ func (PhaseSubmit) Exit(ctx *phase.SessionContext) error {
 
 // ── PhaseScore: composite score = α·price_fitness + β·proximity ──
 
-type PhaseScore struct{}
+// PhaseScore has stub and helper modes (see auction PhaseArgmax for the
+// shared pattern). Helper mode runs real CKKS argmax over the
+// drivers' encrypted composite scores using a caller-supplied
+// sharpening polynomial. The composite (α·price_fitness + β·proximity)
+// is computed cleartext-side by the client and encrypted as a single
+// scalar — the depth=30 budget gives plenty of headroom but the v1
+// design keeps the homomorphic compute confined to the argmax/selector
+// chain. Fully-homomorphic composite computation can be added later.
+type PhaseScore struct {
+	helper     *helperclient.Client
+	sharpening helperclient.EvalPolyParams
+}
 
 func NewPhaseScore() *PhaseScore { return &PhaseScore{} }
 
-func (PhaseScore) Name() string                        { return "ride-score" }
-func (PhaseScore) Lifetime() phase.Lifetime            { return phase.LifetimePerSession }
-func (PhaseScore) RunsAt() phase.RunsAt                { return phase.RunsAtInline }
-func (PhaseScore) EntryState() phase.SessionState      { return StateScore }
-func (PhaseScore) ExitState() phase.SessionState       { return StateDecrypt }
-func (PhaseScore) InternalStates() []phase.SessionState { return nil }
-func (PhaseScore) ConsumedMessageTypes() []string      { return nil }
-func (PhaseScore) Requires() phase.ContextSchema {
+// NewPhaseScoreWithHelper returns a phase that calls helper.Argmax
+// against driver bid ciphertexts.
+func NewPhaseScoreWithHelper(helper *helperclient.Client, sharpening helperclient.EvalPolyParams) *PhaseScore {
+	return &PhaseScore{helper: helper, sharpening: sharpening}
+}
+
+// RideArgmaxEnvelope wraps the helper-mode mask output stored under
+// CtxWinner.
+type RideArgmaxEnvelope struct {
+	Bidders []string `json:"bidders"`
+	Masks   []string `json:"masks"`
+}
+
+func (*PhaseScore) Name() string                            { return "ride-score" }
+func (*PhaseScore) Lifetime() phase.Lifetime                { return phase.LifetimePerSession }
+func (*PhaseScore) RunsAt() phase.RunsAt                    { return phase.RunsAtInline }
+func (*PhaseScore) EntryState() phase.SessionState          { return StateScore }
+func (*PhaseScore) ExitState() phase.SessionState           { return StateDecrypt }
+func (*PhaseScore) InternalStates() []phase.SessionState    { return nil }
+func (*PhaseScore) ConsumedMessageTypes() []string          { return nil }
+func (*PhaseScore) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxParticipants:   {TypeName: "[]string", Required: true},
 		CtxCryptoContract: {TypeName: "OpenFHEContract", Required: true},
@@ -145,17 +177,133 @@ func (PhaseScore) Requires() phase.ContextSchema {
 		CtxBids:           {TypeName: "RideShareBids", Required: true},
 	}
 }
-func (PhaseScore) Provides() phase.ContextSchema {
+func (*PhaseScore) Provides() phase.ContextSchema {
 	return phase.ContextSchema{CtxWinner: {TypeName: "[]byte"}}
 }
-func (PhaseScore) Enter(ctx *phase.SessionContext) error {
+
+func (p *PhaseScore) Enter(ctx *phase.SessionContext) error {
 	bids := phase.AccumulatedMessages(ctx, bucketBids)
-	ctx.Set(CtxWinner, append([]byte("stub-winner-of-"), byte(len(bids))))
+
+	if p.helper == nil {
+		ctx.Set(CtxWinner, append([]byte("stub-winner-of-"), byte(len(bids))))
+		return nil
+	}
+
+	params, err := readRideContractParams(ctx)
+	if err != nil {
+		return err
+	}
+	evalKeys, ok := phase.TryGet[[]byte](ctx, CtxEvalKeys)
+	if !ok || len(evalKeys) == 0 {
+		return fmt.Errorf("PhaseScore: CtxEvalKeys is missing or empty")
+	}
+	bidders := make([]string, 0, len(bids))
+	for k := range bids {
+		bidders = append(bidders, k)
+	}
+	sort.Strings(bidders)
+	cts := make([][]byte, len(bidders))
+	for i, b := range bidders {
+		ct, err := decodeRideBid(bids[b])
+		if err != nil {
+			return fmt.Errorf("PhaseScore: decode bid from %s: %w", b, err)
+		}
+		cts[i] = ct
+	}
+
+	masks, err := p.helper.Argmax(params, evalKeys, cts, helperclient.ArgmaxParams{
+		SharpeningPoly: p.sharpening,
+	})
+	if err != nil {
+		return fmt.Errorf("PhaseScore: helper.Argmax: %w", err)
+	}
+	envelope := RideArgmaxEnvelope{
+		Bidders: bidders,
+		Masks:   make([]string, len(masks)),
+	}
+	for i, m := range masks {
+		envelope.Masks[i] = hex.EncodeToString(m)
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("PhaseScore: marshal envelope: %w", err)
+	}
+	ctx.Set(CtxWinner, body)
 	return nil
 }
-func (PhaseScore) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseScore) CheckComplete(*phase.SessionContext) bool                       { return true }
-func (PhaseScore) Exit(*phase.SessionContext) error                               { return nil }
+
+func (*PhaseScore) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
+func (*PhaseScore) CheckComplete(*phase.SessionContext) bool                      { return true }
+func (*PhaseScore) Exit(*phase.SessionContext) error                              { return nil }
+
+func readRideContractParams(ctx *phase.SessionContext) (helperclient.ContractParams, error) {
+	contractAny, ok := ctx.Get(CtxCryptoContract)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxCryptoContract missing")
+	}
+	contract, ok := contractAny.(map[string]any)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxCryptoContract has type %T", contractAny)
+	}
+	asUint := func(k string) (uint32, error) {
+		v, ok := contract[k]
+		if !ok {
+			return 0, fmt.Errorf("crypto_ctx.%s missing", k)
+		}
+		switch n := v.(type) {
+		case int:
+			return uint32(n), nil
+		case int32:
+			return uint32(n), nil
+		case int64:
+			return uint32(n), nil
+		case uint32:
+			return n, nil
+		case float64:
+			return uint32(n), nil
+		}
+		return 0, fmt.Errorf("crypto_ctx.%s has type %T", k, contract[k])
+	}
+	asInt := func(k string) int {
+		v, ok := contract[k]
+		if !ok {
+			return 0
+		}
+		switch n := v.(type) {
+		case int:
+			return n
+		case float64:
+			return int(n)
+		}
+		return 0
+	}
+	ringDim, err := asUint("ring_dim")
+	if err != nil {
+		return helperclient.ContractParams{}, err
+	}
+	depth, err := asUint("depth")
+	if err != nil {
+		return helperclient.ContractParams{}, err
+	}
+	return helperclient.ContractParams{
+		RingDim:        ringDim,
+		Depth:          depth,
+		ScalingModSize: asInt("scaling_mod_size"),
+	}, nil
+}
+
+func decodeRideBid(raw []byte) ([]byte, error) {
+	var msg struct {
+		BidCT string `json:"bid_ct"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	if msg.BidCT == "" {
+		return nil, fmt.Errorf("bid_ct is empty")
+	}
+	return hex.DecodeString(msg.BidCT)
+}
 
 // ── PhaseDecrypt: threshold decrypt → (price, driver, rider) ──
 

@@ -26,7 +26,7 @@ func freePort(t *testing.T) string {
 
 func startTestService(t *testing.T, mode string) (string, *phase.SessionRunner, transport.SessionTrigger, func()) {
 	t.Helper()
-	runner, trigger, inviteType, err := buildRunner(mode, 30, 16384)
+	runner, trigger, inviteType, err := buildRunner(mode, 30, 16384, nil)
 	if err != nil {
 		t.Fatalf("buildRunner(%s): %v", mode, err)
 	}
@@ -122,7 +122,7 @@ func TestCohortService_WeeklyAcceptsSeededBundleAndAdvances(t *testing.T) {
 }
 
 func TestBuildRunner_RejectsUnknownMode(t *testing.T) {
-	_, _, _, err := buildRunner("bogus", 30, 16384)
+	_, _, _, err := buildRunner("bogus", 30, 16384, nil)
 	if err == nil {
 		t.Errorf("expected unknown mode to fail")
 	}

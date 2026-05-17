@@ -52,6 +52,7 @@ import (
 	"syscall"
 
 	"github.com/Fheyalabs/ares-core/examples/recurring_cohort_ranking"
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 	"github.com/Fheyalabs/ares-core/pkg/ares/transport"
 )
@@ -66,7 +67,21 @@ func main() {
 
 	logStream := transport.NewLogStream()
 
-	runner, trigger, inviteType, err := buildRunner(mode, depth, ringDim)
+	ctx, cancel := signalContext()
+	defer cancel()
+
+	var helper *helperclient.Client
+	helperPath := os.Getenv("ARES_HELPER_BINARY")
+	if helperPath != "" {
+		c, err := helperclient.Start(ctx, helperPath)
+		if err != nil {
+			log.Fatalf("start helper: %v", err)
+		}
+		helper = c
+		defer helper.Close()
+	}
+
+	runner, trigger, inviteType, err := buildRunner(mode, depth, ringDim, helper)
 	if err != nil {
 		log.Fatalf("build runner (%s): %v", mode, err)
 	}
@@ -88,11 +103,12 @@ func main() {
 		w.setHub(svc.Hub())
 	}
 
-	ctx, cancel := signalContext()
-	defer cancel()
-
-	log.Printf("[cohort] %s-service starting on :%s (depth=%d ring_dim=%d dev_bypass=%v)",
-		mode, port, depth, ringDim, devBypass)
+	hmode := "stub"
+	if helper != nil {
+		hmode = "helper"
+	}
+	log.Printf("[cohort] %s-service starting on :%s (scoring=%s depth=%d ring_dim=%d dev_bypass=%v)",
+		mode, port, hmode, depth, ringDim, devBypass)
 	if err := svc.Run(ctx); err != nil {
 		log.Fatalf("service.Run: %v", err)
 	}
@@ -102,7 +118,7 @@ type hubWiring interface {
 	setHub(*transport.Hub)
 }
 
-func buildRunner(mode string, depth, ringDim int) (*phase.SessionRunner, transport.SessionTrigger, string, error) {
+func buildRunner(mode string, depth, ringDim int, helper *helperclient.Client) (*phase.SessionRunner, transport.SessionTrigger, string, error) {
 	cryptoCtx := map[string]any{
 		"depth":            depth,
 		"ring_dim":         ringDim,
@@ -118,12 +134,19 @@ func buildRunner(mode string, depth, ringDim int) (*phase.SessionRunner, transpo
 		return runner, &formationTrigger{inner: inner, cryptoCtx: cryptoCtx}, "cohort.formation.invitation", nil
 
 	case "weekly":
+		argmax := recurringcohortranking.NewPhaseArgmaxScoring()
+		if helper != nil {
+			argmax = recurringcohortranking.NewPhaseArgmaxScoringWithHelper(helper, helperclient.EvalPolyParams{
+				Coefficients: []float64{0.5, 0.75, 0, -0.25},
+				LowerBound:   -1, UpperBound: 1,
+			})
+		}
 		runner, err := phase.NewSessionRunner(
 			&weeklyKeySeeder{},
 			recurringcohortranking.NewPhaseRankingInvitation(),
 			recurringcohortranking.NewPhasePreSharedKeyLookup(),
 			recurringcohortranking.NewPhaseSubmitRating(),
-			recurringcohortranking.NewPhaseArgmaxScoring(),
+			argmax,
 			recurringcohortranking.NewPhaseThresholdDecrypt(),
 			recurringcohortranking.NewPhaseSettleRanking(),
 		)

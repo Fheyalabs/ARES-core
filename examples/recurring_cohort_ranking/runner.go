@@ -1,6 +1,9 @@
 package recurringcohortranking
 
-import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+import (
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+)
 
 // NewCohortFormationRunner builds a SessionRunner for the one-time
 // cohort formation sequence. Run it once per cohort lifecycle:
@@ -34,6 +37,23 @@ func NewWeeklyRankingSession() (*phase.SessionRunner, error) {
 		NewPhasePreSharedKeyLookup(),
 		NewPhaseSubmitRating(),
 		NewPhaseArgmaxScoring(),
+		NewPhaseThresholdDecrypt(),
+		NewPhaseSettleRanking(),
+	)
+}
+
+// NewWeeklyRankingSessionWithHelper substitutes the helper-backed
+// PhaseArgmaxScoring for the stub. Used when the cohort service runs
+// against a real OpenFHE helper.
+func NewWeeklyRankingSessionWithHelper(
+	helper *helperclient.Client,
+	sharpening helperclient.EvalPolyParams,
+) (*phase.SessionRunner, error) {
+	return phase.NewSessionRunner(
+		NewPhaseRankingInvitation(),
+		NewPhasePreSharedKeyLookup(),
+		NewPhaseSubmitRating(),
+		NewPhaseArgmaxScoringWithHelper(helper, sharpening),
 		NewPhaseThresholdDecrypt(),
 		NewPhaseSettleRanking(),
 	)
