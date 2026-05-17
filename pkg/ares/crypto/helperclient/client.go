@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"sync"
 )
@@ -59,7 +60,7 @@ func Start(ctx context.Context, binaryPath string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("stdout pipe: %w", err)
 	}
-	cmd.Stderr = nil // let it inherit; helper logs go to its own stderr
+	cmd.Stderr = os.Stderr // helper logs (including CKKS deserialize failures) surface in the caller's stderr
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start helper: %w", err)
 	}

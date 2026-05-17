@@ -1,6 +1,14 @@
 package sealedbidauction
 
-import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+import (
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"sort"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+)
 
 // PhaseInvitation opens an auction. The auctioneer picks N bidders
 // from the registered pool, pins the CKKS parameters appropriate to
@@ -166,18 +174,55 @@ func (PhaseScalarBid) Exit(ctx *phase.SessionContext) error {
 // similarity + location penalty + reputation; here it is plain
 // argmax; a weighted-ballot voting app would emit a tally
 // ciphertext with no winner selection.
-type PhaseArgmax struct{}
+// PhaseArgmax has two modes:
+//
+//   - Stub mode (NewPhaseArgmax): writes a deterministic placeholder
+//     to CtxAuctionCipherWinnerBid. Used by composition tests and the
+//     wire-only smoke that doesn't run real CKKS.
+//
+//   - Real mode (NewPhaseArgmaxWithHelper): pulls each bidder's
+//     accumulated bid payload (JSON {"bid_ct": hex...}), orders by
+//     pseudonym, and calls helperclient.Argmax with the configured
+//     sharpening polynomial. The returned mask list is wrapped in a
+//     JSON envelope and stored under CtxAuctionCipherWinnerBid; the
+//     []byte schema stays unchanged because downstream phases treat
+//     the field as opaque bytes.
+//
+// The mode is set at construction time; the runner shares the phase
+// instance across sessions and the helper reference is safe for
+// concurrent use.
+type PhaseArgmax struct {
+	helper     *helperclient.Client
+	sharpening helperclient.EvalPolyParams
+}
 
+// NewPhaseArgmax returns the stub variant.
 func NewPhaseArgmax() *PhaseArgmax { return &PhaseArgmax{} }
 
-func (PhaseArgmax) Name() string                   { return "auction-argmax-scoring" }
-func (PhaseArgmax) Lifetime() phase.Lifetime       { return phase.LifetimePerSession }
-func (PhaseArgmax) RunsAt() phase.RunsAt           { return phase.RunsAtInline }
-func (PhaseArgmax) EntryState() phase.SessionState { return StateAuctionScoring }
-func (PhaseArgmax) ExitState() phase.SessionState  { return StateAuctionDecrypting }
-func (PhaseArgmax) ConsumedMessageTypes() []string             { return nil }
-func (PhaseArgmax) InternalStates() []phase.SessionState       { return nil }
-func (PhaseArgmax) Requires() phase.ContextSchema {
+// NewPhaseArgmaxWithHelper returns a phase that calls helper.Argmax in
+// Enter. The sharpening polynomial is invoked on every pairwise
+// difference; sharpen.SharpenIndicatorDegree3 is a sensible default.
+func NewPhaseArgmaxWithHelper(helper *helperclient.Client, sharpening helperclient.EvalPolyParams) *PhaseArgmax {
+	return &PhaseArgmax{helper: helper, sharpening: sharpening}
+}
+
+// ArgmaxMaskEnvelope is the JSON shape stored in CtxAuctionCipherWinnerBid
+// after a real-mode Argmax run. Bidders is the ordered pseudonym list
+// (the index of each mask). Masks is the parallel base64-encoded mask
+// ciphertext list.
+type ArgmaxMaskEnvelope struct {
+	Bidders []string `json:"bidders"`
+	Masks   []string `json:"masks"`
+}
+
+func (*PhaseArgmax) Name() string                            { return "auction-argmax-scoring" }
+func (*PhaseArgmax) Lifetime() phase.Lifetime                { return phase.LifetimePerSession }
+func (*PhaseArgmax) RunsAt() phase.RunsAt                    { return phase.RunsAtInline }
+func (*PhaseArgmax) EntryState() phase.SessionState          { return StateAuctionScoring }
+func (*PhaseArgmax) ExitState() phase.SessionState           { return StateAuctionDecrypting }
+func (*PhaseArgmax) ConsumedMessageTypes() []string          { return nil }
+func (*PhaseArgmax) InternalStates() []phase.SessionState    { return nil }
+func (*PhaseArgmax) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionParticipants:   {TypeName: "[]string", Required: true},
 		CtxAuctionCryptoContract: {TypeName: "OpenFHEContract", Required: true, Constraints: map[string]any{"depth_min": 8}},
@@ -185,23 +230,150 @@ func (PhaseArgmax) Requires() phase.ContextSchema {
 		CtxAuctionBids:           {TypeName: "map[string][]byte", Required: true},
 	}
 }
-func (PhaseArgmax) Provides() phase.ContextSchema {
+func (*PhaseArgmax) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxAuctionCipherWinnerBid: {TypeName: "[]byte"},
 	}
 }
-func (PhaseArgmax) Enter(ctx *phase.SessionContext) error {
-	// Phase 4b will replace this with a real openfhe-contract-helper
-	// call that runs the depth=30 selector chain over the accumulated
-	// bid ciphertexts. For now we emit a deterministic placeholder so
-	// downstream phases find a CtxAuctionCipherWinnerBid value.
+
+func (p *PhaseArgmax) Enter(ctx *phase.SessionContext) error {
 	bids := phase.AccumulatedMessages(ctx, bucketScalarBids)
-	ctx.Set(CtxAuctionCipherWinnerBid, append([]byte("stub-winner-of-"), byte(len(bids))))
+
+	if p.helper == nil {
+		ctx.Set(CtxAuctionCipherWinnerBid, append([]byte("stub-winner-of-"), byte(len(bids))))
+		return nil
+	}
+
+	params, err := readContractParams(ctx)
+	if err != nil {
+		return err
+	}
+	evalKeys, ok := phase.TryGet[[]byte](ctx, CtxAuctionEvalKeys)
+	if !ok || len(evalKeys) == 0 {
+		return fmt.Errorf("PhaseArgmax: CtxAuctionEvalKeys is missing or empty")
+	}
+
+	// Deterministic order so the mask index matches across runs.
+	bidders := make([]string, 0, len(bids))
+	for k := range bids {
+		bidders = append(bidders, k)
+	}
+	sort.Strings(bidders)
+
+	cts := make([][]byte, len(bidders))
+	for i, b := range bidders {
+		ct, err := decodeBidCiphertext(bids[b])
+		if err != nil {
+			return fmt.Errorf("PhaseArgmax: decode bid from %s: %w", b, err)
+		}
+		cts[i] = ct
+	}
+
+	masks, err := p.helper.Argmax(params, evalKeys, cts, helperclient.ArgmaxParams{
+		SharpeningPoly: p.sharpening,
+	})
+	if err != nil {
+		return fmt.Errorf("PhaseArgmax: helper.Argmax: %w", err)
+	}
+	envelope := ArgmaxMaskEnvelope{
+		Bidders: bidders,
+		Masks:   make([]string, len(masks)),
+	}
+	for i, m := range masks {
+		envelope.Masks[i] = hex.EncodeToString(m)
+	}
+	body, err := json.Marshal(envelope)
+	if err != nil {
+		return fmt.Errorf("PhaseArgmax: marshal envelope: %w", err)
+	}
+	ctx.Set(CtxAuctionCipherWinnerBid, body)
 	return nil
 }
-func (PhaseArgmax) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
-func (PhaseArgmax) CheckComplete(*phase.SessionContext) bool                       { return true }
-func (PhaseArgmax) Exit(*phase.SessionContext) error                               { return nil }
+
+func (*PhaseArgmax) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
+func (*PhaseArgmax) CheckComplete(*phase.SessionContext) bool                      { return true }
+func (*PhaseArgmax) Exit(*phase.SessionContext) error                              { return nil }
+
+// readContractParams extracts ContractParams from the typed map under
+// CtxAuctionCryptoContract.
+func readContractParams(ctx *phase.SessionContext) (helperclient.ContractParams, error) {
+	contractAny, ok := ctx.Get(CtxAuctionCryptoContract)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxAuctionCryptoContract missing")
+	}
+	contract, ok := contractAny.(map[string]any)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxAuctionCryptoContract has unexpected type %T", contractAny)
+	}
+	asUint := func(k string) (uint32, error) {
+		v, ok := contract[k]
+		if !ok {
+			return 0, fmt.Errorf("crypto_ctx.%s missing", k)
+		}
+		switch n := v.(type) {
+		case int:
+			return uint32(n), nil
+		case int32:
+			return uint32(n), nil
+		case int64:
+			return uint32(n), nil
+		case uint32:
+			return n, nil
+		case float64:
+			return uint32(n), nil
+		default:
+			return 0, fmt.Errorf("crypto_ctx.%s has type %T", k, v)
+		}
+	}
+	asInt := func(k string) int {
+		v, ok := contract[k]
+		if !ok {
+			return 0
+		}
+		switch n := v.(type) {
+		case int:
+			return n
+		case int32:
+			return int(n)
+		case int64:
+			return int(n)
+		case float64:
+			return int(n)
+		}
+		return 0
+	}
+	ringDim, err := asUint("ring_dim")
+	if err != nil {
+		return helperclient.ContractParams{}, err
+	}
+	depth, err := asUint("depth")
+	if err != nil {
+		return helperclient.ContractParams{}, err
+	}
+	return helperclient.ContractParams{
+		RingDim:        ringDim,
+		Depth:          depth,
+		ScalingModSize: asInt("scaling_mod_size"),
+	}, nil
+}
+
+// decodeBidCiphertext parses a bid payload of shape
+// {"bid_ct": "hex...", ...} and returns the raw ciphertext bytes. The
+// auction example's smoke client sends bids in this shape; production
+// app clients can adopt the same shape or override this phase with one
+// that parses their format.
+func decodeBidCiphertext(raw []byte) ([]byte, error) {
+	var msg struct {
+		BidCT string `json:"bid_ct"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	if msg.BidCT == "" {
+		return nil, fmt.Errorf("bid_ct is empty")
+	}
+	return hex.DecodeString(msg.BidCT)
+}
 
 // PhaseDecrypt runs the threshold partial-decryption of the encrypted
 // (winning_bid, winner_id) tuple. Each participant submits a partial
