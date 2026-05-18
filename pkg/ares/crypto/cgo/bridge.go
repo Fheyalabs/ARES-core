@@ -5,8 +5,21 @@
 package cgo
 
 /*
-#cgo CXXFLAGS: -std=c++17 -I/usr/local/include/openfhe -I/usr/local/include/openfhe/pke -I/usr/local/include/openfhe/core -I/usr/local/include/openfhe/cereal -I/usr/local/include/openfhe/binfhe
-#cgo LDFLAGS: -L/usr/local/lib -Wl,-rpath,/usr/local/lib -lOPENFHEpke -lOPENFHEbinfhe -lOPENFHEcore
+// OpenFHE 1.5.x does not ship pkg-config files (it uses CMake's
+// find_package). Platform-specific include and library paths are
+// declared in bridge_darwin.go and bridge_linux.go.
+//
+// For a non-default install prefix, append flags via CGO_CXXFLAGS
+// and CGO_LDFLAGS:
+//
+//	export CGO_CXXFLAGS="-I/your/openfhe/include/openfhe -I/your/openfhe/include/openfhe/pke -I/your/openfhe/include/openfhe/core -I/your/openfhe/include/openfhe/cereal -I/your/openfhe/include/openfhe/binfhe"
+//	export CGO_LDFLAGS="-L/your/openfhe/lib -Wl,-rpath,/your/openfhe/lib"
+//	go build -tags openfhe ./...
+//
+// pkg-config users: install pkg-config/openfhe.pc.in (substitute
+// @prefix@, drop into $PKG_CONFIG_PATH), then switch the cgo
+// directives in bridge_*.go to `#cgo pkg-config: OpenFHE`.
+#cgo CXXFLAGS: -std=c++17
 #include <stdlib.h>
 #include "openfhe_wrapper.h"
 */
