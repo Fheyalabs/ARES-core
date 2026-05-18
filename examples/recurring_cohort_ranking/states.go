@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package recurringcohortranking demonstrates the amortized-keygen
 // fast path: the same N participants form a long-lived cohort and
 // run MANY sessions against one collective key bundle. Keygen is

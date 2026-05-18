@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """OpenFHE crypto helpers (stub interface).
 
 In Phase 4 these stubs are wired to the existing

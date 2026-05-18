@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Sealed-bid auction smoke config.
 
 Smoke flow (stub-crypto path):

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Cohort-formation smoke config (run with COHORT_MODE=formation).
 
 This drives the one-time cohort-key-bundle generation. The smoke just

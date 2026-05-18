@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Typed configuration for ARES client smoke runs.
 
 An :class:`AppConfig` describes everything :func:`run_smoke` needs to

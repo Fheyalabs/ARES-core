@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end auction smoke against a live homelab session-service.
 
 Drives N participants through the full auction protocol:

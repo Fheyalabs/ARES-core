@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Multi-participant smoke orchestration.
 
 :func:`run_smoke` is the high-level entry point. It:

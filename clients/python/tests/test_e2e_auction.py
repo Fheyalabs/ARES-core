@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end smoke against a live auction session-service.
 
 The test starts the Go auction-service as a subprocess on a random

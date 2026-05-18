@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package helperclient is the Go-side IPC client for
 // cmd/openfhe-contract-helper. It spawns the helper as a long-lived
 // subprocess in daemon mode (`--daemon`) and exchanges newline-

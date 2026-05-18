@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package helperclient
 
 // Decomposable scoring primitives. Each maps to one homomorphic

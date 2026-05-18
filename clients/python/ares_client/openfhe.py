@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Python IPC client for cmd/openfhe-contract-helper.
 
 Spawns the helper as a long-lived subprocess in daemon mode and

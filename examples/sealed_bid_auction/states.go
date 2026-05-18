@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package sealedbidauction is a worked example showing how to build a
 // non-Fheya application on top of the ARES framework. The auction
 // has N bidders, each submits one encrypted scalar bid amount, the

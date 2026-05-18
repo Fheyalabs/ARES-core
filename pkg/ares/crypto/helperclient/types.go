@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package helperclient
 
 // ContractParams pins the CKKS scheme parameters for one call. The

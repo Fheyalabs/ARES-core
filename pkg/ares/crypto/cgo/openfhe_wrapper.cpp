@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // OpenFHE C wrapper implementation.
 
 #include <openfhe.h>

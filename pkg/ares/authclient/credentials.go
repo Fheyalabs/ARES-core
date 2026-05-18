@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package authclient implements the credential-issuance and verification
 // primitives an ARES auth-service needs.
 //

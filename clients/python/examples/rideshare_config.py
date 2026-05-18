@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Ride-share smoke config.
 
 The first participant is the rider; the rest are drivers (matches

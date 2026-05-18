@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Command session-service runs the recurring-cohort-ranking example as
 // a standalone HTTP+WebSocket service.
 //

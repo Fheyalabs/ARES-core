@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package helperclient
 
 // Built-in sharpening polynomials. These are reasonable defaults; apps
