@@ -115,12 +115,12 @@ func TestCohortService_WeeklyAcceptsSeededBundleAndAdvances(t *testing.T) {
 		t.Fatalf("status = %d body=%s", resp.StatusCode, body)
 	}
 	s, _ := runner.CurrentState("w-good")
-	// After AdvanceToState past the seeder, session sits at
-	// RANKING_INVITING (PhaseRankingInvitation's CheckComplete is true,
-	// but it auto-advances only after a message — so we expect to stop
-	// at the entry of PhaseRankingInvitation).
-	if s != recurringcohortranking.StateRankingInviting {
-		t.Errorf("state = %q, want RANKING_INVITING", s)
+	// Weekly trigger walks all the way to RANKING_BIDDING so
+	// PhaseSubmitRating is current and ready to consume
+	// ranking.rating messages. PhasePreSharedKeyLookup's Enter
+	// validates the seeded keys along the way.
+	if s != recurringcohortranking.StateRankingBidding {
+		t.Errorf("state = %q, want RANKING_BIDDING", s)
 	}
 }
 

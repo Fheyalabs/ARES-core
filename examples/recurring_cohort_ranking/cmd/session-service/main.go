@@ -291,10 +291,12 @@ func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map
 	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
 		return err
 	}
-	// Advance past the bridge phase so PhasePreSharedKeyLookup's Enter
-	// runs against the freshly-seeded context.
-	if err := t.runner.AdvanceToState(sessionID, recurringcohortranking.StateRankingInviting); err != nil {
-		return fmt.Errorf("weekly trigger: advance past seeder: %w", err)
+	// Advance past the bridge phase + invitation + key-lookup so the
+	// session lands at RANKING_BIDDING, ready for participants to
+	// submit ranking.rating messages. PhasePreSharedKeyLookup's Enter
+	// runs against the freshly-seeded context here.
+	if err := t.runner.AdvanceToState(sessionID, recurringcohortranking.StateRankingBidding); err != nil {
+		return fmt.Errorf("weekly trigger: advance to bidding: %w", err)
 	}
 	return nil
 }
