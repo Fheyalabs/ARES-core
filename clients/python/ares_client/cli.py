@@ -3,7 +3,7 @@
 
 Usage:
 
-    python -m ares_client --config examples.auction_config \
+    python -m ares_client --config examples.auction_stub_smoke \
         --participants 6 --session-id auc-001
 
 The ``--config`` argument is a dotted Python module path. The module
@@ -58,7 +58,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument(
         "--config", required=True,
         help="Dotted Python module path with a CONFIG: AppConfig global "
-             "(e.g. examples.auction_config).",
+             "(e.g. examples.auction_stub_smoke).",
     )
     p.add_argument(
         "--participants", "-n", type=int, default=6,

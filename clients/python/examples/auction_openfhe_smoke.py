@@ -24,7 +24,7 @@ Usage:
     export ARES_SERVER=http://localhost:8000     # or https://api.fheya.de
     export ARES_WS_SECRET=                       # empty for dev-bypass
     export ARES_HELPER_BINARY=/path/to/openfhe-helper
-    python -m examples.auction_homelab_smoke --participants 6
+    python -m examples.auction_openfhe_smoke --participants 6
 
 If you only want a stub (no real CKKS) smoke, drop ARES_HELPER_BINARY
 and the driver falls back to placeholder ciphertexts — wire-only test.
@@ -65,6 +65,8 @@ async def run(
     # 1. Helper + crypto setup (or stub if no helper).
     helper: OpenFHEHelper | None = None
     bid_cts: dict[str, str] = {}  # hex-encoded ciphertexts, per bidder
+    shares_by_bidder: dict[str, Any] = {}  # KeyShare per bidder (helper mode)
+    decrypt_target: bytes | None = None  # ciphertext everyone partial-decrypts
 
     # CKKS contract MUST match the server's. The server reads these
     # from AUCTION_CRYPTO_DEPTH / AUCTION_RING_DIM env vars; the smoke
@@ -84,10 +86,18 @@ async def run(
         shares, eval_keys = await helper.run_full_keygen(params, participants)
         log.info("keygen complete in %.2fs", time.monotonic() - t0)
         joint = shares[-1].public_key
-        for b, s in zip(bidders, scores):
+        for b, s, share in zip(bidders, scores, shares):
             ct = await helper.encrypt(params, joint, [s, 0.0, 0.0, 0.0])
             bid_cts[b] = ct.hex()
+            shares_by_bidder[b] = share
             log.info("encrypted %s score=%.3f → %d bytes", b, s, len(ct))
+        # All bidders partial-decrypt the same ciphertext so the server's
+        # PhaseDecrypt has N partials against one target to fuse. We pick
+        # the first bidder's bid_ct — the recovered scalar isn't the
+        # auction outcome (mask·bid fusion isn't wired into this phase
+        # yet), but it drives the session to AUCTION_SETTLED with real
+        # threshold partials instead of placeholder bytes.
+        decrypt_target = bytes.fromhex(bid_cts[bidders[0]])
     else:
         log.info("stub mode — no helper, sending placeholder bytes")
         for b in bidders:
@@ -152,9 +162,14 @@ async def run(
         # Wait for scoring to complete and the session to enter
         # DECRYPTING before sending partials.
         await session.await_phase("AUCTION_DECRYPTING", timeout=30.0)
-        await session.send("auction.decrypt.partial", {
-            "partial": "pd-" + bidder,
-        })
+        if helper is not None and decrypt_target is not None:
+            share = shares_by_bidder[bidder]
+            partial = await helper.partial_decrypt(
+                params, decrypt_target, share.secret_key_share, share.lead,
+            )
+            await session.send("auction.decrypt.partial", {"partial_ct": partial.hex()})
+        else:
+            await session.send("auction.decrypt.partial", {"partial": "pd-" + bidder})
         return {"bidder": bidder, "submitted_score": float(scores[bidders.index(bidder)])}
 
     t0 = time.monotonic()

@@ -19,7 +19,7 @@ Usage:
 
     export ARES_SERVER=https://api.fheya.de
     export ARES_WS_SECRET=
-    python -m examples.cohort_formation_homelab_smoke --participants 3
+    python -m examples.cohort_formation_openfhe_smoke --participants 3
 """
 
 from __future__ import annotations

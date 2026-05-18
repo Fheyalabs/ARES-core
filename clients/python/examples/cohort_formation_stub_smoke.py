@@ -5,7 +5,7 @@ This drives the one-time cohort-key-bundle generation. The smoke just
 exchanges keygen shares; the actual key bundle is produced in the
 server-side phase Exit hook. After this smoke completes, capture the
 bundle (printed by the smoke driver) and feed it into
-cohort_weekly_config.py for the weekly path.
+cohort_weekly_stub_smoke.py for the weekly path.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end ride-share smoke against a live homelab session-service.
 
-Mirrors auction_homelab_smoke (commit ce42ce8) for the ride-share app:
+Mirrors auction_openfhe_smoke (commit ce42ce8) for the ride-share app:
 
     1. spawn a local OpenFHE helper subprocess
     2. run the N-party threshold keygen via the helper
@@ -27,7 +27,7 @@ Usage:
     export ARES_HELPER_BINARY=/path/to/openfhe-helper
     export RIDESHARE_CRYPTO_DEPTH=12   # matches server default
     export RIDESHARE_RING_DIM=2048
-    python -m examples.rideshare_homelab_smoke --participants 3
+    python -m examples.rideshare_openfhe_smoke --participants 3
 """
 
 from __future__ import annotations
@@ -68,6 +68,8 @@ async def run(
 
     helper: OpenFHEHelper | None = None
     bid_cts: dict[str, str] = {}
+    shares_by_bidder: dict[str, Any] = {}
+    decrypt_target: bytes | None = None
     joint = b""
     eval_keys_bytes = b""
 
@@ -79,10 +81,14 @@ async def run(
         log.info("keygen complete in %.2fs", time.monotonic() - t0)
         joint = shares[-1].public_key
         eval_keys_bytes = eval_keys.eval_mult_final
-        for b, s in zip(bidders, scores):
+        for b, s, share in zip(bidders, scores, shares):
             ct = await helper.encrypt(params, joint, [s, 0.0, 0.0, 0.0])
             bid_cts[b] = ct.hex()
+            shares_by_bidder[b] = share
             log.info("encrypted %s score=%.3f → %d bytes", b, s, len(ct))
+        # Shared partial-decrypt target so the server's PhaseDecrypt
+        # has N partials against one ciphertext to fuse.
+        decrypt_target = bytes.fromhex(bid_cts[bidders[0]])
     else:
         log.info("stub mode — no helper, sending placeholder bytes")
         for b in bidders:
@@ -129,7 +135,14 @@ async def run(
         await session.send("ride.bid", {"bid_ct": bid_cts[bidder]})
         await session.await_phase("RIDE_DECRYPT", timeout=30.0)
 
-        await session.send("ride.decrypt.partial", {"partial": "pd-" + bidder})
+        if helper is not None and decrypt_target is not None:
+            share = shares_by_bidder[bidder]
+            partial = await helper.partial_decrypt(
+                params, decrypt_target, share.secret_key_share, share.lead,
+            )
+            await session.send("ride.decrypt.partial", {"partial_ct": partial.hex()})
+        else:
+            await session.send("ride.decrypt.partial", {"partial": "pd-" + bidder})
         return {"bidder": bidder, "submitted_score": float(scores[bidders.index(bidder)])}
 
     t0 = time.monotonic()
