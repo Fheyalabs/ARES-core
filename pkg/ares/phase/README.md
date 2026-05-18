@@ -45,48 +45,44 @@ Concurrency-safe typed bag of state. Phases read what they need via `MustGet[T](
 
 ## Quickstart
 
-A 50-line runner that picks the highest of N encrypted integer ratings:
+A minimal runner that picks the highest of N encrypted scalar bids
+(see `examples/sealed_bid_auction/runner.go` for the full source):
 
 ```go
 package main
 
 import (
-    "github.com/Fheyalabs/ares/pkg/ares/phase"
-    "github.com/Fheyalabs/ares/pkg/ares/phase/defaults"
+    "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+    "github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
 
 func NewSimpleRanking() (*phase.SessionRunner, error) {
-    return phase.NewSessionRunner(
-        defaults.NewPhase1aSessionInitiation(),  // INVITING → LOCKED
-        defaults.NewPhase0aThresholdKeygen(),    // LOCKED → GOSSIP
-        defaults.NewPhaseGOnionShuffle(),        // GOSSIP → VERIFYING
-        defaults.NewPhaseG2Verification(),       // VERIFYING → SUBMITTING
-        myRatingSubmitPhase{},                   // SUBMITTING → SCORING
-        myArgmaxScoringPhase{},                  // SCORING → DECRYPTING
-        defaults.NewPhase3ThresholdDecrypt(),     // DECRYPTING → BROADCASTING
-        mySettlePhase{},                          // BROADCASTING → CLOSED
+    return phase.Compose(
+        defaults.NewPhase1aSessionInitiation(),  // INVITING   → LOCKED
+        defaults.NewPhase0aThresholdKeygen(),    // LOCKED     → GOSSIP
+        myScalarSubmitPhase{},                   // GOSSIP     → SCORING   (app phase)
+        myArgmaxScoringPhase{},                  // SCORING    → DECRYPTING (app phase)
+        defaults.NewPhase3ThresholdDecrypt(),    // DECRYPTING → BROADCASTING
+        mySettlePhase{},                         // BROADCASTING → CLOSED   (app phase)
     )
 }
 ```
 
-`myRatingSubmitPhase` implements `Phase`, consumes `"my-app.rating"` messages, and provides `CtxEncryptedInputs` into the context. `myArgmaxScoringPhase` reads those inputs, runs the FHE circuit, and produces `CtxCipherWinnerPackage`. `mySettlePhase` emits a signed transcript and `ExitState()` returns `StateNone` (terminal).
+`myScalarSubmitPhase` implements `Phase`, consumes a message like `"my-app.bid"`, and provides the encrypted inputs into the context. `myArgmaxScoringPhase` reads those inputs, runs the FHE circuit, and produces `CtxResultCiphertext`. `mySettlePhase` emits a signed transcript and `ExitState()` returns `StateNone` (terminal).
 
 ## Core Catalog
 
 | Phase | Package | Arc | App-specific? |
 |---|---|---|---|
-| Session Initiation (1a) | `defaults` | INVITING → LOCKED | No |
-| Threshold Keygen (0a) | `defaults` | LOCKED → GOSSIP | No |
-| Non-MPC Keygen variants | `keygen` | LOCKED → GOSSIP | No |
-| Onion Shuffle (G) | `defaults` | GOSSIP → VERIFYING | No |
-| Verification (G.2) | `defaults` | VERIFYING → SUBMITTING | No |
-| Threshold Decrypt (3) | `defaults` | DECRYPTING → BROADCASTING | No |
-| Encrypted Profile Submit (1b) | `apps/fheya/phases` | SUBMITTING → SCORING | **Yes — Fheya** |
-| FHE Cosine Scoring (2) | `apps/fheya/phases` | SCORING → DECRYPTING | **Yes — Fheya** |
-| Anonymous Broadcast (D) | `apps/fheya/phases` | BROADCASTING → CLOSED | **Yes — Fheya** |
+| Session Initiation (Phase 1a) | `defaults` | INVITING → LOCKED | No |
+| Threshold Keygen (Phase 0a) | `defaults` | LOCKED → GOSSIP | No |
 | SinglePartyKeygen | `keygen` | LOCKED → GOSSIP | No |
 | PlaintextKeygen | `keygen` | LOCKED → GOSSIP | No |
 | PreSharedKeygen | `keygen` | LOCKED → GOSSIP | No |
+| Threshold Decrypt (Phase 3) | `defaults` | DECRYPTING → BROADCASTING | No |
+| Encrypted input submission | application package | (varies) | Yes |
+| Scoring circuit | application package | SCORING → DECRYPTING | Yes |
+| Post-result phase | application package | BROADCASTING → CLOSED | Yes |
 
 ## Customizing
 

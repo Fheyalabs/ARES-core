@@ -5,15 +5,17 @@ A cryptographic framework for blind ranking, sealed-bid auctions, and selective-
 ## Quickstart
 
 ```go
-import (
-    "github.com/Fheyalabs/ares-core/pkg/ares/phase"
-    "github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
-)
+import auction "github.com/Fheyalabs/ares-core/examples/sealed_bid_auction"
 
-runner, err := defaults.NewARESDefaultRunner()
-ctx, err := runner.BeginSession("session-1", "")
+runner, err := auction.Pipeline()
+ctx, err := runner.BeginSession("auction-1", "")
 // Route messages through runner.HandleMessage(...)
 ```
+
+ARES-core ships generic phase primitives (`pkg/ares/phase/defaults`,
+`pkg/ares/phase/keygen`); applications compose their own pipeline via
+`phase.Compose(...)`. The framework intentionally provides no
+opinionated "default runner" — see `examples/` for full pipelines.
 
 ## Documentation
 

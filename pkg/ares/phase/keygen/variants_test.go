@@ -10,65 +10,55 @@ import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
 
-// TestSinglePartyKeygen_ComposesIntoDefaultRunner verifies
-// SinglePartyKeygenPhase slots into the default pipeline as a
-// drop-in replacement for Phase0aThresholdKeygen at the same
-// LOCKED → GOSSIP arc with identical Provides.
-func TestSinglePartyKeygen_ComposesIntoDefaultRunner(t *testing.T) {
+// TestSinglePartyKeygen_ComposesWithPhase3 verifies SinglePartyKeygenPhase
+// slots into a pipeline alongside Phase 1a and Phase 3 at the
+// LOCKED → GOSSIP arc with identical Provides to threshold keygen.
+// A test-only scoring stub fills the SCORING → DECRYPTING arc and
+// produces CtxResultCiphertext so Phase 3 has something to consume.
+func TestSinglePartyKeygen_ComposesWithPhase3(t *testing.T) {
 	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewSinglePartyKeygen(),
-		defaults.NewPhaseGOnionShuffle(),
-		defaults.NewPhaseG2Verification(),
-		defaults.NewPhase1bEncryptedSubmit(),
-		defaults.NewPhase2FHEScoring(),
+		stubArcPhase("post-keygen", defaults.StateGossip, defaults.StateScoring, nil, nil),
+		stubArcPhase("score", defaults.StateScoring, defaults.StateDecrypting,
+			phase.ContextSchema{defaults.CtxEvalKeys: {TypeName: "OpenFHEEvalKeys", Required: true}},
+			phase.ContextSchema{defaults.CtxResultCiphertext: {TypeName: "[]byte"}},
+		),
 		defaults.NewPhase3ThresholdDecrypt(),
-		defaults.NewPhaseDAnonymousBroadcast(),
+		stubArcPhase("settle", defaults.StateBroadcasting, phase.StateNone, nil, nil),
 	)
 	if err != nil {
 		t.Fatalf("Compose with SinglePartyKeygen: %v", err)
 	}
 }
 
-// TestPlaintextKeygen_ComposesIntoDefaultRunner verifies
-// PlaintextKeygenPhase slots into the default pipeline. It produces
-// no crypto contract, so downstream phases that require a crypto
-// contract (Phase2FHEScoring requires ctxCryptoContract with
-// depth_min) should fail construction. That is correct — a
-// plaintext pipeline would swap Phase2 for a plaintext scorer.
-func TestPlaintextKeygen_ComposesIntoDefaultRunner(t *testing.T) {
-	// Plaintext keygen does NOT provide ctxCryptoContract, so
-	// Phase2FHEScoring (which requires it) should fail.
+// TestPlaintextKeygen_RejectsThresholdDecrypt verifies that pairing
+// PlaintextKeygen (provides secret_shares as []byte, not a per-
+// participant map) with Phase3ThresholdDecrypt (which expects
+// map[string][]byte) is caught at construction time by the type
+// constraint check.
+func TestPlaintextKeygen_RejectsThresholdDecrypt(t *testing.T) {
 	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewPlaintextKeygen(),
-		defaults.NewPhaseGOnionShuffle(),
-		defaults.NewPhaseG2Verification(),
-		defaults.NewPhase1bEncryptedSubmit(),
-		defaults.NewPhase2FHEScoring(),
+		stubArcPhase("score", defaults.StateGossip, defaults.StateDecrypting,
+			nil,
+			phase.ContextSchema{defaults.CtxResultCiphertext: {TypeName: "[]byte"}},
+		),
 		defaults.NewPhase3ThresholdDecrypt(),
-		defaults.NewPhaseDAnonymousBroadcast(),
 	)
 	if err == nil {
-		t.Fatalf("expected constructor to reject plaintext keygen + FHE scoring (type mismatch or missing crypto_ctx)")
+		t.Fatalf("expected constructor to reject plaintext keygen + threshold decrypt (secret_shares type mismatch)")
 	}
-	// The first failure is a type mismatch on secret_shares
-	// (PlaintextKeygen declares []byte but Phase3 expects
-	// map[string][]byte). Either that or the missing crypto_ctx
-	// is fine — both correctly reject the misconfiguration.
-	if !strings.Contains(err.Error(), defaults.CtxCryptoContract) &&
-		!strings.Contains(err.Error(), "secret_shares") {
-		t.Errorf("expected error about %s or secret_shares type mismatch, got: %v",
-			defaults.CtxCryptoContract, err)
+	if !strings.Contains(err.Error(), "secret_shares") {
+		t.Errorf("expected error about secret_shares type mismatch, got: %v", err)
 	}
 }
 
-// TestPlaintextKeygen_ComposesIntoAuctionRunner verifies the
-// auction pipeline (which doesn't do FHE scoring in this test)
-// composes with plaintext keygen.
-func TestPlaintextKeygen_ComposesIntoAuctionRunner(t *testing.T) {
-	// Provide a participants source so the plaintext keygen's
-	// requires are satisfied in the single-phase runner.
+// TestPlaintextKeygen_ComposesIntoMinimalRunner verifies the
+// shortest valid plaintext pipeline (invitation + keygen) composes
+// without errors.
+func TestPlaintextKeygen_ComposesIntoMinimalRunner(t *testing.T) {
 	r, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewPlaintextKeygen(),
@@ -82,51 +72,38 @@ func TestPlaintextKeygen_ComposesIntoAuctionRunner(t *testing.T) {
 	}
 }
 
-// TestPreSharedKeygen_ComposesIntoDefaultRunner verifies
-// PreSharedKeygenPhase slots into the default pipeline. Its
-// Requires include ctxCollectivePublicKey and ctxSecretShares,
-// which must already be in the context at Enter time —
-// construction validates nothing about runtime context values,
-// only that SOME preceding phase declares those Provides.
-// PreSharedKeygen itself does NOT provide them, so downstream
-// phases that need them will fail unless a preceding phase (not
-// present in the default pipeline) has already populated them.
-// That's correct: PreSharedKeygen expects keys seeded before
-// runner.BeginSession.
-func TestPreSharedKeygen_ComposesIntoDefaultRunner(t *testing.T) {
+// TestPreSharedKeygen_RequiresPriorContext verifies PreSharedKeygen
+// fails composition when no preceding phase has provided the key
+// bundle into context.
+func TestPreSharedKeygen_RequiresPriorContext(t *testing.T) {
 	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewPreSharedKeygen(),
-		defaults.NewPhaseGOnionShuffle(),
-		defaults.NewPhaseG2Verification(),
-		defaults.NewPhase1bEncryptedSubmit(),
-		defaults.NewPhase2FHEScoring(),
+		stubArcPhase("score", defaults.StateGossip, defaults.StateDecrypting,
+			phase.ContextSchema{
+				defaults.CtxCollectivePublicKey: {TypeName: "[]byte", Required: true},
+				defaults.CtxCryptoContract:      {TypeName: "OpenFHEContract", Required: true},
+			},
+			phase.ContextSchema{defaults.CtxResultCiphertext: {TypeName: "[]byte"}},
+		),
 		defaults.NewPhase3ThresholdDecrypt(),
-		defaults.NewPhaseDAnonymousBroadcast(),
 	)
-	// PreSharedKeygen Provides nothing, so Phase1b's
-	// ctxCollectivePublicKey and ctxCryptoContract
-	// requirements will be unsatisfied. The runner
-	// should catch that.
 	if err == nil {
 		t.Fatalf("expected constructor to reject PreSharedKeygen without a preceding context-providing phase")
 	}
-	// Any of the three required-absent keys is correct — Go map
-	// iteration order is non-deterministic.
 	ok := strings.Contains(err.Error(), defaults.CtxCollectivePublicKey) ||
 		strings.Contains(err.Error(), defaults.CtxSecretShares) ||
-		strings.Contains(err.Error(), defaults.CtxEvalKeys)
+		strings.Contains(err.Error(), defaults.CtxEvalKeys) ||
+		strings.Contains(err.Error(), defaults.CtxCryptoContract)
 	if !ok {
-		t.Errorf("expected error about one of [collective_pk, secret_shares, eval_keys], got: %v", err)
+		t.Errorf("expected error about one of [collective_pk, secret_shares, eval_keys, crypto_ctx], got: %v", err)
 	}
 }
 
-// TestPreSharedKeygen_WithCohortContextSeed verifies that a
-// pipeline where another (non-inline) phase provides the
-// collective key context composes successfully.
+// TestPreSharedKeygen_WithCohortContextSeed verifies that a pipeline
+// where a non-inline registration-time phase provides the key bundle
+// composes successfully.
 func TestPreSharedKeygen_WithCohortContextSeed(t *testing.T) {
-	// Simulate a cohort formation phase that runs out of band
-	// and provides the key bundle into context.
 	cohortPhase := &staticProviderPhase{
 		name:   "cohort-keygen",
 		runsAt: phase.RunsAtRegistration,
@@ -141,21 +118,24 @@ func TestPreSharedKeygen_WithCohortContextSeed(t *testing.T) {
 		cohortPhase,
 		defaults.NewPhase1aSessionInitiation(),
 		NewPreSharedKeygen(),
-		defaults.NewPhaseGOnionShuffle(),
-		defaults.NewPhaseG2Verification(),
-		defaults.NewPhase1bEncryptedSubmit(),
-		defaults.NewPhase2FHEScoring(),
+		stubArcPhase("score", defaults.StateGossip, defaults.StateDecrypting,
+			phase.ContextSchema{
+				defaults.CtxCollectivePublicKey: {TypeName: "[]byte", Required: true},
+				defaults.CtxEvalKeys:            {TypeName: "OpenFHEEvalKeys", Required: true},
+				defaults.CtxCryptoContract:      {TypeName: "OpenFHEContract", Required: true},
+			},
+			phase.ContextSchema{defaults.CtxResultCiphertext: {TypeName: "[]byte"}},
+		),
 		defaults.NewPhase3ThresholdDecrypt(),
-		defaults.NewPhaseDAnonymousBroadcast(),
 	)
 	if err != nil {
 		t.Fatalf("expected cohort-keygen + PreSharedKeygen pipeline to validate, got: %v", err)
 	}
 }
 
-// TestPreSharedKeygen_EnterFailsOnMissingKeys verifies the
-// runtime guard: Enter returns MissingContextError when the
-// required keys are not in the context.
+// TestPreSharedKeygen_EnterFailsOnMissingKeys verifies the runtime
+// guard: Enter returns an error when the required keys are not in
+// the context.
 func TestPreSharedKeygen_EnterFailsOnMissingKeys(t *testing.T) {
 	p := NewPreSharedKeygen()
 	ctx := phase.NewSessionContext("test-session")
@@ -163,16 +143,11 @@ func TestPreSharedKeygen_EnterFailsOnMissingKeys(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected Enter to fail on empty context")
 	}
-	var mce *phase.MissingContextError
 	if !strings.Contains(err.Error(), "keygen-preshared") &&
-		!strings.Contains(err.Error(), ctxCollectivePublicKey) {
-		// If it's not a MissingContextError it must still be
-		// the right kind of message.
-		if !strings.Contains(err.Error(), "not set") {
-			t.Errorf("unexpected error: %v", err)
-		}
+		!strings.Contains(err.Error(), ctxCollectivePublicKey) &&
+		!strings.Contains(err.Error(), "not set") {
+		t.Errorf("unexpected error: %v", err)
 	}
-	_ = mce // may or may not be used; typed check above is best-effort
 }
 
 // staticProviderPhase is a non-inline phase that provides a fixed
@@ -183,18 +158,47 @@ type staticProviderPhase struct {
 	provides phase.ContextSchema
 }
 
-func (s *staticProviderPhase) Name() string                       { return s.name }
-func (s *staticProviderPhase) Lifetime() phase.Lifetime           { return phase.LifetimePerCohort }
-func (s *staticProviderPhase) RunsAt() phase.RunsAt               { return s.runsAt }
-func (s *staticProviderPhase) EntryState() phase.SessionState     { return phase.StateNone }
-func (s *staticProviderPhase) ExitState() phase.SessionState      { return phase.StateNone }
+func (s *staticProviderPhase) Name() string                         { return s.name }
+func (s *staticProviderPhase) Lifetime() phase.Lifetime             { return phase.LifetimePerCohort }
+func (s *staticProviderPhase) RunsAt() phase.RunsAt                 { return s.runsAt }
+func (s *staticProviderPhase) EntryState() phase.SessionState       { return phase.StateNone }
+func (s *staticProviderPhase) ExitState() phase.SessionState        { return phase.StateNone }
 func (s *staticProviderPhase) InternalStates() []phase.SessionState { return nil }
-func (s *staticProviderPhase) ConsumedMessageTypes() []string     { return nil }
-func (s *staticProviderPhase) Requires() phase.ContextSchema      { return nil }
-func (s *staticProviderPhase) Provides() phase.ContextSchema      { return s.provides }
-func (s *staticProviderPhase) Enter(*phase.SessionContext) error  { return nil }
+func (s *staticProviderPhase) ConsumedMessageTypes() []string       { return nil }
+func (s *staticProviderPhase) Requires() phase.ContextSchema        { return nil }
+func (s *staticProviderPhase) Provides() phase.ContextSchema        { return s.provides }
+func (s *staticProviderPhase) Enter(*phase.SessionContext) error    { return nil }
 func (s *staticProviderPhase) OnMessage(*phase.SessionContext, string, string, []byte) error {
 	return nil
 }
 func (s *staticProviderPhase) CheckComplete(*phase.SessionContext) bool { return true }
 func (s *staticProviderPhase) Exit(*phase.SessionContext) error         { return nil }
+
+// stubArcPhase returns a no-op inline phase owning entry → exit with
+// the given requires/provides. Used to fill state arcs in test
+// pipelines without pulling in app-specific phase implementations.
+func stubArcPhase(name string, entry, exit phase.SessionState, req, prov phase.ContextSchema) phase.Phase {
+	return &arcStub{name: name, entry: entry, exit: exit, requires: req, provides: prov}
+}
+
+type arcStub struct {
+	name             string
+	entry, exit      phase.SessionState
+	requires, provides phase.ContextSchema
+}
+
+func (a *arcStub) Name() string                         { return a.name }
+func (a *arcStub) Lifetime() phase.Lifetime             { return phase.LifetimePerSession }
+func (a *arcStub) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
+func (a *arcStub) EntryState() phase.SessionState       { return a.entry }
+func (a *arcStub) ExitState() phase.SessionState        { return a.exit }
+func (a *arcStub) InternalStates() []phase.SessionState { return nil }
+func (a *arcStub) ConsumedMessageTypes() []string       { return nil }
+func (a *arcStub) Requires() phase.ContextSchema        { return a.requires }
+func (a *arcStub) Provides() phase.ContextSchema        { return a.provides }
+func (a *arcStub) Enter(*phase.SessionContext) error    { return nil }
+func (a *arcStub) OnMessage(*phase.SessionContext, string, string, []byte) error {
+	return nil
+}
+func (a *arcStub) CheckComplete(*phase.SessionContext) bool { return true }
+func (a *arcStub) Exit(*phase.SessionContext) error         { return nil }
