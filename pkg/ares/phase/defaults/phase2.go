@@ -10,8 +10,8 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // `ct_winner_pkg` — the encrypted, masked winner package that
 // threshold decryption will recover in Phase 3.
 //
-// This is THE app-specific phase. The Fheya scoring circuit is
-// cosine similarity plus location penalty plus brownie reputation
+// This is the app-specific phase. A matchmaking scoring circuit might be
+// cosine similarity plus a location penalty plus a reputation term
 // plus the selector-chain product tree producing a one-hot mask
 // across N candidates (depth=30, validated by the crypto harness).
 // Alternative apps replace Phase2 entirely:

@@ -4,7 +4,7 @@ package helperclient
 
 import "fmt"
 
-// Protocol ops: the helper RPCs the existing Fheya smoke uses for
+// Protocol ops: the helper RPCs the framework smokes use for
 // threshold keygen, encryption, and partial-decryption.
 
 // KeyShare is the result of one participant's contribution to the

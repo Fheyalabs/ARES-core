@@ -8,7 +8,7 @@
 //
 // Two kinds of ops are exposed:
 //
-//   - Protocol ops — the existing helper RPCs that the Fheya smoke
+//   - Protocol ops — the helper RPCs the framework smokes
 //     uses today: KeygenFirst, KeygenNext, EncryptProfile,
 //     EvalKeyRound1Lead, EvalKeyRound1Participant,
 //     EvalKeyRound2Participant, PartialDecrypt, FusePartials.

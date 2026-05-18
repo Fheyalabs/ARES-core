@@ -48,7 +48,7 @@ func (Phase1aSessionInitiation) Provides() phase.ContextSchema {
 			TypeName: "OpenFHEContract",
 			Required: false,
 			// Default contract emitted by Phase 1a is depth=30,
-			// ring_dim=4096 for the Fheya v2.4 profile. Apps with
+			// ring_dim=4096 is a reasonable starting point for a unit-norm profile vector. Apps with
 			// different scoring circuits override this phase to
 			// emit different contract parameters.
 			Constraints: map[string]any{

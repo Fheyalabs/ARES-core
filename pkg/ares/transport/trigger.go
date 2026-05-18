@@ -13,7 +13,7 @@ import (
 // for a given set of participants.
 //
 // Different applications need different triggers:
-//   - Fheya's matchmaker watches cohort fill across a city and triggers
+//   - a matchmaking trigger watches cohort fill across a city and triggers
 //     when N compatible participants are queued.
 //   - The sealed-bid auction triggers when the auctioneer pushes a
 //     "start auction" button (admin POST).

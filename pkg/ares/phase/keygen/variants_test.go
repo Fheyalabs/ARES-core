@@ -11,7 +11,7 @@ import (
 )
 
 // TestSinglePartyKeygen_ComposesIntoDefaultRunner verifies
-// SinglePartyKeygenPhase slots into the Fheya pipeline as a
+// SinglePartyKeygenPhase slots into the default pipeline as a
 // drop-in replacement for Phase0aThresholdKeygen at the same
 // LOCKED → GOSSIP arc with identical Provides.
 func TestSinglePartyKeygen_ComposesIntoDefaultRunner(t *testing.T) {
@@ -31,7 +31,7 @@ func TestSinglePartyKeygen_ComposesIntoDefaultRunner(t *testing.T) {
 }
 
 // TestPlaintextKeygen_ComposesIntoDefaultRunner verifies
-// PlaintextKeygenPhase slots into the Fheya pipeline. It produces
+// PlaintextKeygenPhase slots into the default pipeline. It produces
 // no crypto contract, so downstream phases that require a crypto
 // contract (Phase2FHEScoring requires ctxCryptoContract with
 // depth_min) should fail construction. That is correct — a
