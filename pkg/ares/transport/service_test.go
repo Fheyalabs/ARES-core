@@ -68,7 +68,7 @@ func newDispatchRunner(t *testing.T, gotMsg func()) *phase.SessionRunner {
 		exit:     phase.StateNone,
 		consumes: []string{"finalize"},
 	}
-	r, err := phase.NewSessionRunner(first, second)
+	r, err := phase.Compose(first, second)
 	if err != nil {
 		t.Fatalf("NewSessionRunner: %v", err)
 	}

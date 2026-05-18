@@ -15,7 +15,7 @@ import (
 // pure-compute phases (Invite, Score, Settle) auto-advance through
 // the runner's cascade.
 func TestEndToEnd_HandleMessageWalksThePipeline(t *testing.T) {
-	runner, err := NewRideShareRunner()
+	runner, err := Pipeline()
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}

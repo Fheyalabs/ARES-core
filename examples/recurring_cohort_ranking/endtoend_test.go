@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package recurringcohortranking
+package cohort
 
 import (
 	"testing"
@@ -12,7 +12,7 @@ import (
 // formation runner through cohort-form → keygen → sealed via the
 // accumulator path.
 func TestCohortFormation_HandleMessageWalksThePipeline(t *testing.T) {
-	runner, err := NewCohortFormationRunner()
+	runner, err := FormationPipeline()
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestCohortFormation_HandleMessageWalksThePipeline(t *testing.T) {
 // RANKING_INVITING; participants then submit ratings and decrypt
 // partials.
 func TestBridgedWeekly_HandleMessageWalksThePipeline(t *testing.T) {
-	r, err := phase.NewSessionRunner(
+	r, err := phase.Compose(
 		NewPhaseCohortForm(),
 		NewPhaseCohortKeygen(),
 		&cohortToRankingBridge{},

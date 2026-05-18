@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package recurringcohortranking
+package cohort
 
 import (
 	"testing"
@@ -11,9 +11,9 @@ import (
 // TestCohortFormationRunner_Composes verifies the three-phase
 // formation pipeline validates.
 func TestCohortFormationRunner_Composes(t *testing.T) {
-	r, err := NewCohortFormationRunner()
+	r, err := FormationPipeline()
 	if err != nil {
-		t.Fatalf("NewCohortFormationRunner: %v", err)
+		t.Fatalf("FormationPipeline: %v", err)
 	}
 	if r.InitialState() != StateCohortForming {
 		t.Errorf("InitialState = %q, want %q", r.InitialState(), StateCohortForming)
@@ -32,7 +32,7 @@ func TestCohortFormationRunner_Composes(t *testing.T) {
 // cannot verify runtime context values — only the PreSharedKeyLookup
 // Enter hook catches missing keys at runtime.
 func TestWeeklyRankingSession_Composes(t *testing.T) {
-	_, err := NewWeeklyRankingSession()
+	_, err := WeeklyPipeline()
 	// Invitation provides CtxParticipants, nothing else. PreSharedKeyLookup
 	// requires collective_pk, secret_shares, eval_keys — all unsatisfied
 	// by any preceding phase. The runner should reject.
@@ -50,7 +50,7 @@ func TestWeeklyRankingSession_WithCallerSeededContext(t *testing.T) {
 	// by placing a "cohort-seed" phase that provides the keys
 	// and exits to RANKING_INVITING, bridging the two-runners
 	// model into a single pipeline for construction validation.
-	r, err := phase.NewSessionRunner(
+	r, err := phase.Compose(
 		NewPhaseCohortForm(),
 		NewPhaseCohortKeygen(),
 		&cohortToRankingBridge{},

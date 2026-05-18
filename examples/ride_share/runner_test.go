@@ -9,9 +9,9 @@ import (
 )
 
 func TestRideShareRunner_Composes(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if r.InitialState() != StateInvite {
 		t.Errorf("InitialState = %q, want %q", r.InitialState(), StateInvite)
@@ -22,9 +22,9 @@ func TestRideShareRunner_Composes(t *testing.T) {
 }
 
 func TestStateChainIsConnected(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	states := []phase.SessionState{
 		StateInvite, StateKeygen, StateSubmit, StateScore,

@@ -127,7 +127,7 @@ func buildAuctionRunner(
 	helperOut **helperclient.Client,
 ) (*phase.SessionRunner, error) {
 	if helperPath == "" {
-		return sealedbidauction.NewSealedBidAuctionRunner()
+		return auction.Pipeline()
 	}
 	client, err := helperclient.Start(ctx, helperPath)
 	if err != nil {
@@ -140,7 +140,7 @@ func buildAuctionRunner(
 		Coefficients: []float64{0.5, 0.75, 0, -0.25},
 		LowerBound:   -1, UpperBound: 1,
 	}
-	return sealedbidauction.NewSealedBidAuctionRunnerWithHelper(client, sharpening)
+	return auction.PipelineWithHelper(client, sharpening)
 }
 
 // auctionTrigger wraps ManualAdminTrigger to inject the canonical
@@ -152,8 +152,8 @@ type auctionTrigger struct {
 
 func (t *auctionTrigger) Start(sessionID string, participants []string, attrs map[string]any) error {
 	canonical := map[string]any{
-		sealedbidauction.CtxAuctionParticipants:   participants,
-		sealedbidauction.CtxAuctionCryptoContract: t.cryptoCtx,
+		auction.CtxAuctionParticipants:   participants,
+		auction.CtxAuctionCryptoContract: t.cryptoCtx,
 	}
 	for k, v := range attrs {
 		canonical[k] = v
@@ -164,8 +164,8 @@ func (t *auctionTrigger) Start(sessionID string, participants []string, attrs ma
 	// keygen call. The smoke encrypts under these keys client-side,
 	// so the server MUST use the same bundle (not generate its own).
 	for _, key := range []string{
-		sealedbidauction.CtxAuctionCollectivePublicKey,
-		sealedbidauction.CtxAuctionEvalKeys,
+		auction.CtxAuctionCollectivePublicKey,
+		auction.CtxAuctionEvalKeys,
 	} {
 		if v, ok := canonical[key]; ok {
 			if s, isString := v.(string); isString && s != "" {
@@ -183,7 +183,7 @@ func (t *auctionTrigger) Start(sessionID string, participants []string, attrs ma
 	// Walk past PhaseInvitation (pure-compute, CheckComplete=true) so
 	// the session is at AUCTION_LOCKED — the state where PhaseKeygen
 	// consumes auction.keygen.share messages.
-	return t.inner.Runner.AdvanceToState(sessionID, sealedbidauction.StateAuctionLocked)
+	return t.inner.Runner.AdvanceToState(sessionID, auction.StateAuctionLocked)
 }
 
 func getEnv(key, def string) string {

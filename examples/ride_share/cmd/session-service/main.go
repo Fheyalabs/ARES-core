@@ -108,7 +108,7 @@ func main() {
 
 func buildRideShareRunner(ctx context.Context, helperPath string, helperOut **helperclient.Client) (*phase.SessionRunner, error) {
 	if helperPath == "" {
-		return rideshare.NewRideShareRunner()
+		return rideshare.Pipeline()
 	}
 	client, err := helperclient.Start(ctx, helperPath)
 	if err != nil {
@@ -119,7 +119,7 @@ func buildRideShareRunner(ctx context.Context, helperPath string, helperOut **he
 		Coefficients: []float64{0.5, 0.75, 0, -0.25},
 		LowerBound:   -1, UpperBound: 1,
 	}
-	return rideshare.NewRideShareRunnerWithHelper(client, sharpening)
+	return rideshare.PipelineWithHelper(client, sharpening)
 }
 
 // rideShareTrigger turns the friendly admin POST into the canonical

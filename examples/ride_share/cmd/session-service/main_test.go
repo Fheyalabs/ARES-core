@@ -28,7 +28,7 @@ func freePort(t *testing.T) string {
 
 func startTestRideShareService(t *testing.T) (string, *phase.SessionRunner, func()) {
 	t.Helper()
-	r, err := rideshare.NewRideShareRunner()
+	r, err := rideshare.Pipeline()
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}

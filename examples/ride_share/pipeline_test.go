@@ -13,9 +13,9 @@ import (
 // the new session in the runner's declared initial state and
 // returns a SessionContext keyed by the session ID.
 func TestBeginSession_InitialState(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	ctx, err := r.BeginSession("ride-1", "cohort-A")
 	if err != nil {
@@ -39,9 +39,9 @@ func TestBeginSession_InitialState(t *testing.T) {
 // TestBeginSession_DuplicateRejected verifies that BeginSession with
 // the same sessionID twice is rejected (sessions are tracked by ID).
 func TestBeginSession_DuplicateRejected(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("dup", ""); err != nil {
 		t.Fatalf("first BeginSession: %v", err)
@@ -55,9 +55,9 @@ func TestBeginSession_DuplicateRejected(t *testing.T) {
 // rejected at BeginSession time (the runner needs a non-empty key
 // to track per-session state).
 func TestBeginSession_EmptyIDRejected(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("", ""); err == nil {
 		t.Fatalf("expected empty sessionID to be rejected")
@@ -69,9 +69,9 @@ func TestBeginSession_EmptyIDRejected(t *testing.T) {
 // hooks, AdvanceToState should reach each target state without
 // error and stop cleanly at Settle.
 func TestAdvanceToState_WalksFullPipeline(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("walk", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -93,9 +93,9 @@ func TestAdvanceToState_WalksFullPipeline(t *testing.T) {
 // TestAdvanceToState_NoOpAtTarget confirms AdvanceToState returns
 // nil immediately when the session is already in the target state.
 func TestAdvanceToState_NoOpAtTarget(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("noop", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -109,9 +109,9 @@ func TestAdvanceToState_NoOpAtTarget(t *testing.T) {
 // for an untracked sessionID returns an error rather than silently
 // creating tracking state.
 func TestAdvanceToState_UnknownSession(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	err = r.AdvanceToState("ghost", StateSubmit)
 	if err == nil {
@@ -123,9 +123,9 @@ func TestAdvanceToState_UnknownSession(t *testing.T) {
 // the current phase does not consume returns an error and does not
 // advance state.
 func TestHandleMessage_RejectsUnknownType(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("msg-1", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -144,9 +144,9 @@ func TestHandleMessage_RejectsUnknownType(t *testing.T) {
 // pipeline accepts ride.keygen.share but not ride.bid (which
 // belongs to PhaseSubmit's next state).
 func TestHandleMessage_WrongPhaseForMessageType(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("wrong", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -162,9 +162,9 @@ func TestHandleMessage_WrongPhaseForMessageType(t *testing.T) {
 // TestHandleMessage_UntrackedSession verifies HandleMessage on an
 // unknown session returns an error.
 func TestHandleMessage_UntrackedSession(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	_, err = r.HandleMessage("nobody", "ride.bid", "x", nil)
 	if err == nil {
@@ -176,9 +176,9 @@ func TestHandleMessage_UntrackedSession(t *testing.T) {
 // the runner's tracker so future HandleMessage / CurrentState
 // calls treat the session as unknown.
 func TestEndSession_RemovesTracking(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("end", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -195,9 +195,9 @@ func TestEndSession_RemovesTracking(t *testing.T) {
 // TestPhaseForState_TerminalNotClaimed: StateNone (terminal) is
 // not claimed by any phase.
 func TestPhaseForState_TerminalNotClaimed(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, ok := r.PhaseForState(phase.StateNone); ok {
 		t.Errorf("PhaseForState(StateNone) should be false")
@@ -211,9 +211,9 @@ func TestPhaseForState_TerminalNotClaimed(t *testing.T) {
 // routing surface: each consumer phase owns its own types and they
 // do not overlap with another phase's claim.
 func TestConsumedMessageTypes_AreDistinctPerPhase(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	seen := map[string]string{}
 	for _, p := range r.Phases() {
@@ -241,9 +241,9 @@ func reportCollision(a, b, msg string) {
 // TestPhaseLifetimes verifies all ride-share phases are
 // per-session — ride share has no cohort or persistent state.
 func TestPhaseLifetimes(t *testing.T) {
-	r, err := NewRideShareRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewRideShareRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	for _, p := range r.Phases() {
 		if p.Lifetime() != phase.LifetimePerSession {
@@ -261,7 +261,7 @@ func TestPhaseLifetimes(t *testing.T) {
 // requires depth_min=20. Invite emits depth=12; the runner must
 // reject the composition.
 func TestCryptoContract_DepthMinTooHigh(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		NewPhaseInvite(),
 		NewPhaseKeygen(),
 		NewPhaseSubmit(),
@@ -309,7 +309,7 @@ func (deepScorePhase) Exit(*phase.SessionContext) error         { return nil }
 // needs CollectivePK / SecretShares / EvalKeys should fail to
 // validate.
 func TestMissingProducerRejected(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		NewPhaseInvite(),
 		// Keygen removed.
 		NewPhaseSubmit(),
@@ -325,7 +325,7 @@ func TestMissingProducerRejected(t *testing.T) {
 // TestDuplicatePhaseNameRejected: two phases with the same Name
 // should be refused.
 func TestDuplicatePhaseNameRejected(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		NewPhaseInvite(),
 		NewPhaseInvite(), // duplicate name "ride-invite"
 		NewPhaseKeygen(),

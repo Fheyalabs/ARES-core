@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package recurringcohortranking demonstrates the amortized-keygen
+// Package cohort demonstrates the amortized-keygen
 // fast path: the same N participants form a long-lived cohort and
 // run MANY sessions against one collective key bundle. Keygen is
 // done once at cohort formation; every subsequent session skips
@@ -24,7 +24,7 @@
 // pkg/ares/phase and pkg/ares/phase/keygen — not
 // pkg/ares/phase/defaults. Distinct states, distinct context
 // keys, distinct pipeline.
-package recurringcohortranking
+package cohort
 
 import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 

@@ -135,9 +135,9 @@ func buildRunner(mode string, depth, ringDim int, helper *helperclient.Client) (
 		var runner *phase.SessionRunner
 		var err error
 		if helper != nil {
-			runner, err = recurringcohortranking.NewCohortFormationRunnerWithHelper(helper)
+			runner, err = cohort.FormationPipelineWithHelper(helper)
 		} else {
-			runner, err = recurringcohortranking.NewCohortFormationRunner()
+			runner, err = cohort.FormationPipeline()
 		}
 		if err != nil {
 			return nil, nil, "", err
@@ -146,21 +146,21 @@ func buildRunner(mode string, depth, ringDim int, helper *helperclient.Client) (
 		return runner, &formationTrigger{inner: inner, cryptoCtx: cryptoCtx}, "cohort.formation.invitation", nil
 
 	case "weekly":
-		argmax := recurringcohortranking.NewPhaseArgmaxScoring()
+		argmax := cohort.NewPhaseArgmaxScoring()
 		if helper != nil {
-			argmax = recurringcohortranking.NewPhaseArgmaxScoringWithHelper(helper, helperclient.EvalPolyParams{
+			argmax = cohort.NewPhaseArgmaxScoringWithHelper(helper, helperclient.EvalPolyParams{
 				Coefficients: []float64{0.5, 0.75, 0, -0.25},
 				LowerBound:   -1, UpperBound: 1,
 			})
 		}
-		runner, err := phase.NewSessionRunner(
+		runner, err := phase.Compose(
 			&weeklyKeySeeder{},
-			recurringcohortranking.NewPhaseRankingInvitation(),
-			recurringcohortranking.NewPhasePreSharedKeyLookup(),
-			recurringcohortranking.NewPhaseSubmitRating(),
+			cohort.NewPhaseRankingInvitation(),
+			cohort.NewPhasePreSharedKeyLookup(),
+			cohort.NewPhaseSubmitRating(),
 			argmax,
-			recurringcohortranking.NewPhaseThresholdDecrypt(),
-			recurringcohortranking.NewPhaseSettleRanking(),
+			cohort.NewPhaseThresholdDecrypt(),
+			cohort.NewPhaseSettleRanking(),
 		)
 		if err != nil {
 			return nil, nil, "", fmt.Errorf("build weekly pipeline: %w", err)
@@ -192,23 +192,23 @@ func (weeklyKeySeeder) Name() string                         { return "weekly-ke
 func (weeklyKeySeeder) Lifetime() phase.Lifetime             { return phase.LifetimePerCohort }
 func (weeklyKeySeeder) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
 func (weeklyKeySeeder) EntryState() phase.SessionState       { return stateWeeklySeeded }
-func (weeklyKeySeeder) ExitState() phase.SessionState        { return recurringcohortranking.StateRankingInviting }
+func (weeklyKeySeeder) ExitState() phase.SessionState        { return cohort.StateRankingInviting }
 func (weeklyKeySeeder) InternalStates() []phase.SessionState { return nil }
 func (weeklyKeySeeder) ConsumedMessageTypes() []string       { return nil }
 func (weeklyKeySeeder) Requires() phase.ContextSchema        { return nil }
 func (weeklyKeySeeder) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
-		recurringcohortranking.CtxParticipants: {TypeName: "[]string"},
-		recurringcohortranking.CtxCollectivePK: {
+		cohort.CtxParticipants: {TypeName: "[]string"},
+		cohort.CtxCollectivePK: {
 			TypeName:    "[]byte",
 			Constraints: map[string]any{"topology": "preshared"},
 		},
-		recurringcohortranking.CtxSecretShares: {
+		cohort.CtxSecretShares: {
 			TypeName:    "map[string][]byte",
 			Constraints: map[string]any{"topology": "preshared"},
 		},
-		recurringcohortranking.CtxEvalKeys:       {TypeName: "OpenFHEEvalKeys"},
-		recurringcohortranking.CtxCryptoContract: {TypeName: "OpenFHEContract", Constraints: map[string]any{"depth": 30, "ring_dim": 16384}},
+		cohort.CtxEvalKeys:       {TypeName: "OpenFHEEvalKeys"},
+		cohort.CtxCryptoContract: {TypeName: "OpenFHEContract", Constraints: map[string]any{"depth": 30, "ring_dim": 16384}},
 	}
 }
 func (weeklyKeySeeder) Enter(*phase.SessionContext) error { return nil }
@@ -229,8 +229,8 @@ func (t *formationTrigger) setHub(h *transport.Hub) { t.inner.Hub = h }
 
 func (t *formationTrigger) Start(sessionID string, participants []string, attrs map[string]any) error {
 	canonical := map[string]any{
-		recurringcohortranking.CtxParticipants:   participants,
-		recurringcohortranking.CtxCryptoContract: t.cryptoCtx,
+		cohort.CtxParticipants:   participants,
+		cohort.CtxCryptoContract: t.cryptoCtx,
 	}
 	for k, v := range attrs {
 		canonical[k] = v
@@ -239,15 +239,15 @@ func (t *formationTrigger) Start(sessionID string, participants []string, attrs 
 	// cohort by passing the previous bundle. PhaseCohortKeygen.Exit
 	// detects it and skips generating a new one.
 	if err := decodeHexAttrs(canonical, []string{
-		recurringcohortranking.CtxCollectivePK,
-		recurringcohortranking.CtxEvalKeys,
+		cohort.CtxCollectivePK,
+		cohort.CtxEvalKeys,
 	}); err != nil {
 		return err
 	}
 	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
 		return err
 	}
-	return t.inner.Runner.AdvanceToState(sessionID, recurringcohortranking.StateCohortKeygen)
+	return t.inner.Runner.AdvanceToState(sessionID, cohort.StateCohortKeygen)
 }
 
 // weeklyTrigger seeds the cohort's pre-shared key bundle (supplied via
@@ -264,9 +264,9 @@ func (t *weeklyTrigger) setHub(h *transport.Hub) { t.inner.Hub = h }
 
 func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map[string]any) error {
 	required := []string{
-		recurringcohortranking.CtxCollectivePK,
-		recurringcohortranking.CtxSecretShares,
-		recurringcohortranking.CtxEvalKeys,
+		cohort.CtxCollectivePK,
+		cohort.CtxSecretShares,
+		cohort.CtxEvalKeys,
 	}
 	for _, key := range required {
 		if _, ok := attrs[key]; !ok {
@@ -275,8 +275,8 @@ func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map
 	}
 
 	canonical := map[string]any{
-		recurringcohortranking.CtxParticipants:   participants,
-		recurringcohortranking.CtxCryptoContract: t.cryptoCtx,
+		cohort.CtxParticipants:   participants,
+		cohort.CtxCryptoContract: t.cryptoCtx,
 	}
 	for k, v := range attrs {
 		canonical[k] = v
@@ -285,8 +285,8 @@ func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map
 	// public key + eval keys so PhasePreSharedKeyLookup finds typed
 	// []byte values, not strings.
 	if err := decodeHexAttrs(canonical, []string{
-		recurringcohortranking.CtxCollectivePK,
-		recurringcohortranking.CtxEvalKeys,
+		cohort.CtxCollectivePK,
+		cohort.CtxEvalKeys,
 	}); err != nil {
 		return err
 	}
@@ -297,7 +297,7 @@ func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map
 	// session lands at RANKING_BIDDING, ready for participants to
 	// submit ranking.rating messages. PhasePreSharedKeyLookup's Enter
 	// runs against the freshly-seeded context here.
-	if err := t.runner.AdvanceToState(sessionID, recurringcohortranking.StateRankingBidding); err != nil {
+	if err := t.runner.AdvanceToState(sessionID, cohort.StateRankingBidding); err != nil {
 		return fmt.Errorf("weekly trigger: advance to bidding: %w", err)
 	}
 	return nil

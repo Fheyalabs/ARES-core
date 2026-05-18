@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package sealedbidauction
+package auction
 
 import (
 	"testing"
@@ -8,15 +8,15 @@ import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
-// TestNewSealedBidAuctionRunner_Composes is the framework-validity
+// TestPipeline_Composes is the framework-validity
 // test: a fresh application composes its own phase pipeline from
 // scratch using only pkg/ares/phase. If the runner constructor
 // returns no error, the abstraction proved it can host more than
 // one application.
-func TestNewSealedBidAuctionRunner_Composes(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+func TestPipeline_Composes(t *testing.T) {
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if r.InitialState() != StateAuctionInviting {
 		t.Errorf("InitialState = %q, want %q", r.InitialState(), StateAuctionInviting)
@@ -31,7 +31,7 @@ func TestNewSealedBidAuctionRunner_Composes(t *testing.T) {
 // k+1. The runner constructor already enforces this, but pinning it
 // here makes phase-shape edits noisy.
 func TestStateChainIsConnected(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
@@ -61,14 +61,14 @@ func TestStateChainIsConnected(t *testing.T) {
 // must fail.
 func TestCryptoContractDepthChainSatisfied(t *testing.T) {
 	// Sanity: the real composition validates.
-	if _, err := NewSealedBidAuctionRunner(); err != nil {
+	if _, err := Pipeline(); err != nil {
 		t.Fatalf("real composition unexpectedly failed: %v", err)
 	}
 
 	// Substitute a degenerate Argmax that requires depth_min=20.
 	// The runner should reject the composition.
 	tooDeep := &fakeArgmaxRequiringDeepCircuit{}
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		NewPhaseInvitation(),
 		NewPhaseKeygen(),
 		NewPhaseScalarBid(),

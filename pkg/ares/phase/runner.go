@@ -22,7 +22,7 @@ import (
 // SessionContext, not on the runner. The runner is safe for
 // concurrent use by many goroutines, one per active session.
 //
-// Construction is via NewSessionRunner, which validates the phase
+// Construction is via Compose, which validates the phase
 // list before returning. A misconfigured pipeline (missing required
 // context, duplicate names, ambiguous entry states, unsatisfiable
 // constraint chain) returns an error immediately so misconfigurations
@@ -50,7 +50,7 @@ type sessionTracker struct {
 	entered bool // whether Enter has been called for current
 }
 
-// NewSessionRunner constructs a runner over the given ordered phase
+// Compose constructs a runner over the given ordered phase
 // list. The order matters: it defines the canonical pipeline
 // execution sequence used to derive the state machine and to validate
 // that each phase's Requires are satisfied by some preceding phase's
@@ -68,7 +68,7 @@ type sessionTracker struct {
 //   - Inline phases form a chain: ExitState of phase k equals
 //     EntryState of phase k+1 (in inline order). The terminal inline
 //     phase may have ExitState = StateNone.
-func NewSessionRunner(phases ...Phase) (*SessionRunner, error) {
+func Compose(phases ...Phase) (*SessionRunner, error) {
 	if len(phases) == 0 {
 		return nil, errors.New("phase: SessionRunner needs at least one phase")
 	}

@@ -60,7 +60,7 @@ type PhaseKeygen struct {
 func NewPhaseKeygen() *PhaseKeygen { return &PhaseKeygen{} }
 
 // NewPhaseKeygenWithHelper produces real CKKS keys via the helper
-// subprocess. Used by NewRideShareRunnerWithHelper.
+// subprocess. Used by PipelineWithHelper.
 func NewPhaseKeygenWithHelper(helper *helperclient.Client) *PhaseKeygen {
 	return &PhaseKeygen{helper: helper}
 }

@@ -2,7 +2,7 @@
 
 //go:build openfhe
 
-package sealedbidauction
+package auction
 
 import (
 	"context"
@@ -86,7 +86,7 @@ func TestPhaseArgmax_HelperMode_PicksHighestBid(t *testing.T) {
 		LowerBound:   -1,
 		UpperBound:   1,
 	}
-	runner, err := NewSealedBidAuctionRunnerWithHelper(client, sharpening)
+	runner, err := PipelineWithHelper(client, sharpening)
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}

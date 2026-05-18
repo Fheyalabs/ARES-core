@@ -69,7 +69,7 @@ func TestCohortService_FormationStartsAtForming(t *testing.T) {
 	}
 	// Cascade past PhaseCohortForm lands at PhaseCohortKeygen's entry.
 	s, _ := runner.CurrentState("cohort-A-init")
-	if s != recurringcohortranking.StateCohortKeygen {
+	if s != cohort.StateCohortKeygen {
 		t.Errorf("state = %q, want COHORT_KEYGEN", s)
 	}
 }
@@ -100,11 +100,11 @@ func TestCohortService_WeeklyAcceptsSeededBundleAndAdvances(t *testing.T) {
 		"session_id":   "w-good",
 		"participants": []string{"m1", "m2"},
 		"attrs": map[string]any{
-			recurringcohortranking.CtxCollectivePK: "00112233",
-			recurringcohortranking.CtxSecretShares: map[string]any{
+			cohort.CtxCollectivePK: "00112233",
+			cohort.CtxSecretShares: map[string]any{
 				"m1": "share-1", "m2": "share-2",
 			},
-			recurringcohortranking.CtxEvalKeys: "44556677",
+			cohort.CtxEvalKeys: "44556677",
 		},
 	})
 	resp, err := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
@@ -121,7 +121,7 @@ func TestCohortService_WeeklyAcceptsSeededBundleAndAdvances(t *testing.T) {
 	// PhaseSubmitRating is current and ready to consume
 	// ranking.rating messages. PhasePreSharedKeyLookup's Enter
 	// validates the seeded keys along the way.
-	if s != recurringcohortranking.StateRankingBidding {
+	if s != cohort.StateRankingBidding {
 		t.Errorf("state = %q, want RANKING_BIDDING", s)
 	}
 }

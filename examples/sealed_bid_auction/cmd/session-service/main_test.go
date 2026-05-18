@@ -32,7 +32,7 @@ func freePort(t *testing.T) string {
 // tests can inspect state.
 func startTestAuctionService(t *testing.T) (baseURL string, runner *phase.SessionRunner, stop func()) {
 	t.Helper()
-	r, err := sealedbidauction.NewSealedBidAuctionRunner()
+	r, err := auction.Pipeline()
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
@@ -82,7 +82,7 @@ func TestAuctionService_StartSessionAdvancesPipeline(t *testing.T) {
 	// inner.Start, so the session sits at AUCTION_LOCKED (PhaseKeygen
 	// entry) ready to accept keygen.share messages.
 	s, ok := runner.CurrentState("a-1")
-	if !ok || s != sealedbidauction.StateAuctionLocked {
+	if !ok || s != auction.StateAuctionLocked {
 		t.Errorf("CurrentState = %q,%v want AUCTION_LOCKED,true", s, ok)
 	}
 }
