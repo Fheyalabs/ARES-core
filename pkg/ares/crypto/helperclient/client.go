@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 )
 
@@ -73,6 +74,20 @@ func Start(ctx context.Context, binaryPath string) (*Client, error) {
 		stdout: bufStdout,
 		enc:    json.NewEncoder(stdin),
 		dec:    json.NewDecoder(bufStdout),
+	}
+	// Probe the helper's linked OpenFHE version. A mismatch with the
+	// supported major.minor prefix means cross-process ciphertexts
+	// risk hitting a "Ciphertext was not created in this CryptoContext"
+	// error from OpenFHE (different versions can pick different
+	// cyclotomic primes for the same nominal CKKS parameters and so
+	// resolve to incompatible CryptoContext fingerprints).
+	if v, vErr := c.Version(); vErr == nil && v != "" {
+		if !strings.HasPrefix(v, SupportedOpenFHEVersionPrefix) {
+			fmt.Fprintf(os.Stderr,
+				"helperclient: warning: helper at %s is linked against OpenFHE %s, framework is tested against %sx; expect context fingerprint mismatches if peers run a different version\n",
+				binaryPath, v, SupportedOpenFHEVersionPrefix,
+			)
+		}
 	}
 	return c, nil
 }

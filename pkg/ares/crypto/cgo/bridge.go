@@ -1365,3 +1365,15 @@ func intsToC(values []int) []C.int {
 	}
 	return out
 }
+
+// OpenFHEVersion returns the OpenFHE library version string linked
+// into this binary (e.g. "v1.5.1"). Used by helper subprocesses to
+// surface version mismatches at startup.
+func OpenFHEVersion() string {
+	var buf [32]C.char
+	n := C.GetOpenFHEVersion(&buf[0], C.int(len(buf)))
+	if n <= 0 {
+		return "unknown"
+	}
+	return C.GoStringN(&buf[0], n)
+}

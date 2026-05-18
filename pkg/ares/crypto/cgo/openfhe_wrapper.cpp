@@ -7,6 +7,7 @@
 #include <cryptocontext-ser.h>
 #include <scheme/ckksrns/ckksrns-ser.h>
 #include <key/key-ser.h>
+#include <version.h>
 #include "openfhe_wrapper.h"
 #include <algorithm>
 #include <cctype>
@@ -951,9 +952,27 @@ int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len
         return 1;
     }
 }
+int GetOpenFHEVersion(char* out_buf, int out_cap) {
+    try {
+        if (out_buf == nullptr || out_cap <= 0) {
+            return 0;
+        }
+        std::string v = GetOPENFHEVersion();
+        int n = static_cast<int>(v.size());
+        if (n >= out_cap) {
+            n = out_cap - 1;
+        }
+        std::memcpy(out_buf, v.data(), n);
+        out_buf[n] = '\0';
+        return n;
+    } catch (...) {
+        return 0;
+    }
+}
+
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx, uint8_t* data, size_t len) {
     try {
-        (void)as_ctx(ctx);
+        auto* c = as_ctx(ctx);
         if (data == nullptr || len == 0) {
             return nullptr;
         }
@@ -961,6 +980,18 @@ CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx, uint8_t* data, s
         std::string raw(reinterpret_cast<const char*>(data), len);
         std::stringstream is(raw);
         Serial::Deserialize(ct, is, SerType::BINARY);
+        // Verify the deserialized ciphertext is bound to the same
+        // CryptoContext we're operating in. OpenFHE's global context
+        // registry deduplicates contexts by parameter fingerprint;
+        // a pointer mismatch here almost always means the serializer
+        // and deserializer were linked against different OpenFHE
+        // versions that resolve cyclotomic primes differently.
+        if (ct->GetCryptoContext() != c->cc) {
+            std::cerr << "[openfhe] DeserializeCiphertext: ciphertext's CryptoContext does not match local context "
+                      << "(likely OpenFHE version skew between serializer and deserializer; "
+                      << "linked OpenFHE version: " << GetOPENFHEVersion() << ")" << std::endl;
+            return nullptr;
+        }
         return reinterpret_cast<CiphertextHandle>(new ARESCiphertext{ct});
     } catch (...) {
         return nullptr;

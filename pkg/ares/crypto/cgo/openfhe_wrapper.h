@@ -119,6 +119,18 @@ int EvalArgmax(CryptoContextHandle ctx,
     const double* sharp_coeffs, int n_sharp_coeffs,
     CiphertextHandle* out_masks);
 
+// GetOpenFHEVersion writes the linked OpenFHE library version (e.g.
+// "v1.5.1") into out_buf. Returns the number of bytes written, or 0
+// on failure. out_buf must be at least 32 bytes.
+int GetOpenFHEVersion(char* out_buf, int out_cap);
+
+// DeserializeCiphertextErrCtxMismatch is returned via stderr log + a
+// nullptr return when the deserialized ciphertext's embedded
+// CryptoContext does not match the local ctx. Common cause: OpenFHE
+// version skew between the process that serialized and the one
+// deserializing.
+#define ARES_ERR_CTX_MISMATCH (-200)
+
 // Serialization
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx,

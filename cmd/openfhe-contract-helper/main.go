@@ -81,12 +81,20 @@ type response struct {
 
 	// combine_evalkey_round2 outputs the joint eval-mult key.
 	EvalMultFinal string `json:"eval_mult_final,omitempty"`
+
+	// version returns the linked OpenFHE library version (e.g. "v1.5.1").
+	Version string `json:"version,omitempty"`
 }
 
 func main() {
 	for _, arg := range os.Args[1:] {
-		if arg == "--daemon" {
+		switch arg {
+		case "--daemon":
+			fmt.Fprintf(os.Stderr, "openfhe-helper: linked OpenFHE version %s\n", openfhe.OpenFHEVersion())
 			runDaemon()
+			return
+		case "--version", "-v":
+			fmt.Println(openfhe.OpenFHEVersion())
 			return
 		}
 	}
@@ -140,6 +148,8 @@ func runDaemon() {
 func run(req request) (response, error) {
 	params := req.Params.toContractParams()
 	switch req.Op {
+	case "version":
+		return response{Version: openfhe.OpenFHEVersion()}, nil
 	case "keygen_first":
 		share, err := openfhe.DistributedKeyGenFirst(params)
 		if err != nil {
