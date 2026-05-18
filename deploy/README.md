@@ -87,7 +87,7 @@ pip install -e .
 export ARES_SERVER=https://api.fheya.de
 export ARES_WS_SECRET=<the same secret the systemd unit uses>
 python -m ares_client \
-    --config examples.auction_config \
+    --config examples.auction_stub_smoke \
     --participants 6 \
     --session-id auction-$(date +%s)
 ```

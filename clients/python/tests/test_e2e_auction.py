@@ -21,7 +21,7 @@ import time
 import pytest
 
 from ares_client import AppConfig, run_smoke
-from examples.auction_config import auction_flow
+from examples.auction_stub_smoke import auction_flow
 
 
 def _free_port() -> int:

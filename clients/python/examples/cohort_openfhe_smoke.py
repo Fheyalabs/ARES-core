@@ -32,7 +32,7 @@ Usage:
     export ARES_HELPER_BINARY=/path/to/openfhe-helper
     export COHORT_CRYPTO_DEPTH=10   # matches server default
     export COHORT_RING_DIM=2048
-    python -m examples.cohort_homelab_smoke --participants 3
+    python -m examples.cohort_openfhe_smoke --participants 3
 """
 
 from __future__ import annotations
@@ -72,6 +72,8 @@ async def run(
 
     helper: OpenFHEHelper | None = None
     rating_cts: dict[str, str] = {}
+    shares_by_member: dict[str, Any] = {}
+    decrypt_target: bytes | None = None
     joint = b""
     eval_keys_bytes = b""
 
@@ -83,10 +85,14 @@ async def run(
         log.info("cohort keygen complete in %.2fs", time.monotonic() - t0)
         joint = shares[-1].public_key
         eval_keys_bytes = eval_keys.eval_mult_final
-        for m, r in zip(members, ratings):
+        for m, r, share in zip(members, ratings, shares):
             ct = await helper.encrypt(params, joint, [r, 0.0, 0.0, 0.0])
             rating_cts[m] = ct.hex()
+            shares_by_member[m] = share
             log.info("encrypted %s rating=%.3f → %d bytes", m, r, len(ct))
+        # Shared partial-decrypt target so the server's PhaseDecrypt
+        # has N partials against one ciphertext to fuse.
+        decrypt_target = bytes.fromhex(rating_cts[members[0]])
     else:
         log.info("stub mode — no helper, sending placeholder bytes")
         for m in members:
@@ -142,7 +148,14 @@ async def run(
         await session.send("ranking.rating", {"rating_ct": rating_cts[member]})
         await session.await_phase("RANKING_DECRYPT", timeout=30.0)
 
-        await session.send("ranking.decrypt.partial", {"partial": "pd-" + member})
+        if helper is not None and decrypt_target is not None:
+            share = shares_by_member[member]
+            partial = await helper.partial_decrypt(
+                params, decrypt_target, share.secret_key_share, share.lead,
+            )
+            await session.send("ranking.decrypt.partial", {"partial_ct": partial.hex()})
+        else:
+            await session.send("ranking.decrypt.partial", {"partial": "pd-" + member})
         return {"member": member, "submitted_rating": float(ratings[members.index(member)])}
 
     t0 = time.monotonic()

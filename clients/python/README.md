@@ -24,7 +24,7 @@ In another shell, run the smoke driver:
 
 ```bash
 python -m ares_client \
-    --config examples.auction_config \
+    --config examples.auction_stub_smoke \
     --participants 6 \
     --session-id auc-001
 ```
