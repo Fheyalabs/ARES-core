@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package sealedbidauction
+package auction
 
 import (
 	"strings"
@@ -12,9 +12,9 @@ import (
 // TestBeginSession_InitialState: the auction session starts in
 // AUCTION_INVITING with the correct SessionContext identity.
 func TestBeginSession_InitialState(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	ctx, err := r.BeginSession("auction-7", "")
 	if err != nil {
@@ -35,9 +35,9 @@ func TestBeginSession_InitialState(t *testing.T) {
 // every state with stub hooks; AdvanceToState should reach each
 // one in order.
 func TestAdvanceToState_WalksFullPipeline(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("walk", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -66,9 +66,9 @@ func TestAdvanceToState_WalksFullPipeline(t *testing.T) {
 // CheckComplete is false (it accumulates), so the call returns
 // (false, nil) and the session stays in the same state.
 func TestHandleMessage_KeygenAcceptsShare(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("k", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -94,9 +94,9 @@ func TestHandleMessage_KeygenAcceptsShare(t *testing.T) {
 // rejected — including the well-formed auction.bid that's valid in
 // a later state.
 func TestHandleMessage_RejectsAuctionBidInInviting(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("rej", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -113,9 +113,9 @@ func TestHandleMessage_RejectsAuctionBidInInviting(t *testing.T) {
 // TestHandleMessage_UntrackedSession: HandleMessage on an unknown
 // session returns an error.
 func TestHandleMessage_UntrackedSession(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.HandleMessage("ghost", "auction.bid", "x", nil); err == nil {
 		t.Fatalf("expected HandleMessage on untracked session to fail")
@@ -124,9 +124,9 @@ func TestHandleMessage_UntrackedSession(t *testing.T) {
 
 // TestEndSession releases tracker state.
 func TestEndSession(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	if _, err := r.BeginSession("e", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -141,9 +141,9 @@ func TestEndSession(t *testing.T) {
 // the auction: keygen.share, bid, and decrypt.partial each map to
 // exactly one phase.
 func TestConsumedMessageTypes_Coverage(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	owner := map[string]string{}
 	for _, p := range r.Phases() {
@@ -170,9 +170,9 @@ func TestConsumedMessageTypes_Coverage(t *testing.T) {
 // TestPhaseLifetimes confirms the auction is fully per-session
 // (no cohort or persistent state).
 func TestPhaseLifetimes(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	for _, p := range r.Phases() {
 		if p.Lifetime() != phase.LifetimePerSession {
@@ -210,7 +210,7 @@ func TestInvitationProvidesDepth10(t *testing.T) {
 // TestMissingProducerRejected: drop PhaseScalarBid and the
 // downstream Argmax requirement on CtxAuctionBids is unsatisfied.
 func TestMissingProducerRejected(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		NewPhaseInvitation(),
 		NewPhaseKeygen(),
 		// ScalarBid removed.
@@ -226,7 +226,7 @@ func TestMissingProducerRejected(t *testing.T) {
 // TestDisconnectedPipelineRejected: swap two phases so their
 // state chain breaks.
 func TestDisconnectedPipelineRejected(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		NewPhaseInvitation(),
 		NewPhaseScalarBid(), // EntryState=BIDDING, but Invitation exits to LOCKED
 		NewPhaseKeygen(),
@@ -242,9 +242,9 @@ func TestDisconnectedPipelineRejected(t *testing.T) {
 // TestPhaseForState_AllInlineStatesClaimed verifies every declared
 // state has an owning phase, and the terminal sentinel does not.
 func TestPhaseForState_AllInlineStatesClaimed(t *testing.T) {
-	r, err := NewSealedBidAuctionRunner()
+	r, err := Pipeline()
 	if err != nil {
-		t.Fatalf("NewSealedBidAuctionRunner: %v", err)
+		t.Fatalf("Pipeline: %v", err)
 	}
 	for _, s := range []phase.SessionState{
 		StateAuctionInviting,

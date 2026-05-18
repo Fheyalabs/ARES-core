@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package sealedbidauction
+package auction
 
 import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
-// NewSealedBidAuctionRunner builds a SessionRunner over the auction
+// Pipeline builds a SessionRunner over the auction
 // pipeline:
 //
 //	Invitation → Keygen → ScalarBid → Argmax → Decrypt → Settlement
@@ -23,9 +23,9 @@ import (
 //
 // PhaseArgmax in this variant uses the stub scoring path. For real
 // CKKS scoring against the OpenFHE helper, use
-// NewSealedBidAuctionRunnerWithHelper.
-func NewSealedBidAuctionRunner() (*phase.SessionRunner, error) {
-	return phase.NewSessionRunner(
+// PipelineWithHelper.
+func Pipeline() (*phase.SessionRunner, error) {
+	return phase.Compose(
 		NewPhaseInvitation(),
 		NewPhaseKeygen(),
 		NewPhaseScalarBid(),
@@ -35,16 +35,16 @@ func NewSealedBidAuctionRunner() (*phase.SessionRunner, error) {
 	)
 }
 
-// NewSealedBidAuctionRunnerWithHelper builds the same pipeline but
+// PipelineWithHelper builds the same pipeline but
 // uses a helper-backed PhaseArgmax. The sharpening polynomial is
 // applied to each pairwise bid difference; the [0,1]-mapped degree-3
 // approximation (0.5 + 0.75x − 0.25x³) is a sensible default for
 // well-separated normalized bids.
-func NewSealedBidAuctionRunnerWithHelper(
+func PipelineWithHelper(
 	helper *helperclient.Client,
 	sharpening helperclient.EvalPolyParams,
 ) (*phase.SessionRunner, error) {
-	return phase.NewSessionRunner(
+	return phase.Compose(
 		NewPhaseInvitation(),
 		NewPhaseKeygenWithHelper(helper),
 		NewPhaseScalarBid(),

@@ -124,7 +124,7 @@ func TestSessionContext_MustGetTryGet(t *testing.T) {
 // --- SessionRunner construction tests --------------------------------
 
 func TestNewSessionRunner_RejectsEmpty(t *testing.T) {
-	if _, err := NewSessionRunner(); err == nil {
+	if _, err := Compose(); err == nil {
 		t.Errorf("expected error for empty phase list")
 	}
 }
@@ -132,7 +132,7 @@ func TestNewSessionRunner_RejectsEmpty(t *testing.T) {
 func TestNewSessionRunner_RejectsDuplicateName(t *testing.T) {
 	a := &mockPhase{name: "dup", runsAt: RunsAtInline, entry: "S1", exit: "S2", messages: []string{"m"}}
 	b := &mockPhase{name: "dup", runsAt: RunsAtInline, entry: "S2", exit: StateNone, messages: []string{"m"}}
-	_, err := NewSessionRunner(a, b)
+	_, err := Compose(a, b)
 	if err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("expected duplicate-name error, got %v", err)
 	}
@@ -141,7 +141,7 @@ func TestNewSessionRunner_RejectsDuplicateName(t *testing.T) {
 func TestNewSessionRunner_RejectsDisconnectedChain(t *testing.T) {
 	a := &mockPhase{name: "a", runsAt: RunsAtInline, entry: "S1", exit: "S2", messages: []string{"m"}}
 	b := &mockPhase{name: "b", runsAt: RunsAtInline, entry: "S3", exit: StateNone, messages: []string{"m"}}
-	_, err := NewSessionRunner(a, b)
+	_, err := Compose(a, b)
 	if err == nil || !strings.Contains(err.Error(), "not connected") {
 		t.Fatalf("expected disconnected-chain error, got %v", err)
 	}
@@ -156,7 +156,7 @@ func TestNewSessionRunner_RejectsUnsatisfiedRequires(t *testing.T) {
 		messages: []string{"m"},
 		requires: ContextSchema{"crypto_ctx": {TypeName: "Foo", Required: true}},
 	}
-	_, err := NewSessionRunner(a)
+	_, err := Compose(a)
 	if err == nil || !strings.Contains(err.Error(), "no preceding phase provides") {
 		t.Fatalf("expected unsatisfied-requires error, got %v", err)
 	}
@@ -191,7 +191,7 @@ func TestNewSessionRunner_AcceptsSatisfiedConstraintChain(t *testing.T) {
 			},
 		},
 	}
-	r, err := NewSessionRunner(keygen, scoring)
+	r, err := Compose(keygen, scoring)
 	if err != nil {
 		t.Fatalf("expected ok, got %v", err)
 	}
@@ -228,7 +228,7 @@ func TestNewSessionRunner_RejectsInsufficientDepth(t *testing.T) {
 			},
 		},
 	}
-	_, err := NewSessionRunner(keygen, scoring)
+	_, err := Compose(keygen, scoring)
 	if err == nil || !strings.Contains(err.Error(), "depth_min") {
 		t.Fatalf("expected insufficient-depth error, got %v", err)
 	}
@@ -237,7 +237,7 @@ func TestNewSessionRunner_RejectsInsufficientDepth(t *testing.T) {
 func TestNewSessionRunner_RejectsAmbiguousEntryState(t *testing.T) {
 	a := &mockPhase{name: "a", runsAt: RunsAtInline, entry: "S1", exit: "S2", messages: []string{"m"}}
 	b := &mockPhase{name: "b", runsAt: RunsAtInline, entry: "S1", exit: StateNone, messages: []string{"m"}}
-	_, err := NewSessionRunner(a, b)
+	_, err := Compose(a, b)
 	if err == nil || !strings.Contains(err.Error(), "claimed by both") {
 		t.Fatalf("expected ambiguous-entry-state error, got %v", err)
 	}
@@ -283,7 +283,7 @@ func TestRunner_TrivialThreePhasePipelineRunsEndToEnd(t *testing.T) {
 		requires:       ContextSchema{"score": {TypeName: "int", Required: true}},
 	}
 
-	r, err := NewSessionRunner(a, b, c)
+	r, err := Compose(a, b, c)
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
@@ -359,7 +359,7 @@ func TestRunner_RejectsWrongMessageType(t *testing.T) {
 		messages:       []string{"expected"},
 		completeAfterN: 1,
 	}
-	r, err := NewSessionRunner(a)
+	r, err := Compose(a)
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestRunner_BubblesPhaseErrors(t *testing.T) {
 		onMsgErr:       errors.New("boom"),
 		completeAfterN: 1,
 	}
-	r, err := NewSessionRunner(a)
+	r, err := Compose(a)
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
@@ -412,7 +412,7 @@ func TestPhaseForState_FindsInternalStates(t *testing.T) {
 		messages:       []string{"m2"},
 		completeAfterN: 1,
 	}
-	r, err := NewSessionRunner(a, b)
+	r, err := Compose(a, b)
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestAdvanceToState_TreatsInternalAsNoOp(t *testing.T) {
 		messages:       []string{"m2"},
 		completeAfterN: 1,
 	}
-	r, err := NewSessionRunner(a, b)
+	r, err := Compose(a, b)
 	if err != nil {
 		t.Fatalf("constructor: %v", err)
 	}
@@ -484,7 +484,7 @@ func TestRunner_NonInlinePhaseDoesNotClaimState(t *testing.T) {
 		completeAfterN: 1,
 		requires:       ContextSchema{"crypto_ctx": {TypeName: "KeyBundle", Required: true}},
 	}
-	if _, err := NewSessionRunner(keyBundle, scoring); err != nil {
+	if _, err := Compose(keyBundle, scoring); err != nil {
 		t.Errorf("expected non-inline + inline composition to validate, got %v", err)
 	}
 }

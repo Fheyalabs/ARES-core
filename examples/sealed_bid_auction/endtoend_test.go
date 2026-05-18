@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package sealedbidauction
+package auction
 
 import (
 	"testing"
@@ -19,7 +19,7 @@ import (
 // Provides into ctx, the pipeline stalls and the test times out at the
 // last state it reached.
 func TestEndToEnd_HandleMessageWalksThePipeline(t *testing.T) {
-	runner, err := NewSealedBidAuctionRunner()
+	runner, err := Pipeline()
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestEndToEnd_HandleMessageWalksThePipeline(t *testing.T) {
 // TestKeygen_DuplicateSubmissionsCountAsOne verifies that two messages
 // from the same pseudonym don't double-count toward the N-of-N quorum.
 func TestKeygen_DuplicateSubmissionsCountAsOne(t *testing.T) {
-	runner, err := NewSealedBidAuctionRunner()
+	runner, err := Pipeline()
 	if err != nil {
 		t.Fatalf("runner: %v", err)
 	}

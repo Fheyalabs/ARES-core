@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package recurringcohortranking
+package cohort
 
 import (
 	"errors"
@@ -12,9 +12,9 @@ import (
 // TestCohortFormation_BeginSession_InitialState verifies the
 // formation runner starts in COHORT_FORMING.
 func TestCohortFormation_BeginSession_InitialState(t *testing.T) {
-	r, err := NewCohortFormationRunner()
+	r, err := FormationPipeline()
 	if err != nil {
-		t.Fatalf("NewCohortFormationRunner: %v", err)
+		t.Fatalf("FormationPipeline: %v", err)
 	}
 	ctx, err := r.BeginSession("cohort-1", "cohort-1")
 	if err != nil {
@@ -50,9 +50,9 @@ func TestCohortFormation_LifetimesArePerCohort(t *testing.T) {
 // should EndSession after keygen completes and switch to the
 // weekly runner.
 func TestCohortFormation_TerminalExitStateNotClaimed(t *testing.T) {
-	r, err := NewCohortFormationRunner()
+	r, err := FormationPipeline()
 	if err != nil {
-		t.Fatalf("NewCohortFormationRunner: %v", err)
+		t.Fatalf("FormationPipeline: %v", err)
 	}
 	if _, err := r.BeginSession("term", "cohort-X"); err != nil {
 		t.Fatalf("BeginSession: %v", err)
@@ -69,8 +69,8 @@ func TestCohortFormation_TerminalExitStateNotClaimed(t *testing.T) {
 // CollectivePK/SecretShares/EvalKeys which no preceding phase
 // in the weekly pipeline alone provides.
 func TestWeeklyRankingSession_NotComposableStandalone(t *testing.T) {
-	if _, err := NewWeeklyRankingSession(); err == nil {
-		t.Fatalf("expected NewWeeklyRankingSession to be rejected without a preceding key provider")
+	if _, err := WeeklyPipeline(); err == nil {
+		t.Fatalf("expected WeeklyPipeline to be rejected without a preceding key provider")
 	}
 }
 
@@ -152,7 +152,7 @@ func TestPreSharedKeyLookup_EnterSucceedsWhenSeeded(t *testing.T) {
 // AdvanceToState. This is the closest the framework gets to an
 // end-to-end runner walk for the cohort-amortized fast path.
 func TestBridgedPipeline_AdvancesEndToEnd(t *testing.T) {
-	r, err := phase.NewSessionRunner(
+	r, err := phase.Compose(
 		NewPhaseCohortForm(),
 		NewPhaseCohortKeygen(),
 		&cohortToRankingBridge{},
@@ -202,7 +202,7 @@ func TestBridgedPipeline_AdvancesEndToEnd(t *testing.T) {
 // driving the bridged pipeline forward, seeding ctx, and sending
 // the message.
 func TestHandleMessage_RatingMessageRoutedToSubmitRating(t *testing.T) {
-	r, err := phase.NewSessionRunner(
+	r, err := phase.Compose(
 		NewPhaseCohortForm(),
 		NewPhaseCohortKeygen(),
 		&cohortToRankingBridge{},

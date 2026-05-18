@@ -28,7 +28,7 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // (sealed-bid auction) and task #14 (non-MPC keygen variants) for
 // worked examples once those land.
 func NewARESDefaultRunner() (*phase.SessionRunner, error) {
-	return phase.NewSessionRunner(
+	return phase.Compose(
 		NewPhase1aSessionInitiation(),
 		NewPhase0aThresholdKeygen(),
 		NewPhaseGOnionShuffle(),

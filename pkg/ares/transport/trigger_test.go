@@ -30,7 +30,7 @@ func (p *fakeInlinePhase) Exit(*phase.SessionContext) error         { return nil
 
 func newTestRunner(t *testing.T) *phase.SessionRunner {
 	t.Helper()
-	r, err := phase.NewSessionRunner(&fakeInlinePhase{name: "test-phase"})
+	r, err := phase.Compose(&fakeInlinePhase{name: "test-phase"})
 	if err != nil {
 		t.Fatalf("NewSessionRunner: %v", err)
 	}

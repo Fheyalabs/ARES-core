@@ -7,7 +7,7 @@ import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
-// NewRideShareRunner builds a SessionRunner for the inDrive-style
+// Pipeline builds a SessionRunner for the inDrive-style
 // ride-share pipeline:
 //
 //   Invite → Keygen → Submit → Score → Decrypt → Settle
@@ -21,8 +21,8 @@ import (
 // fitness and proximity) for each driver and selects the
 // argmax. The winner package reveals (agreed_price,
 // driver_id, rider_id) to both parties.
-func NewRideShareRunner() (*phase.SessionRunner, error) {
-	return phase.NewSessionRunner(
+func Pipeline() (*phase.SessionRunner, error) {
+	return phase.Compose(
 		NewPhaseInvite(),
 		NewPhaseKeygen(),
 		NewPhaseSubmit(),
@@ -32,15 +32,15 @@ func NewRideShareRunner() (*phase.SessionRunner, error) {
 	)
 }
 
-// NewRideShareRunnerWithHelper substitutes the helper-backed phases
+// PipelineWithHelper substitutes the helper-backed phases
 // for the stubs. PhaseKeygen produces real threshold CKKS keys
 // (unless pre-shared keys are seeded into context by the trigger)
 // and PhaseScore runs real argmax against the encrypted bids.
-func NewRideShareRunnerWithHelper(
+func PipelineWithHelper(
 	helper *helperclient.Client,
 	sharpening helperclient.EvalPolyParams,
 ) (*phase.SessionRunner, error) {
-	return phase.NewSessionRunner(
+	return phase.Compose(
 		NewPhaseInvite(),
 		NewPhaseKeygenWithHelper(helper),
 		NewPhaseSubmit(),

@@ -15,7 +15,7 @@ import (
 // drop-in replacement for Phase0aThresholdKeygen at the same
 // LOCKED → GOSSIP arc with identical Provides.
 func TestSinglePartyKeygen_ComposesIntoDefaultRunner(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewSinglePartyKeygen(),
 		defaults.NewPhaseGOnionShuffle(),
@@ -26,7 +26,7 @@ func TestSinglePartyKeygen_ComposesIntoDefaultRunner(t *testing.T) {
 		defaults.NewPhaseDAnonymousBroadcast(),
 	)
 	if err != nil {
-		t.Fatalf("NewSessionRunner with SinglePartyKeygen: %v", err)
+		t.Fatalf("Compose with SinglePartyKeygen: %v", err)
 	}
 }
 
@@ -39,7 +39,7 @@ func TestSinglePartyKeygen_ComposesIntoDefaultRunner(t *testing.T) {
 func TestPlaintextKeygen_ComposesIntoDefaultRunner(t *testing.T) {
 	// Plaintext keygen does NOT provide ctxCryptoContract, so
 	// Phase2FHEScoring (which requires it) should fail.
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewPlaintextKeygen(),
 		defaults.NewPhaseGOnionShuffle(),
@@ -69,7 +69,7 @@ func TestPlaintextKeygen_ComposesIntoDefaultRunner(t *testing.T) {
 func TestPlaintextKeygen_ComposesIntoAuctionRunner(t *testing.T) {
 	// Provide a participants source so the plaintext keygen's
 	// requires are satisfied in the single-phase runner.
-	r, err := phase.NewSessionRunner(
+	r, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewPlaintextKeygen(),
 	)
@@ -94,7 +94,7 @@ func TestPlaintextKeygen_ComposesIntoAuctionRunner(t *testing.T) {
 // That's correct: PreSharedKeygen expects keys seeded before
 // runner.BeginSession.
 func TestPreSharedKeygen_ComposesIntoDefaultRunner(t *testing.T) {
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewPreSharedKeygen(),
 		defaults.NewPhaseGOnionShuffle(),
@@ -137,7 +137,7 @@ func TestPreSharedKeygen_WithCohortContextSeed(t *testing.T) {
 			ctxCryptoContract:      {TypeName: "OpenFHEContract", Constraints: map[string]any{"depth": 30, "ring_dim": 4096, "scaling_mod_size": 50}},
 		},
 	}
-	_, err := phase.NewSessionRunner(
+	_, err := phase.Compose(
 		cohortPhase,
 		defaults.NewPhase1aSessionInitiation(),
 		NewPreSharedKeygen(),

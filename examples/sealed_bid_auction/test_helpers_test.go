@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-package sealedbidauction
+package auction
 
 import (
 	"testing"

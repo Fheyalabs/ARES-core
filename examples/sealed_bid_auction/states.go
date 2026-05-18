@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package sealedbidauction is a worked example showing how to build a
+// Package auction is a worked example showing how to build a
 // non-Fheya application on top of the ARES framework. The auction
 // has N bidders, each submits one encrypted scalar bid amount, the
 // server runs encrypted argmax to identify the winner, threshold
@@ -27,7 +27,7 @@
 // identity is intentionally revealed in the settlement transcript.
 // Phase D is replaced by a single-shot Settlement phase that emits a
 // signed transcript and terminates.
-package sealedbidauction
+package auction
 
 import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
