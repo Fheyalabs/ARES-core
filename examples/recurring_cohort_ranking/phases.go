@@ -426,10 +426,15 @@ func decodeRatingCiphertext(raw []byte) ([]byte, error) {
 
 // PhaseThresholdDecrypt recovers the cleartext winner rating.
 // RANKING_DECRYPT → RANKING_SETTLED.
-type PhaseThresholdDecrypt struct{}
+type PhaseThresholdDecrypt struct {
+	helper *helperclient.Client
+}
 
 func NewPhaseThresholdDecrypt() *PhaseThresholdDecrypt {
 	return &PhaseThresholdDecrypt{}
+}
+func NewPhaseThresholdDecryptWithHelper(helper *helperclient.Client) *PhaseThresholdDecrypt {
+	return &PhaseThresholdDecrypt{helper: helper}
 }
 
 func (PhaseThresholdDecrypt) Name() string              { return "ranking-threshold-decrypt" }
@@ -463,10 +468,44 @@ func (PhaseThresholdDecrypt) CheckComplete(ctx *phase.SessionContext) bool {
 	}
 	return phase.QuorumReached(ctx, bucketDecryptPartials, len(participants))
 }
-func (PhaseThresholdDecrypt) Exit(ctx *phase.SessionContext) error {
+func (p PhaseThresholdDecrypt) Exit(ctx *phase.SessionContext) error {
+	partials := phase.AccumulatedMessages(ctx, bucketDecryptPartials)
+
+	if p.helper == nil {
+		ctx.Set(CtxWinner, map[string]any{
+			"winner_rating": 0,
+			"winner_id":     "stub-cohort-winner",
+		})
+		return nil
+	}
+
+	params, err := readCohortContractParams(ctx)
+	if err != nil {
+		return fmt.Errorf("PhaseThresholdDecrypt: %w", err)
+	}
+
+	rawPartials := make([][]byte, 0, len(partials))
+	for _, raw := range partials {
+		parsed, err := decodePartialCiphertext(raw)
+		if err != nil {
+			return fmt.Errorf("PhaseThresholdDecrypt: decode partial: %w", err)
+		}
+		rawPartials = append(rawPartials, parsed)
+	}
+
+	values, err := p.helper.FusePartials(params, rawPartials, 1)
+	if err != nil {
+		return fmt.Errorf("PhaseThresholdDecrypt: fuse: %w", err)
+	}
+
+	winnerRating := 0.0
+	if len(values) > 0 {
+		winnerRating = values[0]
+	}
+
 	ctx.Set(CtxWinner, map[string]any{
-		"winner_rating": 0,
-		"winner_id":     "stub-cohort-winner",
+		"winner_rating": winnerRating,
+		"winner_id":     "winner-determined-by-mask",
 	})
 	return nil
 }
@@ -503,3 +542,21 @@ func (PhaseSettleRanking) OnMessage(*phase.SessionContext, string, string, []byt
 }
 func (PhaseSettleRanking) CheckComplete(*phase.SessionContext) bool { return true }
 func (PhaseSettleRanking) Exit(*phase.SessionContext) error         { return nil }
+
+func decodePartialCiphertext(raw []byte) ([]byte, error) {
+	var msg struct {
+		PartialCT  string `json:"partial_ct"`
+		PartialHex string `json:"partial"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	field := msg.PartialCT
+	if field == "" {
+		field = msg.PartialHex
+	}
+	if field == "" {
+		return nil, fmt.Errorf("no partial_ct or partial field")
+	}
+	return hex.DecodeString(field)
+}

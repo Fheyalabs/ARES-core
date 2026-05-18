@@ -423,9 +423,17 @@ func decodeBidCiphertext(raw []byte) ([]byte, error) {
 // trivially smaller payload — two scalars rather than a 176-byte
 // ECIES winner package padded across 1536 bit slots — so the
 // recovery logic is a direct read-out instead of bit-slot recovery.
-type PhaseDecrypt struct{}
+type PhaseDecrypt struct {
+	helper *helperclient.Client
+}
 
 func NewPhaseDecrypt() *PhaseDecrypt { return &PhaseDecrypt{} }
+
+// NewPhaseDecryptWithHelper constructs a PhaseDecrypt that calls the
+// helper's FusePartials to combine threshold partials into cleartext.
+func NewPhaseDecryptWithHelper(helper *helperclient.Client) *PhaseDecrypt {
+	return &PhaseDecrypt{helper: helper}
+}
 
 func (PhaseDecrypt) Name() string                   { return "auction-threshold-decrypt" }
 func (PhaseDecrypt) Lifetime() phase.Lifetime       { return phase.LifetimePerSession }
@@ -458,13 +466,70 @@ func (PhaseDecrypt) CheckComplete(ctx *phase.SessionContext) bool {
 	}
 	return phase.QuorumReached(ctx, bucketDecryptPartials, len(participants))
 }
-func (PhaseDecrypt) Exit(ctx *phase.SessionContext) error {
-	// Stub fusion of partials → cleartext winner tuple.
+func (p PhaseDecrypt) Exit(ctx *phase.SessionContext) error {
+	partials := phase.AccumulatedMessages(ctx, bucketDecryptPartials)
+
+	if p.helper == nil {
+		ctx.Set(CtxAuctionWinnerBid, map[string]any{
+			"winner":     "stub-winner",
+			"price":      0,
+			"num_partials": len(partials),
+		})
+		return nil
+	}
+
+	params, err := readContractParams(ctx)
+	if err != nil {
+		return fmt.Errorf("PhaseDecrypt: %w", err)
+	}
+
+	// Parse the hex-encoded partial_ct from each accumulated JSON
+	// payload {"partial_ct":"hex..."}.
+	rawPartials := make([][]byte, 0, len(partials))
+	for _, raw := range partials {
+		parsed, err := decodePartialCiphertext(raw)
+		if err != nil {
+			return fmt.Errorf("PhaseDecrypt: decode partial: %w", err)
+		}
+		rawPartials = append(rawPartials, parsed)
+	}
+
+	values, err := p.helper.FusePartials(params, rawPartials, 1)
+	if err != nil {
+		return fmt.Errorf("PhaseDecrypt: fuse: %w", err)
+	}
+
+	winningBid := 0.0
+	if len(values) > 0 {
+		winningBid = values[0]
+	}
+
 	ctx.Set(CtxAuctionWinnerBid, map[string]any{
-		"winner": "stub-winner",
-		"price":  0,
+		"winner":     "bidder-determined-by-mask",
+		"price":      winningBid,
+		"num_partials": len(partials),
 	})
 	return nil
+}
+
+// decodePartialCiphertext parses a JSON payload from the "auction.decrypt.partial"
+// WS message and returns the hex-decoded partial_ct field.
+func decodePartialCiphertext(raw []byte) ([]byte, error) {
+	var msg struct {
+		PartialCT  string `json:"partial_ct"`
+		PartialHex string `json:"partial"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	field := msg.PartialCT
+	if field == "" {
+		field = msg.PartialHex
+	}
+	if field == "" {
+		return nil, fmt.Errorf("no partial_ct or partial field in decrypt-partial payload")
+	}
+	return hex.DecodeString(field)
 }
 
 // PhaseSettlement emits the signed settlement transcript and

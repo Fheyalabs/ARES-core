@@ -354,9 +354,14 @@ func decodeRideBid(raw []byte) ([]byte, error) {
 
 // ── PhaseDecrypt: threshold decrypt → (price, driver, rider) ──
 
-type PhaseDecrypt struct{}
+type PhaseDecrypt struct {
+	helper *helperclient.Client
+}
 
 func NewPhaseDecrypt() *PhaseDecrypt { return &PhaseDecrypt{} }
+func NewPhaseDecryptWithHelper(helper *helperclient.Client) *PhaseDecrypt {
+	return &PhaseDecrypt{helper: helper}
+}
 
 func (PhaseDecrypt) Name() string                        { return "ride-decrypt" }
 func (PhaseDecrypt) Lifetime() phase.Lifetime            { return phase.LifetimePerSession }
@@ -389,10 +394,46 @@ func (PhaseDecrypt) CheckComplete(ctx *phase.SessionContext) bool {
 	}
 	return phase.QuorumReached(ctx, bucketDecryptPartials, len(participants))
 }
-func (PhaseDecrypt) Exit(ctx *phase.SessionContext) error {
+func (p PhaseDecrypt) Exit(ctx *phase.SessionContext) error {
+	partials := phase.AccumulatedMessages(ctx, bucketDecryptPartials)
+
+	if p.helper == nil {
+		ctx.Set(CtxResult, map[string]any{
+			"agreed_price": 0,
+			"driver_id":    "stub-driver",
+			"rider_id":     "stub-rider",
+		})
+		return nil
+	}
+
+	params, err := readContractParams(ctx)
+	if err != nil {
+		return fmt.Errorf("PhaseDecrypt: %w", err)
+	}
+
+	rawPartials := make([][]byte, 0, len(partials))
+	for _, raw := range partials {
+		parsed, err := decodePartialCiphertext(raw)
+		if err != nil {
+			return fmt.Errorf("PhaseDecrypt: decode partial: %w", err)
+		}
+		rawPartials = append(rawPartials, parsed)
+	}
+
+	// 3 slots: price, driver-score, rider-score
+	values, err := p.helper.FusePartials(params, rawPartials, 3)
+	if err != nil {
+		return fmt.Errorf("PhaseDecrypt: fuse: %w", err)
+	}
+
+	agreedPrice := 0.0
+	if len(values) > 0 {
+		agreedPrice = values[0]
+	}
+
 	ctx.Set(CtxResult, map[string]any{
-		"agreed_price": 0,
-		"driver_id":    "stub-driver",
+		"agreed_price": agreedPrice,
+		"driver_id":    "winner-determined-by-mask",
 		"rider_id":     "stub-rider",
 	})
 	return nil
@@ -428,3 +469,56 @@ func (PhaseSettle) Enter(ctx *phase.SessionContext) error {
 func (PhaseSettle) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
 func (PhaseSettle) CheckComplete(*phase.SessionContext) bool                       { return true }
 func (PhaseSettle) Exit(*phase.SessionContext) error                               { return nil }
+
+// decodePartialCiphertext parses a JSON payload from the
+// "ride.decrypt.partial" WS message and returns the hex-decoded
+// partial_ct field.
+func decodePartialCiphertext(raw []byte) ([]byte, error) {
+	var msg struct {
+		PartialCT  string `json:"partial_ct"`
+		PartialHex string `json:"partial"`
+	}
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		return nil, err
+	}
+	field := msg.PartialCT
+	if field == "" {
+		field = msg.PartialHex
+	}
+	if field == "" {
+		return nil, fmt.Errorf("no partial_ct or partial field in decrypt-partial payload")
+	}
+	return hex.DecodeString(field)
+}
+
+func readContractParams(ctx *phase.SessionContext) (helperclient.ContractParams, error) {
+	contractAny, ok := ctx.Get(CtxCryptoContract)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxCryptoContract missing")
+	}
+	contract, ok := contractAny.(map[string]any)
+	if !ok {
+		return helperclient.ContractParams{}, fmt.Errorf("CtxCryptoContract has type %T", contractAny)
+	}
+	return helperclient.ContractParams{
+		RingDim:        uint32(asFloat(contract, "ring_dim")),
+		Depth:          uint32(asFloat(contract, "depth")),
+		ScalingModSize: int(asFloat(contract, "scaling_mod_size")),
+	}, nil
+}
+
+func asFloat(m map[string]any, key string) float64 {
+	v, ok := m[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	}
+	return 0
+}

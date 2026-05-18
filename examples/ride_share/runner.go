@@ -43,7 +43,7 @@ func NewRideShareRunnerWithHelper(
 		NewPhaseKeygenWithHelper(helper),
 		NewPhaseSubmit(),
 		NewPhaseScoreWithHelper(helper, sharpening),
-		NewPhaseDecrypt(),
+		NewPhaseDecryptWithHelper(helper),
 		NewPhaseSettle(),
 	)
 }

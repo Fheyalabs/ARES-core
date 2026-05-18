@@ -67,7 +67,7 @@ func NewWeeklyRankingSessionWithHelper(
 		NewPhasePreSharedKeyLookup(),
 		NewPhaseSubmitRating(),
 		NewPhaseArgmaxScoringWithHelper(helper, sharpening),
-		NewPhaseThresholdDecrypt(),
+		NewPhaseThresholdDecryptWithHelper(helper),
 		NewPhaseSettleRanking(),
 	)
 }

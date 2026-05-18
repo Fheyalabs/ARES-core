@@ -47,7 +47,7 @@ func NewSealedBidAuctionRunnerWithHelper(
 		NewPhaseKeygenWithHelper(helper),
 		NewPhaseScalarBid(),
 		NewPhaseArgmaxWithHelper(helper, sharpening),
-		NewPhaseDecrypt(),
+		NewPhaseDecryptWithHelper(helper),
 		NewPhaseSettlement(),
 	)
 }
