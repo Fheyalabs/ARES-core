@@ -60,9 +60,18 @@ func (PhaseInvitation) Exit(*phase.SessionContext) error                        
 // keygen variants, the auction will be able to swap this phase for
 // SinglePartyKeygen and run dramatically faster, trading the
 // threshold property for an auctioneer-trusted execution model.
-type PhaseKeygen struct{}
+type PhaseKeygen struct {
+	helper *helperclient.Client
+}
 
 func NewPhaseKeygen() *PhaseKeygen { return &PhaseKeygen{} }
+
+// NewPhaseKeygenWithHelper constructs a PhaseKeygen that calls the
+// real openfhe-contract-helper for threshold keygen, producing genuine
+// CKKS eval keys that downstream helper-backed phases can deserialize.
+func NewPhaseKeygenWithHelper(helper *helperclient.Client) *PhaseKeygen {
+	return &PhaseKeygen{helper: helper}
+}
 
 func (PhaseKeygen) Name() string                   { return "auction-keygen" }
 func (PhaseKeygen) Lifetime() phase.Lifetime       { return phase.LifetimePerSession }
@@ -96,16 +105,46 @@ func (PhaseKeygen) CheckComplete(ctx *phase.SessionContext) bool {
 	}
 	return phase.QuorumReached(ctx, bucketKeygenShares, len(participants))
 }
-func (PhaseKeygen) Exit(ctx *phase.SessionContext) error {
-	// Promise: PhaseKeygen produces CtxAuctionCollectivePublicKey,
-	// CtxAuctionSecretShares, CtxAuctionEvalKeys. With stub crypto we
-	// derive placeholders from the accumulated shares so downstream
-	// phases find something under the canonical keys; Phase 4b swaps
-	// in the real openfhe-contract-helper round-2 output.
+func (p PhaseKeygen) Exit(ctx *phase.SessionContext) error {
 	shares := phase.AccumulatedMessages(ctx, bucketKeygenShares)
-	ctx.Set(CtxAuctionCollectivePublicKey, []byte("stub-collective-pk"))
+
+	// Pre-shared keygen path: the smoke client generated the key
+	// bundle locally and seeded it via the trigger's POST attrs
+	// before this phase ran. Skip the server-side keygen call and
+	// leave the pre-shared keys in place so downstream phases see
+	// the same bundle the smoke encrypted under. Threshold secret
+	// shares stay client-side; the server only ever needs the public
+	// key + joint eval keys.
+	pk, hasPK := phase.TryGet[[]byte](ctx, CtxAuctionCollectivePublicKey)
+	ek, hasEK := phase.TryGet[[]byte](ctx, CtxAuctionEvalKeys)
+	if hasPK && hasEK && len(pk) > 0 && len(ek) > 0 {
+		ctx.Set(CtxAuctionSecretShares, shares)
+		return nil
+	}
+
+	if p.helper == nil {
+		ctx.Set(CtxAuctionCollectivePublicKey, []byte("stub-collective-pk"))
+		ctx.Set(CtxAuctionSecretShares, shares)
+		ctx.Set(CtxAuctionEvalKeys, []byte("stub-eval-keys"))
+		return nil
+	}
+
+	participants, ok := phase.TryGet[[]string](ctx, CtxAuctionParticipants)
+	if !ok || len(participants) == 0 {
+		return fmt.Errorf("PhaseKeygen: CtxAuctionParticipants is missing or empty")
+	}
+
+	params, err := readContractParams(ctx)
+	if err != nil {
+		return fmt.Errorf("PhaseKeygen: %w", err)
+	}
+	keyBundle, err := p.helper.KeygenChain(params, len(participants))
+	if err != nil {
+		return fmt.Errorf("PhaseKeygen: helper.KeygenChain: %w", err)
+	}
+	ctx.Set(CtxAuctionCollectivePublicKey, keyBundle.PublicKey)
 	ctx.Set(CtxAuctionSecretShares, shares)
-	ctx.Set(CtxAuctionEvalKeys, []byte("stub-eval-keys"))
+	ctx.Set(CtxAuctionEvalKeys, keyBundle.EvalKeys)
 	return nil
 }
 

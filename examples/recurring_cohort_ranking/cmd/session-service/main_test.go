@@ -65,9 +65,10 @@ func TestCohortService_FormationStartsAtForming(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
+	// Cascade past PhaseCohortForm lands at PhaseCohortKeygen's entry.
 	s, _ := runner.CurrentState("cohort-A-init")
-	if s != recurringcohortranking.StateCohortForming {
-		t.Errorf("state = %q, want COHORT_FORMING", s)
+	if s != recurringcohortranking.StateCohortKeygen {
+		t.Errorf("state = %q, want COHORT_KEYGEN", s)
 	}
 }
 

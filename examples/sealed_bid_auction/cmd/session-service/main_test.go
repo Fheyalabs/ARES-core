@@ -76,12 +76,12 @@ func TestAuctionService_StartSessionAdvancesPipeline(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
-	// PhaseInvitation has CheckComplete=true on Enter only after an
-	// OnMessage; without messages we expect the session to sit at the
-	// initial state.
+	// The auctionTrigger's AdvanceToState(AUCTION_LOCKED) runs after
+	// inner.Start, so the session sits at AUCTION_LOCKED (PhaseKeygen
+	// entry) ready to accept keygen.share messages.
 	s, ok := runner.CurrentState("a-1")
-	if !ok || s != sealedbidauction.StateAuctionInviting {
-		t.Errorf("CurrentState = %q,%v want AUCTION_INVITING,true", s, ok)
+	if !ok || s != sealedbidauction.StateAuctionLocked {
+		t.Errorf("CurrentState = %q,%v want AUCTION_LOCKED,true", s, ok)
 	}
 }
 

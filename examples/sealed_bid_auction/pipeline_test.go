@@ -22,6 +22,8 @@ func TestBeginSession_InitialState(t *testing.T) {
 		t.Errorf("ctx.SessionID = %q, want auction-7", ctx.SessionID)
 	}
 	s, ok := r.CurrentState("auction-7")
+	// BeginSession does NOT cascade past the initial phase; the
+	// trigger advances explicitly after seeding context.
 	if !ok || s != StateAuctionInviting {
 		t.Errorf("CurrentState = %q,%v, want %q,true", s, ok, StateAuctionInviting)
 	}

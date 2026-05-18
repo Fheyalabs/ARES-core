@@ -44,7 +44,7 @@ func NewSealedBidAuctionRunnerWithHelper(
 ) (*phase.SessionRunner, error) {
 	return phase.NewSessionRunner(
 		NewPhaseInvitation(),
-		NewPhaseKeygen(),
+		NewPhaseKeygenWithHelper(helper),
 		NewPhaseScalarBid(),
 		NewPhaseArgmaxWithHelper(helper, sharpening),
 		NewPhaseDecrypt(),

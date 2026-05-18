@@ -141,7 +141,10 @@ func (t *rideShareTrigger) Start(sessionID string, participants []string, attrs 
 	for k, v := range attrs {
 		canonical[k] = v
 	}
-	return t.inner.Start(sessionID, participants, canonical)
+	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
+		return err
+	}
+	return t.inner.Runner.AdvanceToState(sessionID, rideshare.StateKeygen)
 }
 
 func defaultRoles(participants []string) map[string]string {

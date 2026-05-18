@@ -1,0 +1,39 @@
+# Caddy site config for routing api.fheya.de to the active ARES-core
+# example session-service. The active service binds to 127.0.0.1:8000;
+# Caddy handles TLS termination and WebSocket upgrade.
+#
+# Drop into your existing Caddyfile (sites_enabled-style include) or
+# place at /etc/caddy/api.fheya.de and import it from the main config.
+
+api.fheya.de {
+    # WebSocket upgrade path. Both /v2/ws (ARES-core convention) and
+    # legacy /ws (if you also serve Fheya) work.
+    @ws {
+        path /v2/ws /ws
+    }
+    reverse_proxy @ws 127.0.0.1:8000 {
+        header_up Host {host}
+        header_up X-Real-IP {remote}
+        header_up X-Forwarded-Proto {scheme}
+    }
+
+    # Admin / health / artifact endpoints. The session-service exposes
+    # /admin/* under whatever's listening on 8000.
+    reverse_proxy /admin/* 127.0.0.1:8000
+    reverse_proxy /v2/artifacts/* 127.0.0.1:8000
+    reverse_proxy /v2/debug/logs 127.0.0.1:8000
+
+    # Default: deny anything we don't explicitly route. Keeps random
+    # probes from hitting unwired endpoints.
+    handle {
+        respond "Not Found" 404
+    }
+
+    log {
+        output file /var/log/caddy/api.fheya.de.log {
+            roll_size 100mb
+            roll_keep 5
+        }
+        format json
+    }
+}

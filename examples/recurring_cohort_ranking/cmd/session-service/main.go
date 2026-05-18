@@ -223,7 +223,10 @@ func (t *formationTrigger) Start(sessionID string, participants []string, attrs 
 	for k, v := range attrs {
 		canonical[k] = v
 	}
-	return t.inner.Start(sessionID, participants, canonical)
+	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
+		return err
+	}
+	return t.inner.Runner.AdvanceToState(sessionID, recurringcohortranking.StateCohortKeygen)
 }
 
 // weeklyTrigger seeds the cohort's pre-shared key bundle (supplied via

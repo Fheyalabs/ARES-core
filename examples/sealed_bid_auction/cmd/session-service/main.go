@@ -32,6 +32,8 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -46,8 +48,8 @@ import (
 
 func main() {
 	port := getEnv("SESSION_PORT", "8000")
-	depth, _ := strconv.Atoi(getEnv("AUCTION_CRYPTO_DEPTH", "30"))
-	ringDim, _ := strconv.Atoi(getEnv("AUCTION_RING_DIM", "16384"))
+	depth, _ := strconv.Atoi(getEnv("AUCTION_CRYPTO_DEPTH", "12"))
+	ringDim, _ := strconv.Atoi(getEnv("AUCTION_RING_DIM", "2048"))
 	secret := []byte(os.Getenv("ARES_WS_SECRET"))
 	devBypass := len(secret) == 0
 
@@ -151,12 +153,35 @@ func (t *auctionTrigger) Start(sessionID string, participants []string, attrs ma
 		sealedbidauction.CtxAuctionParticipants:   participants,
 		sealedbidauction.CtxAuctionCryptoContract: t.cryptoCtx,
 	}
-	// Allow caller-supplied attrs to override defaults (e.g. tests
-	// supplying a custom crypto contract).
 	for k, v := range attrs {
 		canonical[k] = v
 	}
-	return t.inner.Start(sessionID, participants, canonical)
+	// PreSharedKeygen: if the smoke client supplied a pre-generated
+	// key bundle (hex-encoded) in attrs, decode the strings into
+	// []byte so PhaseKeygen.Exit detects them and skips its own
+	// keygen call. The smoke encrypts under these keys client-side,
+	// so the server MUST use the same bundle (not generate its own).
+	for _, key := range []string{
+		sealedbidauction.CtxAuctionCollectivePublicKey,
+		sealedbidauction.CtxAuctionEvalKeys,
+	} {
+		if v, ok := canonical[key]; ok {
+			if s, isString := v.(string); isString && s != "" {
+				decoded, err := hex.DecodeString(s)
+				if err != nil {
+					return fmt.Errorf("decode %s as hex: %w", key, err)
+				}
+				canonical[key] = decoded
+			}
+		}
+	}
+	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
+		return err
+	}
+	// Walk past PhaseInvitation (pure-compute, CheckComplete=true) so
+	// the session is at AUCTION_LOCKED — the state where PhaseKeygen
+	// consumes auction.keygen.share messages.
+	return t.inner.Runner.AdvanceToState(sessionID, sealedbidauction.StateAuctionLocked)
 }
 
 func getEnv(key, def string) string {

@@ -73,8 +73,11 @@ func TestRideShareService_AssignsRolesByOrder(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 	s, _ := runner.CurrentState("ride-1")
-	if s != rideshare.StateInvite {
-		t.Errorf("state = %q, want %q", s, rideshare.StateInvite)
+	// rideShareTrigger's AdvanceToState(StateKeygen) runs after
+	// inner.Start, so the session sits at StateKeygen ready to
+	// receive ride.keygen.share messages.
+	if s != rideshare.StateKeygen {
+		t.Errorf("state = %q, want %q", s, rideshare.StateKeygen)
 	}
 }
 

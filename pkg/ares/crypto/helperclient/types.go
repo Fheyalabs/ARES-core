@@ -61,6 +61,13 @@ type Request struct {
 	// Ciphertexts is the multi-operand list for argmax. Each element
 	// is the ciphertext for one candidate's score.
 	Ciphertexts []string `json:"ciphertexts,omitempty"`
+
+	// Combine-round-1 / combine-round-2 fields (server-side keygen).
+	PublicKeys           []string `json:"public_keys,omitempty"`
+	EvalMultRound1Shares []string `json:"eval_mult_round1_shares,omitempty"`
+	EvalSumRound1Shares  []string `json:"eval_sum_round1_shares,omitempty"`
+	EvalMultFinalShares  []string `json:"eval_mult_final_shares,omitempty"`
+	EvalSumFinalKey      string   `json:"eval_sum_final_key,omitempty"`
 }
 
 // Response is the union of every helper op's output. Same per-op
@@ -77,7 +84,10 @@ type Response struct {
 	EvalSumBase        string    `json:"eval_sum_base,omitempty"`
 	EvalMultShare      string    `json:"eval_mult_share,omitempty"`
 	EvalSumShare       string    `json:"eval_sum_share,omitempty"`
+	EvalMultJoined     string    `json:"eval_mult_joined,omitempty"`
 	EvalMultFinalShare string    `json:"eval_mult_final_share,omitempty"`
+	EvalSumFinal       string    `json:"eval_sum_final,omitempty"`
+	EvalMultFinal      string    `json:"eval_mult_final,omitempty"`
 
 	// Decomposable scoring primitive outputs.
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
@@ -104,7 +105,7 @@ func NewService(cfg Config) (*Service, error) {
 			return
 		}
 		_, err := cfg.Runner.HandleMessage(msg.SessionID, msg.Type, c.Pseudonym, msg.Payload)
-		if err != nil {
+		if err != nil && !isPhaseDoesNotConsume(err) {
 			log.Printf("[dispatch] session=%s type=%s from=%s err=%v",
 				shortID(msg.SessionID), msg.Type, shortID(c.Pseudonym), err)
 		}
@@ -164,4 +165,16 @@ func (s *Service) Run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func isPhaseDoesNotConsume(err error) bool {
+	if err == nil {
+		return false
+	}
+	// runner.HandleMessage returns "phase X: does not consume message
+	// type Y in state Z" when the current phase does not claim the
+	// message type. This is benign — the engine has already advanced
+	// past that phase, or the message is a late-arriving accumulation
+	// event whose phase has already completed.
+	return strings.Contains(err.Error(), "does not consume message type")
 }

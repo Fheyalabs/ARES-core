@@ -16,7 +16,7 @@ func (p *fakeInlinePhase) RunsAt() phase.RunsAt                 { return phase.R
 func (p *fakeInlinePhase) EntryState() phase.SessionState       { return "START" }
 func (p *fakeInlinePhase) ExitState() phase.SessionState        { return phase.StateNone }
 func (p *fakeInlinePhase) InternalStates() []phase.SessionState { return nil }
-func (p *fakeInlinePhase) ConsumedMessageTypes() []string       { return nil }
+func (p *fakeInlinePhase) ConsumedMessageTypes() []string       { return []string{"go"} }
 func (p *fakeInlinePhase) Requires() phase.ContextSchema        { return nil }
 func (p *fakeInlinePhase) Provides() phase.ContextSchema        { return nil }
 func (p *fakeInlinePhase) Enter(*phase.SessionContext) error    { return nil }

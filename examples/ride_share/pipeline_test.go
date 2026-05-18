@@ -128,7 +128,7 @@ func TestHandleMessage_RejectsUnknownType(t *testing.T) {
 	if _, err := r.BeginSession("msg-1", ""); err != nil {
 		t.Fatalf("BeginSession: %v", err)
 	}
-	// PhaseInvite consumes no messages — every msgType should reject.
+	// PhaseInvite consumes no messages — every msgType rejects.
 	_, err = r.HandleMessage("msg-1", "ride.bid", "driver-1", nil)
 	if err == nil {
 		t.Fatalf("expected HandleMessage to reject ride.bid in Invite state")

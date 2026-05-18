@@ -87,6 +87,7 @@ class ARESSession:
         self._inbox: asyncio.Queue[WSMessage] = asyncio.Queue()
         self._default_timeout = default_timeout
         self._closed = False
+        self._server_url = ""  # set by connect()
         self._recv_task = asyncio.create_task(self._recv_loop(), name=f"recv-{pseudonym}")
 
     # Construction ---------------------------------------------------
@@ -114,7 +115,9 @@ class ARESSession:
             )
         except Exception as e:
             raise ARESClientError(f"dial WS for {pseudonym!r}: {e}") from e
-        return cls(pseudonym, ws, session_id, default_timeout=default_timeout)
+        session = cls(pseudonym, ws, session_id, default_timeout=default_timeout)
+        session._server_url = server_url.rstrip("/")
+        return session
 
     # Sending --------------------------------------------------------
 
@@ -166,6 +169,38 @@ class ARESSession:
             raise ARESClientError(
                 f"{self.pseudonym}: timeout waiting for any frame"
             ) from None
+
+    async def await_phase(
+        self,
+        target_state: str,
+        timeout: float = 30.0,
+    ) -> None:
+        """Poll the admin endpoint until the session reaches *target_state*.
+
+        Raises :class:`ARESClientError` if the deadline elapses.
+        """
+        import httpx
+
+        deadline = time.monotonic() + timeout
+        url = f"{self._server_url}/admin/sessions/{self.session_id}"
+        async with httpx.AsyncClient(timeout=5.0) as http:
+            while time.monotonic() < deadline:
+                try:
+                    r = await http.get(url)
+                except Exception:
+                    await asyncio.sleep(0.1)
+                    continue
+                if r.status_code != 200:
+                    await asyncio.sleep(0.1)
+                    continue
+                data = r.json()
+                state = data.get("state", "")
+                if state == target_state:
+                    return
+                await asyncio.sleep(0.1)
+        raise ARESClientError(
+            f"{self.pseudonym}: timeout waiting for state {target_state!r}"
+        )
 
     # Lifecycle ------------------------------------------------------
 

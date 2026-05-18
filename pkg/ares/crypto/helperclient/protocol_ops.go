@@ -1,5 +1,7 @@
 package helperclient
 
+import "fmt"
+
 // Protocol ops: the helper RPCs the existing Fheya smoke uses for
 // threshold keygen, encryption, and partial-decryption.
 
@@ -156,6 +158,184 @@ func (c *Client) PartialDecrypt(
 		return nil, err
 	}
 	return decodeB64(resp.Partial)
+}
+
+// CombineEvalKeyRound1Result is the combined output of the eval
+// round-1 fuse step. EvalMultJoined feeds round 2; EvalSumFinal is
+// the completed eval-sum key used as input to round 2's combine.
+type CombineEvalKeyRound1Result struct {
+	EvalMultJoined []byte
+	EvalSumFinal   []byte
+}
+
+// CombineEvalKeyRound1 fuses all N participants' eval round-1 shares.
+func (c *Client) CombineEvalKeyRound1(
+	params ContractParams,
+	pks [][]byte,
+	multShares [][]byte,
+	sumShares [][]byte,
+) (*CombineEvalKeyRound1Result, error) {
+	encPKs := make([]string, len(pks))
+	for i, pk := range pks {
+		encPKs[i] = encodeB64(pk)
+	}
+	encMult := make([]string, len(multShares))
+	for i, s := range multShares {
+		encMult[i] = encodeB64(s)
+	}
+	encSum := make([]string, len(sumShares))
+	for i, s := range sumShares {
+		encSum[i] = encodeB64(s)
+	}
+	resp, err := c.call(Request{
+		Op:                   "combine_evalkey_round1",
+		Params:               params,
+		PublicKeys:           encPKs,
+		EvalMultRound1Shares: encMult,
+		EvalSumRound1Shares:  encSum,
+	})
+	if err != nil {
+		return nil, err
+	}
+	joined, err := decodeB64(resp.EvalMultJoined)
+	if err != nil {
+		return nil, err
+	}
+	sumFinal, err := decodeB64(resp.EvalSumFinal)
+	if err != nil {
+		return nil, err
+	}
+	return &CombineEvalKeyRound1Result{EvalMultJoined: joined, EvalSumFinal: sumFinal}, nil
+}
+
+// CombineEvalKeyRound2 fuses every participant's round-2 final eval
+// share into the joint eval-mult key. finalPublicKey is the joint
+// public key after all N keygen contributions. evalSumFinal is the
+// completed eval-sum key from CombineEvalKeyRound1.
+func (c *Client) CombineEvalKeyRound2(
+	params ContractParams,
+	finalPublicKey []byte,
+	finalShares [][]byte,
+	evalSumFinal []byte,
+) ([]byte, error) {
+	encoded := make([]string, len(finalShares))
+	for i, s := range finalShares {
+		encoded[i] = encodeB64(s)
+	}
+	resp, err := c.call(Request{
+		Op:                  "combine_evalkey_round2",
+		Params:              params,
+		FinalPublicKey:      encodeB64(finalPublicKey),
+		EvalMultFinalShares: encoded,
+		EvalSumFinalKey:     encodeB64(evalSumFinal),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return decodeB64(resp.EvalMultFinal)
+}
+
+// EvalKeyBundle is the output of a complete N-party distributed keygen
+// chain. It contains everything downstream phases need to encrypt,
+// score, and threshold-decrypt.
+type EvalKeyBundle struct {
+	PublicKey  []byte
+	EvalKeys   []byte
+	KeyShares  []KeyShare // one per participant, ordered by slot
+}
+
+// KeygenChain runs the full N-party distributed CKKS keygen in one
+// process. It chains KeygenFirst / KeygenNext to build the collective
+// public key, then runs the two eval-key rounds to produce joint eval
+// keys. Designed for single-machine smoke tests where all N simulated
+// participants run in the same process.
+//
+// The returned EvalKeyBundle.PublicKey is the final collective public
+// key after all N contributions. Bundle.EvalKeys is the joint eval-key
+// blob suitable for passing to Argmax, EvalPoly, etc.
+// Bundle.KeyShares[i] is participant i's individual key share (PublicKey
+// after their contribution + their SecretKeyShare for partial decrypt).
+func (c *Client) KeygenChain(params ContractParams, n int) (*EvalKeyBundle, error) {
+	if n < 2 {
+		return nil, fmt.Errorf("KeygenChain: n must be >= 2, got %d", n)
+	}
+
+	shares := make([]KeyShare, n)
+
+	// --- keygen chain ---
+	first, err := c.KeygenFirst(params)
+	if err != nil {
+		return nil, fmt.Errorf("KeygenChain: slot 0 keygen_first: %w", err)
+	}
+	shares[0] = first
+
+	for slot := 1; slot < n; slot++ {
+		next, err := c.KeygenNext(params, shares[slot-1].PublicKey)
+		if err != nil {
+			return nil, fmt.Errorf("KeygenChain: slot %d keygen_next: %w", slot, err)
+		}
+		shares[slot] = next
+	}
+	finalPublicKey := shares[n-1].PublicKey
+
+	// --- eval round 1 ---
+	r1Lead, err := c.EvalKeyRound1Lead(params, shares[0].SecretKeyShare)
+	if err != nil {
+		return nil, fmt.Errorf("KeygenChain: evalkey_round1_lead: %w", err)
+	}
+
+	// Collect all N slots' round-1 shares. Slot 0 contributes the
+	// lead's bases; slots 1..N-1 contribute their participant shares.
+	pks := make([][]byte, n)
+	multShares := make([][]byte, n)
+	sumShares := make([][]byte, n)
+	pks[0] = shares[0].PublicKey
+	multShares[0] = r1Lead.EvalMultBase
+	sumShares[0] = r1Lead.EvalSumBase
+
+	for slot := 1; slot < n; slot++ {
+		ps, err := c.EvalKeyRound1Participant(params,
+			shares[slot].SecretKeyShare,
+			r1Lead.EvalMultBase, r1Lead.EvalSumBase,
+			shares[slot].PublicKey,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("KeygenChain: slot %d evalkey_round1_participant: %w", slot, err)
+		}
+		pks[slot] = shares[slot].PublicKey
+		multShares[slot] = ps.EvalMultShare
+		sumShares[slot] = ps.EvalSumShare
+	}
+
+	r1Combined, err := c.CombineEvalKeyRound1(params, pks, multShares, sumShares)
+	if err != nil {
+		return nil, fmt.Errorf("KeygenChain: combine_evalkey_round1: %w", err)
+	}
+
+	// --- eval round 2 ---
+	r2Shares := make([][]byte, n)
+	for slot := 0; slot < n; slot++ {
+		final, err := c.EvalKeyRound2Participant(params,
+			shares[slot].SecretKeyShare,
+			r1Combined.EvalMultJoined, finalPublicKey,
+			slot == 0,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("KeygenChain: slot %d evalkey_round2_participant: %w", slot, err)
+		}
+		r2Shares[slot] = final
+	}
+
+	evalKeys, err := c.CombineEvalKeyRound2(params, finalPublicKey, r2Shares, r1Combined.EvalSumFinal)
+	if err != nil {
+		return nil, fmt.Errorf("KeygenChain: combine_evalkey_round2: %w", err)
+	}
+
+	return &EvalKeyBundle{
+		PublicKey: finalPublicKey,
+		EvalKeys:  evalKeys,
+		KeyShares: shares,
+	}, nil
 }
 
 // FusePartials combines participants' partial decryptions into the

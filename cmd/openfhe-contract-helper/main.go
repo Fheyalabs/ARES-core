@@ -38,6 +38,13 @@ type request struct {
 	Partials       []string           `json:"partials,omitempty"`
 	NSlots         int                `json:"n_slots,omitempty"`
 
+	// combine_evalkey_round1 / combine_evalkey_round2 inputs.
+	PublicKeys           []string `json:"public_keys,omitempty"`
+	EvalMultRound1Shares []string `json:"eval_mult_round1_shares,omitempty"`
+	EvalSumRound1Shares  []string `json:"eval_sum_round1_shares,omitempty"`
+	EvalMultFinalShares  []string `json:"eval_mult_final_shares,omitempty"`
+	EvalSumFinalKey      string   `json:"eval_sum_final_key,omitempty"`
+
 	// Decomposable scoring primitives. See helperclient/scoring_ops.go.
 	EvalKeys       string             `json:"eval_keys,omitempty"`
 	CiphertextA    string             `json:"ciphertext_a,omitempty"`
@@ -64,6 +71,14 @@ type response struct {
 
 	// argmax returns a per-candidate mask ciphertext list.
 	Ciphertexts []string `json:"ciphertexts,omitempty"`
+
+	// combine_evalkey_round1 outputs the joined intermediate that
+	// every participant signs in round 2, plus the final eval-sum key.
+	EvalMultJoined string `json:"eval_mult_joined,omitempty"`
+	EvalSumFinal   string `json:"eval_sum_final,omitempty"`
+
+	// combine_evalkey_round2 outputs the joint eval-mult key.
+	EvalMultFinal string `json:"eval_mult_final,omitempty"`
 }
 
 func main() {
@@ -219,6 +234,48 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{Partial: encodeB64(partial)}, nil
+	case "combine_evalkey_round1":
+		pks, err := decodeB64Slice("public_keys", req.PublicKeys)
+		if err != nil {
+			return response{}, err
+		}
+		multShares, err := decodeB64Slice("eval_mult_round1_shares", req.EvalMultRound1Shares)
+		if err != nil {
+			return response{}, err
+		}
+		sumShares, err := decodeB64Slice("eval_sum_round1_shares", req.EvalSumRound1Shares)
+		if err != nil {
+			return response{}, err
+		}
+		combined, err := openfhe.CombineEvalKeyRound1(params, pks, multShares, sumShares)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalMultJoined: encodeB64(combined.EvalMultJoined),
+			EvalSumFinal:   encodeB64(combined.EvalSumFinal),
+		}, nil
+	case "combine_evalkey_round2":
+		finalPK, err := decodeB64("final_public_key", req.FinalPublicKey)
+		if err != nil {
+			return response{}, err
+		}
+		finalShares, err := decodeB64Slice("eval_mult_final_shares", req.EvalMultFinalShares)
+		if err != nil {
+			return response{}, err
+		}
+		sumFinal, err := decodeB64("eval_sum_final_key", req.EvalSumFinalKey)
+		if err != nil {
+			return response{}, err
+		}
+		final, err := openfhe.CombineEvalKeyRound2(params, finalPK, finalShares, sumFinal)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalMultFinal: encodeB64(final.EvalMultFinal),
+			EvalSumFinal:  encodeB64(final.EvalSumFinal),
+		}, nil
 	case "fuse_partials":
 		partials := make([][]byte, 0, len(req.Partials))
 		for i, raw := range req.Partials {
@@ -356,6 +413,18 @@ func keyShareResponse(share openfhe.DistributedKeyShare) response {
 		SecretKeyShare: encodeB64(share.SecretKeyShare),
 		Lead:           &lead,
 	}
+}
+
+func decodeB64Slice(field string, values []string) ([][]byte, error) {
+	out := make([][]byte, len(values))
+	for i, v := range values {
+		raw, err := decodeB64(fmt.Sprintf("%s[%d]", field, i), v)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = raw
+	}
+	return out, nil
 }
 
 func decodeB64(field, value string) ([]byte, error) {

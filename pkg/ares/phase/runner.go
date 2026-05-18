@@ -297,6 +297,14 @@ func (r *SessionRunner) BeginSession(sessionID, cohortID string) (*SessionContex
 	r.mu.Lock()
 	tracker.entered = true
 	r.mu.Unlock()
+	// Note: BeginSession does NOT cascade past the initial phase even
+	// if its CheckComplete is true. Callers (typically a SessionTrigger
+	// implementation) seed canonical context entries via ctx.Set after
+	// BeginSession returns, and then call AdvanceToState to walk into
+	// the first message-consuming phase. Cascading here would call
+	// the second phase's Enter before the trigger seeded context, which
+	// breaks Enter-time validation patterns like
+	// PhasePreSharedKeyLookup that check runtime ctx for required keys.
 	return ctx, nil
 }
 

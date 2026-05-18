@@ -66,6 +66,34 @@ class KeyShare:
 
 
 @dataclass
+class EvalKeyRound1Result:
+    """Lead participant's round-1 output (bases everyone else extends)."""
+    eval_mult_base: bytes
+    eval_sum_base: bytes
+
+
+@dataclass
+class EvalKeyRound1ParticipantShare:
+    """Non-lead participant's round-1 contribution."""
+    eval_mult_switch_share: bytes
+    eval_sum_share: bytes
+
+
+@dataclass
+class EvalKeyRound1Combined:
+    """Output of combine_evalkey_round1 — orchestrator-side aggregation."""
+    eval_mult_joined: bytes
+    eval_sum_final: bytes
+
+
+@dataclass
+class EvalKeyFinal:
+    """Output of combine_evalkey_round2 — the joint eval-mult + eval-sum keys."""
+    eval_mult_final: bytes
+    eval_sum_final: bytes
+
+
+@dataclass
 class EvalPolyParams:
     """Polynomial-evaluation configuration. Coefficients are in
     ascending order (coefficients[0] is the constant term).
@@ -87,15 +115,16 @@ class OpenFHEHelper:
     async def start(self) -> None:
         if self._proc is not None:
             return
-        # CKKS serialized public keys and eval-mult keys are large
-        # (hundreds of KiB to MiB). Bump the stream buffer above the
-        # default 64 KiB so readline can return them whole.
+        # CKKS serialized public keys, eval-mult keys, and argmax mask
+        # bundles can be tens to hundreds of MiB at production ring
+        # dimensions. Bump the stream buffer well above the default
+        # 64 KiB so readline returns whole envelopes.
         self._proc = await asyncio.create_subprocess_exec(
             self._binary_path,
             "--daemon",
             stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE,
-            limit=64 * 1024 * 1024,
+            limit=512 * 1024 * 1024,
         )
 
     async def close(self) -> None:
@@ -179,6 +208,113 @@ class OpenFHEHelper:
             n_slots=n_slots,
         )
         return list(r.get("values", []))
+
+    # ── Eval-key rounds + combine (full N-party threshold keygen) ────
+
+    async def evalkey_round1_lead(self, params: ContractParams, secret_key_share: bytes) -> EvalKeyRound1Result:
+        r = await self._call("evalkey_round1_lead", params,
+            secret_key_share=_b64enc(secret_key_share))
+        return EvalKeyRound1Result(
+            eval_mult_base=_b64dec(r["eval_mult_base"]),
+            eval_sum_base=_b64dec(r["eval_sum_base"]),
+        )
+
+    async def evalkey_round1_participant(
+        self, params: ContractParams,
+        secret_key_share: bytes,
+        eval_mult_base: bytes, eval_sum_base: bytes,
+        own_public_key: bytes,
+    ) -> EvalKeyRound1ParticipantShare:
+        r = await self._call("evalkey_round1_participant", params,
+            secret_key_share=_b64enc(secret_key_share),
+            eval_mult_base=_b64enc(eval_mult_base),
+            eval_sum_base=_b64enc(eval_sum_base),
+            own_public_key=_b64enc(own_public_key))
+        return EvalKeyRound1ParticipantShare(
+            eval_mult_switch_share=_b64dec(r["eval_mult_share"]),
+            eval_sum_share=_b64dec(r["eval_sum_share"]),
+        )
+
+    async def combine_evalkey_round1(
+        self, params: ContractParams,
+        public_keys: list[bytes],
+        eval_mult_round1_shares: list[bytes],
+        eval_sum_round1_shares: list[bytes],
+    ) -> EvalKeyRound1Combined:
+        r = await self._call("combine_evalkey_round1", params,
+            public_keys=[_b64enc(b) for b in public_keys],
+            eval_mult_round1_shares=[_b64enc(b) for b in eval_mult_round1_shares],
+            eval_sum_round1_shares=[_b64enc(b) for b in eval_sum_round1_shares])
+        return EvalKeyRound1Combined(
+            eval_mult_joined=_b64dec(r["eval_mult_joined"]),
+            eval_sum_final=_b64dec(r["eval_sum_final"]),
+        )
+
+    async def evalkey_round2_participant(
+        self, params: ContractParams,
+        secret_key_share: bytes,
+        eval_mult_joined: bytes,
+        final_public_key: bytes,
+        lead: bool,
+    ) -> bytes:
+        """Returns the participant's round-2 eval-mult-final share."""
+        r = await self._call("evalkey_round2_participant", params,
+            secret_key_share=_b64enc(secret_key_share),
+            eval_mult_joined=_b64enc(eval_mult_joined),
+            final_public_key=_b64enc(final_public_key),
+            lead=lead)
+        return _b64dec(r["eval_mult_final_share"])
+
+    async def combine_evalkey_round2(
+        self, params: ContractParams,
+        final_public_key: bytes,
+        eval_mult_final_shares: list[bytes],
+        eval_sum_final_key: bytes,
+    ) -> EvalKeyFinal:
+        r = await self._call("combine_evalkey_round2", params,
+            final_public_key=_b64enc(final_public_key),
+            eval_mult_final_shares=[_b64enc(b) for b in eval_mult_final_shares],
+            eval_sum_final_key=_b64enc(eval_sum_final_key))
+        return EvalKeyFinal(
+            eval_mult_final=_b64dec(r["eval_mult_final"]),
+            eval_sum_final=_b64dec(r["eval_sum_final"]),
+        )
+
+    async def run_full_keygen(self, params: ContractParams, n_participants: int) -> tuple[list[KeyShare], EvalKeyFinal]:
+        """Convenience: run the complete N-party chained threshold keygen.
+
+        Returns (per-participant shares including PK + secret share + lead
+        flag, joint eval-mult/eval-sum key bundle). Useful for smoke
+        drivers that need to set up a session-context end-to-end.
+        """
+        shares: list[KeyShare] = []
+        first = await self.keygen_first(params)
+        shares.append(first)
+        for i in range(1, n_participants):
+            nxt = await self.keygen_next(params, shares[-1].public_key)
+            shares.append(nxt)
+        final_pk = shares[-1].public_key
+
+        lead = await self.evalkey_round1_lead(params, shares[0].secret_key_share)
+        pks = [s.public_key for s in shares]
+        mult_round1 = [lead.eval_mult_base]
+        sum_round1 = [lead.eval_sum_base]
+        for s in shares[1:]:
+            r1 = await self.evalkey_round1_participant(
+                params, s.secret_key_share, lead.eval_mult_base, lead.eval_sum_base, s.public_key,
+            )
+            mult_round1.append(r1.eval_mult_switch_share)
+            sum_round1.append(r1.eval_sum_share)
+        combined = await self.combine_evalkey_round1(params, pks, mult_round1, sum_round1)
+
+        final_shares = []
+        for s in shares:
+            share = await self.evalkey_round2_participant(
+                params, s.secret_key_share, combined.eval_mult_joined, final_pk, s.lead,
+            )
+            final_shares.append(share)
+        final = await self.combine_evalkey_round2(params, final_pk, final_shares, combined.eval_sum_final)
+        return shares, final
 
     # ── Decomposable scoring primitives ──────────────────────────────
 

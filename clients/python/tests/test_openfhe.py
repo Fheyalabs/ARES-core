@@ -85,35 +85,45 @@ async def test_encrypt_partial_decrypt_fuse_roundtrip(helper_binary):
 
 @pytest.mark.asyncio
 async def test_argmax_picks_winner(helper_binary):
-    """End-to-end argmax over three encrypted scalars with the
-    [0, 1]-indicator sharpening polynomial. The candidate with the
-    highest score must come out with the largest mask value after
-    decryption."""
-    params = ContractParams(ring_dim=8192, depth=10)
+    """End-to-end argmax over three encrypted scalars driven entirely
+    from Python. Builds the full N-party threshold keygen chain via the
+    new combine_evalkey_round1 / combine_evalkey_round2 ops, encrypts
+    three normalized scalar scores, runs argmax with the [0, 1]-
+    indicator sharpening polynomial, threshold-decrypts each returned
+    mask, and verifies the highest score wins.
+    """
+    params = ContractParams(ring_dim=8192, depth=10, scaling_mod_size=50)
     scores = [0.5, -0.3, 0.0]
     expected_winner = 0
 
     async with OpenFHEHelper(helper_binary) as h:
-        first = await h.keygen_first(params)
-        second = await h.keygen_next(params, first.public_key)
-        joint = second.public_key
+        shares, eval_keys = await h.run_full_keygen(params, n_participants=2)
+        joint = shares[-1].public_key
 
-        # The eval-mult key chain is not (yet) exposed as a single
-        # Python convenience. The Go cgo bridge handles it directly
-        # in tests; for the Python smoke we'd build the chain via
-        # multiple round1/round2 helper calls. Skip the argmax
-        # subtest if we can't make eval-keys cheaply.
-        pytest.skip("argmax test requires eval-mult key construction — wired in Phase 5 smoke harness")
-
-        # Encrypt each score as a 1-slot ciphertext.
         cts = []
         for s in scores:
             ct = await h.encrypt(params, joint, [s, 0.0, 0.0, 0.0])
             cts.append(ct)
 
-        masks = await h.argmax(params, eval_keys=b"", ciphertexts=cts,
-                                sharpening_poly=sharpen_indicator_degree3())
+        masks = await h.argmax(
+            params, eval_keys.eval_mult_final, cts,
+            sharpening_poly=sharpen_indicator_degree3(),
+        )
         assert len(masks) == len(scores)
+
+        # Threshold-decrypt every mask and pick the largest.
+        mask_values: list[float] = []
+        for m in masks:
+            p1 = await h.partial_decrypt(params, m, shares[0].secret_key_share, shares[0].lead)
+            p2 = await h.partial_decrypt(params, m, shares[1].secret_key_share, shares[1].lead)
+            values = await h.fuse_partials(params, [p1, p2], n_slots=4)
+            mask_values.append(values[0])
+
+        winner_idx = max(range(len(mask_values)), key=lambda i: mask_values[i])
+        assert winner_idx == expected_winner, (
+            f"argmax picked {winner_idx} (mask={mask_values[winner_idx]}); "
+            f"masks={mask_values}"
+        )
 
 
 @pytest.mark.asyncio

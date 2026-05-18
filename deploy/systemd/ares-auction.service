@@ -1,0 +1,38 @@
+[Unit]
+Description=ARES-core sealed-bid auction session-service (port 8000)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ares
+Group=ares
+WorkingDirectory=/opt/ares-core
+ExecStart=/opt/ares-core/bin/auction-service
+
+# Helper mode (real CKKS argmax). Remove the line below to run in stub
+# mode for wire-only smokes.
+Environment=ARES_HELPER_BINARY=/opt/ares-core/bin/openfhe-helper
+
+# Session-service config. Override SESSION_PORT or ARES_WS_SECRET here.
+Environment=SESSION_PORT=8000
+EnvironmentFile=-/etc/ares-core/auction.env
+
+# Sandboxing — Fheya's hardening baseline.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log/ares-core
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
