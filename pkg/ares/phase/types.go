@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package phase defines the core abstractions for composing ARES sessions
 // out of pluggable units of work. A SessionRunner is a list of Phases;
 // each Phase declares the session state it owns, the WebSocket message

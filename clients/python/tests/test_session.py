@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Tests for ARESSession wire format and token derivation.
 
 End-to-end WS tests against a live server live in tests/test_e2e.py

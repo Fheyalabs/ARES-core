@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end recurring-cohort weekly smoke against a live homelab.
 
 Targets the cohort session-service running in weekly mode

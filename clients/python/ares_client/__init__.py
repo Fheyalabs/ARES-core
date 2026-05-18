@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """Generic Python client for ARES-core applications.
 
 Public entry points:

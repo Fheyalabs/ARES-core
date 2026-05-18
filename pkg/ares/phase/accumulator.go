@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 package phase
 
 // AccumulateMessage stores payload under bucketKey indexed by sender. The

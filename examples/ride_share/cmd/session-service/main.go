@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Command session-service runs the ride-share example as a standalone
 // HTTP+WebSocket service.
 //

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end ride-share smoke against a live homelab session-service.
 
 Mirrors auction_homelab_smoke (commit ce42ce8) for the ride-share app:

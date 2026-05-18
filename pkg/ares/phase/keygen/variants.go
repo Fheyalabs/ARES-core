@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package keygen provides alternative key-generation Phase
 // implementations that slot into the same LOCKED → GOSSIP arc
 // as defaults.Phase0aThresholdKeygen. Each variant produces the

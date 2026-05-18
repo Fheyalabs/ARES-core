@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package rideshare demonstrates an inDrive-style ride-sharing
 // application on ARES: one rider and N drivers submit encrypted
 // bids reflecting price and location. ARES computes a composite

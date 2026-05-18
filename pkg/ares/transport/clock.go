@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package transport provides the WebSocket hub, auth middleware, artifact
 // store, HTTP admin surface, and session-lifecycle plumbing that an ARES
 // application needs to host a SessionRunner over the network.

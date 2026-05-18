@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 // Package defaults provides Phase implementations corresponding to the
 // ARES v2.4 protocol specification phases (Phase 0a, 0b, 1a, 1b, 2, 3,
 // G, G.2, D — see ARES_Protocol_Specification_v2_4.tex). Together they

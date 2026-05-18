@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end tests for the Python OpenFHEHelper IPC client.
 
 Builds the helper binary (-tags openfhe) on demand and exercises

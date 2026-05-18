@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: Apache-2.0
 """End-to-end cohort-formation smoke against a live homelab.
 
 Formation is the "once per cohort" key-generation pipeline:
