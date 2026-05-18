@@ -3,6 +3,7 @@ package transport
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
@@ -33,6 +34,7 @@ func (a *AdminHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /admin/stats", a.handleStats)
 	mux.HandleFunc("POST /admin/sessions", a.handleSessionStart)
 	mux.HandleFunc("GET /admin/sessions/{id}", a.handleSessionGet)
+	mux.HandleFunc("GET /admin/sessions/{id}/results", a.handleSessionResults)
 	mux.HandleFunc("PUT /v2/artifacts/{key}", a.handleArtifactPut)
 	mux.HandleFunc("GET /v2/artifacts/{key}", a.handleArtifactGet)
 }
@@ -106,6 +108,29 @@ func (a *AdminHandlers) handleSessionGet(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, sessionStartResponse{
 		SessionID: id,
 		State:     string(state),
+	})
+}
+
+// handleSessionResults exports named session-context entries for the
+// given session. Query param `keys` is a comma-separated list of
+// context key names. Values are hex-encoded for []byte, JSON-encoded
+// for map[string]any, and string-form for scalars. Keys absent from
+// the context are silently omitted from the response.
+func (a *AdminHandlers) handleSessionResults(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := a.Runner.CurrentState(id); !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	keys := strings.Split(r.URL.Query().Get("keys"), ",")
+	if len(keys) == 0 || (len(keys) == 1 && keys[0] == "") {
+		http.Error(w, "?keys= is required (comma-separated context key names)", http.StatusBadRequest)
+		return
+	}
+	results := a.Runner.SessionContextKeys(id, keys)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": id,
+		"results":    results,
 	})
 }
 

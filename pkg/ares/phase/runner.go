@@ -1,6 +1,8 @@
 package phase
 
 import (
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -481,6 +483,52 @@ func (r *SessionRunner) CurrentState(sessionID string) (SessionState, bool) {
 		return StateNone, false
 	}
 	return t.state, true
+}
+
+// SessionContext returns the SessionContext for sessionID, or nil if
+// the session is not tracked. The returned context is the live object
+// that phases read and write — callers must not mutate it concurrently
+// with the runner's dispatch.
+func (r *SessionRunner) SessionContext(sessionID string) *SessionContext {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	t, ok := r.sessions[sessionID]
+	if !ok {
+		return nil
+	}
+	return t.ctx
+}
+
+// SessionContextKeys returns the named session-context entries for
+// sessionID. Only keys listed in `names` are returned; if a key is
+// absent from the context it is omitted from the result. Returns nil
+// if the session is not tracked.
+func (r *SessionRunner) SessionContextKeys(sessionID string, names []string) map[string]string {
+	ctx := r.SessionContext(sessionID)
+	if ctx == nil {
+		return nil
+	}
+	out := make(map[string]string, len(names))
+	for _, k := range names {
+		v, ok := ctx.Get(k)
+		if !ok {
+			continue
+		}
+		switch val := v.(type) {
+		case []byte:
+			out[k] = hex.EncodeToString(val)
+		case string:
+			out[k] = val
+		case map[string]any:
+			b, err := json.Marshal(val)
+			if err == nil {
+				out[k] = string(b)
+			}
+		default:
+			out[k] = fmt.Sprintf("%v", val)
+		}
+	}
+	return out
 }
 
 func phaseConsumes(p Phase, msgType string) bool {
