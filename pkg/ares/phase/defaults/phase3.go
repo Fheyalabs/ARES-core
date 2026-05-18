@@ -4,12 +4,12 @@ package defaults
 
 import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
-// Phase3ThresholdDecrypt is ARES v2.4 §"Phase 3 — Threshold
-// Decrypt". Each participant submits a partial decryption of
-// `ct_winner_pkg` using its secret share from Phase 0a; the server
-// fuses the partials and runs the bit-payload recovery logic from
-// crypto-lab finding 2026-04-23 to extract the byte-encoded winner
-// package. The phase owns DECRYPTING → BROADCASTING.
+// Phase3ThresholdDecrypt is the generic threshold-decryption phase.
+// Each participant submits a partial decryption of the scorer's
+// emitted result ciphertext (CtxResultCiphertext) using its secret
+// share from Phase 0a; the server fuses the partials and writes the
+// recovered plaintext bytes to CtxResultBytes. The phase owns
+// DECRYPTING → BROADCASTING.
 //
 // Alternative implementations:
 //   - Phase3SinglePartyDecrypt: when Phase0a is SinglePartyKeygen,
@@ -36,13 +36,13 @@ func (Phase3ThresholdDecrypt) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxParticipants:        {TypeName: "[]string", Required: true},
 		CtxSecretShares:        {TypeName: "map[string][]byte", Required: true},
-		CtxCipherWinnerPackage: {TypeName: "[]byte", Required: true},
+		CtxResultCiphertext: {TypeName: "[]byte", Required: true},
 	}
 }
 
 func (Phase3ThresholdDecrypt) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
-		CtxWinnerPackage: {TypeName: "[]byte"},
+		CtxResultBytes: {TypeName: "[]byte"},
 	}
 }
 

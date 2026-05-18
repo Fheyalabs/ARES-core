@@ -1,34 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package defaults provides Phase implementations corresponding to the
-// ARES v2.4 protocol specification phases (Phase 0a, 0b, 1a, 1b, 2, 3,
-// G, G.2, D — see ARES_Protocol_Specification_v2_4.tex). Together they
-// form the canonical session pipeline that an ARES application
-// receives by calling NewARESDefaultRunner.
+// Package defaults provides generic phase implementations the ARES
+// framework ships out of the box. Each phase corresponds to one arc
+// of the canonical session state machine:
 //
-// Each spec phase owns one state-machine arc. Today's internal engine
-// uses finer-grained sub-states (LOCKED → KEYGEN → GOSSIP); the
-// framework abstraction folds keygen-internal accumulation into Phase
-// 0a so the spec-phase mapping is 1:1 with state arcs. Phase
-// implementations declare the WebSocket message types they consume
-// and the SessionContext keys they read or produce; the SessionRunner
-// validates this chain at construction time and derives the session
-// state machine from the registered phase list.
+//	Phase 1a — Session Initiation          (INVITING   → LOCKED)
+//	Phase 0a — Threshold Keygen            (LOCKED     → GOSSIP)
+//	Phase 3  — Threshold Decrypt           (DECRYPTING → BROADCASTING)
 //
-// This file pins the SessionState labels used by the default phases.
-// They match the labels in internal/engine/session.go for now so the
-// follow-on logic port can wire one pipeline through the other
-// without renaming. Application authors normally never reference
-// these strings directly — they get a complete pipeline via
-// NewARESDefaultRunner and override individual phases by swapping
-// values into the runner's phase list.
+// Generic-shape state labels (LOCKED, KEYGEN, GOSSIP, VERIFYING,
+// SUBMITTING, SCORING, DECRYPTING, BROADCASTING, CLOSED) are also
+// declared here so app authors can compose pipelines that include
+// the GOSSIP / VERIFYING / SUBMITTING arcs even though no default
+// phase claims those states yet. Applications supply the missing
+// phases (input submission, scoring, post-result) themselves; see
+// `examples/sealed_bid_auction/`, `examples/ride_share/`, and
+// `examples/recurring_cohort_ranking/` for full pipelines.
+//
+// Phases that were historically named for an ARES-as-matchmaking
+// reading (encrypted profile submit, FHE cosine scoring, anonymous
+// post-result broadcast, onion shuffle, verification) live in
+// application repositories, not here. The framework deliberately
+// ships no opinionated default runner — applications compose their
+// own pipeline via `phase.Compose(...)`.
 package defaults
 
 import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 
-// SessionState labels for the canonical ARES pipeline. These match
-// the existing internal/engine SessionState constants so the framework
-// and the current hardcoded state machine refer to the same arcs.
+// SessionState labels covering the canonical state-machine arcs.
+// Applications may use the subset their pipeline traverses.
 const (
 	StateInviting     phase.SessionState = "INVITING"
 	StateLocked       phase.SessionState = "LOCKED"
@@ -36,11 +36,9 @@ const (
 	// engine transitions LOCKED → KEYGEN on the first
 	// KeyShareSubmitted event and accumulates remaining keyshare
 	// and eval-round events within KEYGEN before transitioning
-	// to GOSSIP on KeygenComplete. The framework folds the whole
-	// sequence into Phase 0a; KEYGEN is declared as an
-	// InternalState there so PhaseForState and AdvanceToState
-	// treat it as "still inside Phase 0a" rather than a missing
-	// phase.
+	// to GOSSIP on KeygenComplete. Phase 0a declares KEYGEN as
+	// an InternalState so PhaseForState / AdvanceToState treat
+	// it as "still inside Phase 0a" rather than a missing phase.
 	StateKeygen       phase.SessionState = "KEYGEN"
 	StateGossip       phase.SessionState = "GOSSIP"
 	StateVerifying    phase.SessionState = "VERIFYING"
@@ -51,67 +49,44 @@ const (
 	StateClosed       phase.SessionState = "CLOSED"
 )
 
-// SessionContext key names used to plumb state between default
-// phases. App authors replacing a phase must produce keys with these
-// names (or update the consuming phases to read different keys).
+// SessionContext key names used by the framework's generic default
+// phases. Applications may reference these directly when composing
+// pipelines that include Phase 1a, Phase 0a, or Phase 3, and add
+// their own keys for app-specific phases.
 const (
 	// CtxParticipants holds the ordered list of participant
-	// pseudonyms for the session. Provided by Phase1a; consumed by
-	// every later phase.
+	// pseudonyms for the session. Typically provided by Phase 1a;
+	// consumed by every later phase.
 	CtxParticipants = "participants"
 
-	// CtxCryptoContract holds the OpenFHE / CKKS parameter contract
-	// (ring_dim, depth, scaling_mod_size, ...). Provided by Phase0a
-	// or by an out-of-band CohortKeygenPhase; consumed by Phase1b,
-	// Phase2, Phase3.
+	// CtxCryptoContract holds the FHE / CKKS parameter contract
+	// (ring_dim, depth, scaling_mod_size, ...). Typically provided
+	// by Phase 0a or by an out-of-band cohort-keygen phase.
 	CtxCryptoContract = "crypto_ctx"
 
 	// CtxCollectivePublicKey holds the joint public key after
-	// threshold keygen. Provided by Phase0a; consumed by Phase1b
-	// (for encryption) and Phase2.
+	// threshold keygen. Provided by Phase 0a; consumed by phases
+	// that encrypt under the session key.
 	CtxCollectivePublicKey = "collective_pk"
 
 	// CtxSecretShares holds per-participant threshold secret key
-	// shares. Provided by Phase0a; consumed by Phase3 for partial
-	// decrypt and by Phase2 indirectly via eval keys.
+	// shares. Provided by Phase 0a; consumed by Phase 3 for
+	// partial decrypt.
 	CtxSecretShares = "secret_shares"
 
 	// CtxEvalKeys holds the collective evaluation keys (eval-mult,
-	// eval-sum) needed for Phase2 homomorphic operations.
-	// Provided by Phase0a; consumed by Phase2.
+	// eval-sum) needed for homomorphic operations in the scoring
+	// phase. Provided by Phase 0a.
 	CtxEvalKeys = "eval_keys"
 
-	// CtxOnionRoundsComplete tracks gossip-phase progress.
-	CtxOnionRoundsComplete = "onion_rounds_complete"
+	// CtxResultCiphertext holds the scorer's emitted result
+	// ciphertext — the FHE-evaluated output that Phase 3 will
+	// threshold-decrypt. Provided by the app's scoring phase;
+	// consumed by Phase 3.
+	CtxResultCiphertext = "result_ct"
 
-	// CtxContribHashes holds verified per-participant contribution
-	// hashes from Phase G.2.
-	CtxContribHashes = "contrib_hashes"
-
-	// CtxMacSeeds holds per-participant MAC seeds gathered during
-	// Phase G.2 and used to derive the session MAC key for Phase D.
-	CtxMacSeeds = "mac_seeds"
-
-	// CtxSessionMacKey holds the derived session MAC key (Phase G.2
-	// → consumed by Phase D for message authentication).
-	CtxSessionMacKey = "session_mac_key"
-
-	// CtxEncryptedInputs holds the participant-submitted profile
-	// ciphertexts and the initiator winner-package wrap. Provided
-	// by Phase1b; consumed by Phase2.
-	CtxEncryptedInputs = "encrypted_inputs"
-
-	// CtxCipherWinnerPackage holds the FHE scorer's emitted
-	// `ct_winner_pkg`. Provided by Phase2; consumed by Phase3.
-	CtxCipherWinnerPackage = "ct_winner_pkg"
-
-	// CtxWinnerPackage holds the decrypted, threshold-recovered
-	// winner package. Provided by Phase3; consumed by Phase D
-	// (which broadcasts it to all participants).
-	CtxWinnerPackage = "winner_pkg"
-
-	// CtxPhaseDSchedule holds the rate-limited per-participant
-	// Phase D message-sending schedules. Provided by PhaseD on
-	// entry; consumed by the PhaseD message handler.
-	CtxPhaseDSchedule = "phased_schedule"
+	// CtxResultBytes holds the threshold-decrypted plaintext result
+	// recovered from CtxResultCiphertext. Provided by Phase 3;
+	// consumed by the app's post-result phase (if any).
+	CtxResultBytes = "result_bytes"
 )
