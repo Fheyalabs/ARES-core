@@ -62,7 +62,10 @@ func TestCohortService_FormationStartsAtForming(t *testing.T) {
 		"session_id":   "cohort-A-init",
 		"participants": []string{"m1", "m2", "m3", "m4"},
 	})
-	resp, _ := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d", resp.StatusCode)
@@ -83,7 +86,10 @@ func TestCohortService_WeeklyRequiresKeyBundle(t *testing.T) {
 		"session_id":   "w-missing",
 		"participants": []string{"m1", "m2"},
 	})
-	resp, _ := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusConflict {
 		t.Errorf("status = %d, want 409", resp.StatusCode)

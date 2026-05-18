@@ -95,7 +95,10 @@ func TestAuctionService_SeedsContextWithCanonicalKeys(t *testing.T) {
 		"session_id":   "a-ctx",
 		"participants": []string{"bidder-1", "bidder-2"},
 	})
-	resp, _ := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	resp, err := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
 	resp.Body.Close()
 
 	// Inspect the context indirectly: advance the runner forward and
@@ -115,10 +118,16 @@ func TestAuctionService_RejectsDuplicateSessionID(t *testing.T) {
 		"session_id":   "dup",
 		"participants": []string{"a", "b"},
 	})
-	r1, _ := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	r1, err := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("first POST: %v", err)
+	}
 	r1.Body.Close()
 
-	r2, _ := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	r2, err2 := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
+	if err2 != nil {
+		t.Fatalf("second POST: %v", err2)
+	}
 	defer r2.Body.Close()
 	if r2.StatusCode != http.StatusConflict {
 		t.Errorf("second start status = %d, want 409", r2.StatusCode)
