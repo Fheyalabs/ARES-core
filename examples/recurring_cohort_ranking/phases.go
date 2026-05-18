@@ -1,6 +1,7 @@
 package recurringcohortranking
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -531,10 +532,13 @@ func (PhaseSettleRanking) Provides() phase.ContextSchema {
 }
 func (PhaseSettleRanking) Enter(ctx *phase.SessionContext) error {
 	winner, _ := ctx.Get(CtxWinner)
-	ctx.Set(CtxTranscript, map[string]any{
-		"transcript_for": winner,
-		"signed_by":      "stub-cohort-signature",
-	})
+	transcript := map[string]any{
+		"session_id":    ctx.SessionID,
+		"winner":        winner,
+		"settlement_by": "cohort",
+	}
+	transcript["signature"] = signTranscript(transcript)
+	ctx.Set(CtxTranscript, transcript)
 	return nil
 }
 func (PhaseSettleRanking) OnMessage(*phase.SessionContext, string, string, []byte) error {
@@ -559,4 +563,11 @@ func decodePartialCiphertext(raw []byte) ([]byte, error) {
 		return nil, fmt.Errorf("no partial_ct or partial field")
 	}
 	return hex.DecodeString(field)
+}
+
+func signTranscript(t map[string]any) string {
+	delete(t, "signature")
+	b, _ := json.Marshal(t)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }

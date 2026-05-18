@@ -1,6 +1,7 @@
 package rideshare
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -460,11 +461,21 @@ func (PhaseSettle) Provides() phase.ContextSchema {
 }
 func (PhaseSettle) Enter(ctx *phase.SessionContext) error {
 	result, _ := ctx.Get(CtxResult)
-	ctx.Set(CtxSettlement, map[string]any{
-		"transcript_for": result,
-		"signed_by":      "stub-rideshare-signature",
-	})
+	transcript := map[string]any{
+		"session_id":    ctx.SessionID,
+		"result":        result,
+		"settlement_by": "rideshare",
+	}
+	transcript["signature"] = signTranscript(transcript)
+	ctx.Set(CtxSettlement, transcript)
 	return nil
+}
+
+func signTranscript(t map[string]any) string {
+	delete(t, "signature")
+	b, _ := json.Marshal(t)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
 }
 func (PhaseSettle) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
 func (PhaseSettle) CheckComplete(*phase.SessionContext) bool                       { return true }

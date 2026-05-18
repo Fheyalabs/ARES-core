@@ -1,6 +1,7 @@
 package sealedbidauction
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -568,12 +569,25 @@ func (PhaseSettlement) Provides() phase.ContextSchema {
 }
 func (PhaseSettlement) Enter(ctx *phase.SessionContext) error {
 	winner, _ := ctx.Get(CtxAuctionWinnerBid)
-	ctx.Set(CtxAuctionSettlement, map[string]any{
-		"transcript_for": winner,
-		"signed_by":      "stub-auctioneer-signature",
-	})
+	transcript := map[string]any{
+		"session_id":     ctx.SessionID,
+		"winner":         winner,
+		"settlement_by":  "auctioneer",
+	}
+	sig := signTranscript(transcript)
+	transcript["signature"] = sig
+	ctx.Set(CtxAuctionSettlement, transcript)
 	return nil
 }
 func (PhaseSettlement) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
 func (PhaseSettlement) CheckComplete(*phase.SessionContext) bool                       { return true }
 func (PhaseSettlement) Exit(*phase.SessionContext) error                               { return nil }
+
+// signTranscript returns a SHA256 hash binding the transcript fields
+// to the session, so any observer can recompute and verify.
+func signTranscript(t map[string]any) string {
+	delete(t, "signature") // strip previous sig for idempotent re-sign
+	b, _ := json.Marshal(t)
+	h := sha256.Sum256(b)
+	return hex.EncodeToString(h[:])
+}
