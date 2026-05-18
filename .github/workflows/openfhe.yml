@@ -1,0 +1,67 @@
+name: openfhe
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+    paths:
+      - 'pkg/ares/crypto/**'
+      - 'cmd/openfhe-contract-helper/**'
+      - 'examples/**'
+      - '.github/workflows/openfhe.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-with-openfhe:
+    name: build + test with OpenFHE 1.5.1
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+          cache: true
+
+      - name: System deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake autoconf
+
+      - name: Cache OpenFHE install
+        id: cache-openfhe
+        uses: actions/cache@v4
+        with:
+          path: /usr/local
+          # Bump the suffix to invalidate the cache when OpenFHE
+          # version or build flags change.
+          key: openfhe-1.5.1-ubuntu-latest-v1
+
+      - name: Build + install OpenFHE 1.5.1
+        if: steps.cache-openfhe.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch v1.5.1 --depth 1 https://github.com/openfheorg/openfhe-development.git /tmp/openfhe
+          cd /tmp/openfhe
+          mkdir build && cd build
+          cmake -DCMAKE_INSTALL_PREFIX=/usr/local -DBUILD_BENCHMARKS=OFF -DBUILD_UNITTESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_EXTRAS=OFF -DWITH_OPENMP=OFF ..
+          make -j$(nproc)
+          sudo make install
+          sudo ldconfig
+
+      - name: Refresh ldconfig (cache hit path)
+        if: steps.cache-openfhe.outputs.cache-hit == 'true'
+        run: sudo ldconfig
+
+      - name: go vet (openfhe)
+        run: go vet -tags openfhe ./...
+
+      - name: go test (openfhe)
+        run: go test -tags openfhe ./... -count=1 -timeout 600s
+
+      - name: openfhe-helper --version
+        run: |
+          go build -tags openfhe -o /tmp/openfhe-helper ./cmd/openfhe-contract-helper
+          /tmp/openfhe-helper --version

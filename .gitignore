@@ -8,7 +8,31 @@
 # Go build artifacts
 *.test
 *.out
+coverage.txt
+coverage.html
 
-# Editor
+# Editor / IDE
 .vscode/
 .idea/
+*.swp
+*~
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local config / secrets
+*.local.yaml
+*.local.yml
+.env
+.env.*
+!.env.example
