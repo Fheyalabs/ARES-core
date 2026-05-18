@@ -26,6 +26,7 @@ type AdminHandlers struct {
 	Runner      *phase.SessionRunner
 	Trigger     SessionTrigger
 	Artifacts   *ArtifactStore
+	EventRing   *SessionEventRing
 }
 
 // RegisterRoutes mounts the admin endpoints on mux.
@@ -35,6 +36,7 @@ func (a *AdminHandlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /admin/sessions", a.handleSessionStart)
 	mux.HandleFunc("GET /admin/sessions/{id}", a.handleSessionGet)
 	mux.HandleFunc("GET /admin/sessions/{id}/results", a.handleSessionResults)
+	mux.HandleFunc("GET /admin/sessions/{id}/events", a.handleSessionEvents)
 	mux.HandleFunc("PUT /v2/artifacts/{key}", a.handleArtifactPut)
 	mux.HandleFunc("GET /v2/artifacts/{key}", a.handleArtifactGet)
 }
@@ -131,6 +133,22 @@ func (a *AdminHandlers) handleSessionResults(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id": id,
 		"results":    results,
+	})
+}
+
+func (a *AdminHandlers) handleSessionEvents(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := a.Runner.CurrentState(id); !ok {
+		http.Error(w, "session not found", http.StatusNotFound)
+		return
+	}
+	events := a.EventRing.Events(id)
+	if events == nil {
+		events = make([]SessionEvent, 0)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id": id,
+		"events":     events,
 	})
 }
 

@@ -45,6 +45,10 @@ type Config struct {
 	// LogStream, if non-nil, is registered on the HTTP mux at
 	// /v2/debug/logs. Construct it via NewLogStream at process start.
 	LogStream *LogStream
+
+	// EventRing, if non-nil, records per-session dispatch events for
+	// retrieval via GET /admin/sessions/{id}/events. nil disables recording.
+	EventRing *SessionEventRing
 }
 
 // Service composes Hub + Artifacts + Admin + LogStream into a runnable
@@ -70,6 +74,12 @@ func NewService(cfg Config) (*Service, error) {
 	if len(cfg.Secret) == 0 && !cfg.AllowDevBypass {
 		return nil, errors.New("transport: empty Secret requires AllowDevBypass=true")
 	}
+
+	// Default event ring if caller didn't supply one. 128 events per
+	// session gives ~2 min of visibility at 1 msg/s.
+	if cfg.EventRing == nil {
+		cfg.EventRing = NewSessionEventRing(128)
+	}
 	if cfg.Clock == nil {
 		cfg.Clock = RealClock()
 	}
@@ -88,6 +98,7 @@ func NewService(cfg Config) (*Service, error) {
 		Runner:      cfg.Runner,
 		Trigger:     cfg.Trigger,
 		Artifacts:   artifacts,
+		EventRing:   cfg.EventRing,
 	}
 
 	mux := http.NewServeMux()
@@ -105,6 +116,13 @@ func NewService(cfg Config) (*Service, error) {
 			return
 		}
 		_, err := cfg.Runner.HandleMessage(msg.SessionID, msg.Type, c.Pseudonym, msg.Payload)
+		if cfg.EventRing != nil {
+			errStr := ""
+			if err != nil {
+				errStr = err.Error()
+			}
+			cfg.EventRing.Record(msg.SessionID, msg.Type, c.Pseudonym, errStr)
+		}
 		if err != nil && !isPhaseDoesNotConsume(err) {
 			log.Printf("[dispatch] session=%s type=%s from=%s err=%v",
 				shortID(msg.SessionID), msg.Type, shortID(c.Pseudonym), err)
