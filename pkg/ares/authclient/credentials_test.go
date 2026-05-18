@@ -39,7 +39,16 @@ func TestIssuer_DetectsTamperedSignature(t *testing.T) {
 	blob, _ := iss.Issue("acc-1", "invite")
 	var env Envelope
 	_ = json.Unmarshal(blob, &env)
-	env.Signature = env.Signature[:len(env.Signature)-2] + "00"
+	// Flip the last hex char deterministically so the tamper is
+	// always observable (literal "00" would be a no-op ~1/256 of
+	// the time when the real signature happened to end in "00").
+	sig := env.Signature
+	last := sig[len(sig)-1]
+	flipped := byte('0')
+	if last == '0' {
+		flipped = 'f'
+	}
+	env.Signature = sig[:len(sig)-1] + string(flipped)
 	tampered, _ := json.Marshal(env)
 	_, err := iss.Verify(tampered)
 	if !errors.Is(err, ErrCredentialSignature) {
