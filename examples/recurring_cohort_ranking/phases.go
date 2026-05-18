@@ -43,9 +43,27 @@ func (PhaseCohortForm) Exit(*phase.SessionContext) error         { return nil }
 // PhaseCohortKeygen runs the N-party threshold CKKS keygen once
 // and persists the key bundle into context. COHORT_KEYGEN →
 // COHORT_SEALED.
-type PhaseCohortKeygen struct{}
+//
+// Three modes:
+//   - Stub (NewPhaseCohortKeygen): placeholder bytes.
+//   - Helper (NewPhaseCohortKeygenWithHelper): real CKKS keygen via
+//     helperclient.KeygenChain. Generates the joint key bundle that
+//     subsequent weekly sessions reuse.
+//   - Pre-shared: if CtxCollectivePK + CtxEvalKeys are already set
+//     (operator pre-generated the bundle and seeded via attrs), Exit
+//     skips the keygen call.
+type PhaseCohortKeygen struct {
+	helper *helperclient.Client
+}
 
 func NewPhaseCohortKeygen() *PhaseCohortKeygen { return &PhaseCohortKeygen{} }
+
+// NewPhaseCohortKeygenWithHelper runs real CKKS keygen via the
+// helper subprocess. The output bundle is what subsequent weekly
+// runners reuse (cohort key amortization).
+func NewPhaseCohortKeygenWithHelper(helper *helperclient.Client) *PhaseCohortKeygen {
+	return &PhaseCohortKeygen{helper: helper}
+}
 
 func (PhaseCohortKeygen) Name() string              { return "cohort-keygen" }
 func (PhaseCohortKeygen) Lifetime() phase.Lifetime   { return phase.LifetimePerCohort }
@@ -83,12 +101,51 @@ func (PhaseCohortKeygen) CheckComplete(ctx *phase.SessionContext) bool {
 	}
 	return phase.QuorumReached(ctx, bucketCohortKeygenShares, len(participants))
 }
-func (PhaseCohortKeygen) Exit(ctx *phase.SessionContext) error {
+func (p PhaseCohortKeygen) Exit(ctx *phase.SessionContext) error {
 	shares := phase.AccumulatedMessages(ctx, bucketCohortKeygenShares)
-	ctx.Set(CtxCollectivePK, []byte("stub-collective-pk"))
+
+	// Pre-shared bundle: operator/smoke pre-generated keys and the
+	// trigger seeded them into context.
+	pk, hasPK := phase.TryGet[[]byte](ctx, CtxCollectivePK)
+	ek, hasEK := phase.TryGet[[]byte](ctx, CtxEvalKeys)
+	if hasPK && hasEK && len(pk) > 0 && len(ek) > 0 {
+		ctx.Set(CtxSecretShares, shares)
+		if !ctx.Has(CtxCryptoContract) {
+			ctx.Set(CtxCryptoContract, map[string]any{"depth": 10, "ring_dim": 2048})
+		}
+		return nil
+	}
+
+	if p.helper == nil {
+		ctx.Set(CtxCollectivePK, []byte("stub-collective-pk"))
+		ctx.Set(CtxSecretShares, shares)
+		ctx.Set(CtxEvalKeys, []byte("stub-eval-keys"))
+		ctx.Set(CtxCryptoContract, map[string]any{"depth": 10, "ring_dim": 2048})
+		return nil
+	}
+
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok || len(participants) == 0 {
+		return fmt.Errorf("PhaseCohortKeygen: CtxParticipants is missing or empty")
+	}
+	params, err := readCohortContractParams(ctx)
+	if err != nil {
+		// Fall back to the cohort's canonical defaults if the
+		// session context didn't supply a contract.
+		params = helperclient.ContractParams{RingDim: 2048, Depth: 10, ScalingModSize: 50}
+	}
+	keyBundle, err := p.helper.KeygenChain(params, len(participants))
+	if err != nil {
+		return fmt.Errorf("PhaseCohortKeygen: helper.KeygenChain: %w", err)
+	}
+	ctx.Set(CtxCollectivePK, keyBundle.PublicKey)
 	ctx.Set(CtxSecretShares, shares)
-	ctx.Set(CtxEvalKeys, []byte("stub-eval-keys"))
-	ctx.Set(CtxCryptoContract, map[string]any{"depth": 10, "ring_dim": 2048})
+	ctx.Set(CtxEvalKeys, keyBundle.EvalKeys)
+	if !ctx.Has(CtxCryptoContract) {
+		ctx.Set(CtxCryptoContract, map[string]any{
+			"depth": int(params.Depth), "ring_dim": int(params.RingDim),
+		})
+	}
 	return nil
 }
 

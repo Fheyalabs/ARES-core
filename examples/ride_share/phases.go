@@ -40,10 +40,27 @@ func (PhaseInvite) CheckComplete(*phase.SessionContext) bool { return true }
 func (PhaseInvite) Exit(*phase.SessionContext) error     { return nil }
 
 // ── PhaseKeygen: threshold CKKS keygen (shared with other apps) ──
+//
+// Three modes:
+//   - Stub (NewPhaseKeygen): placeholder bytes for both PK and eval keys.
+//   - Helper (NewPhaseKeygenWithHelper): full N-party threshold CKKS
+//     keygen via helperclient.KeygenChain.
+//   - Pre-shared: if the trigger seeded CtxCollectivePK + CtxEvalKeys
+//     before this phase ran, Exit detects them and skips the keygen
+//     call. The smoke client uses this when it pre-generates the key
+//     bundle locally so it can encrypt under matching keys.
 
-type PhaseKeygen struct{}
+type PhaseKeygen struct {
+	helper *helperclient.Client
+}
 
 func NewPhaseKeygen() *PhaseKeygen { return &PhaseKeygen{} }
+
+// NewPhaseKeygenWithHelper produces real CKKS keys via the helper
+// subprocess. Used by NewRideShareRunnerWithHelper.
+func NewPhaseKeygenWithHelper(helper *helperclient.Client) *PhaseKeygen {
+	return &PhaseKeygen{helper: helper}
+}
 
 func (PhaseKeygen) Name() string                        { return "ride-keygen" }
 func (PhaseKeygen) Lifetime() phase.Lifetime            { return phase.LifetimePerSession }
@@ -79,11 +96,41 @@ func (PhaseKeygen) CheckComplete(ctx *phase.SessionContext) bool {
 	}
 	return phase.QuorumReached(ctx, bucketKeygenShares, len(participants))
 }
-func (PhaseKeygen) Exit(ctx *phase.SessionContext) error {
+func (p PhaseKeygen) Exit(ctx *phase.SessionContext) error {
 	shares := phase.AccumulatedMessages(ctx, bucketKeygenShares)
-	ctx.Set(CtxCollectivePK, []byte("stub-collective-pk"))
+
+	// Pre-shared keygen: smoke client pre-generated keys, trigger
+	// seeded them into context. Skip the helper call so downstream
+	// phases see the same bundle the smoke encrypted under.
+	pk, hasPK := phase.TryGet[[]byte](ctx, CtxCollectivePK)
+	ek, hasEK := phase.TryGet[[]byte](ctx, CtxEvalKeys)
+	if hasPK && hasEK && len(pk) > 0 && len(ek) > 0 {
+		ctx.Set(CtxSecretShares, shares)
+		return nil
+	}
+
+	if p.helper == nil {
+		ctx.Set(CtxCollectivePK, []byte("stub-collective-pk"))
+		ctx.Set(CtxSecretShares, shares)
+		ctx.Set(CtxEvalKeys, []byte("stub-eval-keys"))
+		return nil
+	}
+
+	participants, ok := phase.TryGet[[]string](ctx, CtxParticipants)
+	if !ok || len(participants) == 0 {
+		return fmt.Errorf("PhaseKeygen: CtxParticipants is missing or empty")
+	}
+	params, err := readRideContractParams(ctx)
+	if err != nil {
+		return fmt.Errorf("PhaseKeygen: %w", err)
+	}
+	keyBundle, err := p.helper.KeygenChain(params, len(participants))
+	if err != nil {
+		return fmt.Errorf("PhaseKeygen: helper.KeygenChain: %w", err)
+	}
+	ctx.Set(CtxCollectivePK, keyBundle.PublicKey)
 	ctx.Set(CtxSecretShares, shares)
-	ctx.Set(CtxEvalKeys, []byte("stub-eval-keys"))
+	ctx.Set(CtxEvalKeys, keyBundle.EvalKeys)
 	return nil
 }
 

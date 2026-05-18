@@ -23,6 +23,19 @@ func NewCohortFormationRunner() (*phase.SessionRunner, error) {
 	)
 }
 
+// NewCohortFormationRunnerWithHelper substitutes the helper-backed
+// PhaseCohortKeygen so cohort formation produces real CKKS keys
+// instead of stub bytes. The operator pulls the resulting bundle
+// out of CtxCollectivePK + CtxEvalKeys (e.g. via an artifact
+// endpoint) and feeds it into NewWeeklyRankingSessionWithHelper
+// via pre-shared attrs.
+func NewCohortFormationRunnerWithHelper(helper *helperclient.Client) (*phase.SessionRunner, error) {
+	return phase.NewSessionRunner(
+		NewPhaseCohortForm(),
+		NewPhaseCohortKeygenWithHelper(helper),
+	)
+}
+
 // NewWeeklyRankingSession builds a SessionRunner for one weekly
 // session that reuses the cohort's pre-shared key bundle:
 //

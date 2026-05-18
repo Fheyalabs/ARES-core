@@ -30,16 +30,17 @@ func NewRideShareRunner() (*phase.SessionRunner, error) {
 	)
 }
 
-// NewRideShareRunnerWithHelper substitutes the helper-backed
-// PhaseScore for the stub. Sharpening polynomial is invoked on every
-// pairwise driver-score difference.
+// NewRideShareRunnerWithHelper substitutes the helper-backed phases
+// for the stubs. PhaseKeygen produces real threshold CKKS keys
+// (unless pre-shared keys are seeded into context by the trigger)
+// and PhaseScore runs real argmax against the encrypted bids.
 func NewRideShareRunnerWithHelper(
 	helper *helperclient.Client,
 	sharpening helperclient.EvalPolyParams,
 ) (*phase.SessionRunner, error) {
 	return phase.NewSessionRunner(
 		NewPhaseInvite(),
-		NewPhaseKeygen(),
+		NewPhaseKeygenWithHelper(helper),
 		NewPhaseSubmit(),
 		NewPhaseScoreWithHelper(helper, sharpening),
 		NewPhaseDecrypt(),

@@ -44,6 +44,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -60,8 +61,11 @@ import (
 func main() {
 	port := getEnv("SESSION_PORT", "8000")
 	mode := getEnv("COHORT_MODE", "formation")
-	depth, _ := strconv.Atoi(getEnv("COHORT_CRYPTO_DEPTH", "30"))
-	ringDim, _ := strconv.Atoi(getEnv("COHORT_RING_DIM", "16384"))
+	// Cohort defaults match the example's canonical contract
+	// (PhaseCohortKeygen.Provides{depth: 10, ring_dim: 2048}). These
+	// are Mac-safe (~500 KiB keys) — bump via env vars on prod hosts.
+	depth, _ := strconv.Atoi(getEnv("COHORT_CRYPTO_DEPTH", "10"))
+	ringDim, _ := strconv.Atoi(getEnv("COHORT_RING_DIM", "2048"))
 	secret := []byte(os.Getenv("ARES_WS_SECRET"))
 	devBypass := len(secret) == 0
 
@@ -122,11 +126,17 @@ func buildRunner(mode string, depth, ringDim int, helper *helperclient.Client) (
 	cryptoCtx := map[string]any{
 		"depth":            depth,
 		"ring_dim":         ringDim,
-		"scaling_mod_size": 40,
+		"scaling_mod_size": 50,
 	}
 	switch mode {
 	case "formation":
-		runner, err := recurringcohortranking.NewCohortFormationRunner()
+		var runner *phase.SessionRunner
+		var err error
+		if helper != nil {
+			runner, err = recurringcohortranking.NewCohortFormationRunnerWithHelper(helper)
+		} else {
+			runner, err = recurringcohortranking.NewCohortFormationRunner()
+		}
 		if err != nil {
 			return nil, nil, "", err
 		}
@@ -223,6 +233,15 @@ func (t *formationTrigger) Start(sessionID string, participants []string, attrs 
 	for k, v := range attrs {
 		canonical[k] = v
 	}
+	// Optional pre-shared bundle: an operator can re-seed an existing
+	// cohort by passing the previous bundle. PhaseCohortKeygen.Exit
+	// detects it and skips generating a new one.
+	if err := decodeHexAttrs(canonical, []string{
+		recurringcohortranking.CtxCollectivePK,
+		recurringcohortranking.CtxEvalKeys,
+	}); err != nil {
+		return err
+	}
 	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
 		return err
 	}
@@ -260,6 +279,15 @@ func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map
 	for k, v := range attrs {
 		canonical[k] = v
 	}
+	// Pre-shared bundle (required for weekly mode): hex-decode the
+	// public key + eval keys so PhasePreSharedKeyLookup finds typed
+	// []byte values, not strings.
+	if err := decodeHexAttrs(canonical, []string{
+		recurringcohortranking.CtxCollectivePK,
+		recurringcohortranking.CtxEvalKeys,
+	}); err != nil {
+		return err
+	}
 	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
 		return err
 	}
@@ -267,6 +295,28 @@ func (t *weeklyTrigger) Start(sessionID string, participants []string, attrs map
 	// runs against the freshly-seeded context.
 	if err := t.runner.AdvanceToState(sessionID, recurringcohortranking.StateRankingInviting); err != nil {
 		return fmt.Errorf("weekly trigger: advance past seeder: %w", err)
+	}
+	return nil
+}
+
+// decodeHexAttrs hex-decodes any string-typed entry in attrs at the
+// listed keys into []byte. Non-string and absent entries are left
+// alone.
+func decodeHexAttrs(attrs map[string]any, keys []string) error {
+	for _, key := range keys {
+		v, ok := attrs[key]
+		if !ok {
+			continue
+		}
+		s, isString := v.(string)
+		if !isString || s == "" {
+			continue
+		}
+		decoded, err := hex.DecodeString(s)
+		if err != nil {
+			return fmt.Errorf("decode %s as hex: %w", key, err)
+		}
+		attrs[key] = decoded
 	}
 	return nil
 }

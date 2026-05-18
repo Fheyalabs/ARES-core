@@ -28,6 +28,7 @@ package main
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"os"
@@ -43,8 +44,11 @@ import (
 
 func main() {
 	port := getEnv("SESSION_PORT", "8000")
-	depth, _ := strconv.Atoi(getEnv("RIDESHARE_CRYPTO_DEPTH", "30"))
-	ringDim, _ := strconv.Atoi(getEnv("RIDESHARE_RING_DIM", "16384"))
+	// Mac-safe defaults (~500 KiB keys at depth=12/ring_dim=2048).
+	// Production hosts should bump these via env vars after the
+	// scoring-circuit depth budget is profiled per app.
+	depth, _ := strconv.Atoi(getEnv("RIDESHARE_CRYPTO_DEPTH", "12"))
+	ringDim, _ := strconv.Atoi(getEnv("RIDESHARE_RING_DIM", "2048"))
 	secret := []byte(os.Getenv("ARES_WS_SECRET"))
 	devBypass := len(secret) == 0
 
@@ -140,6 +144,22 @@ func (t *rideShareTrigger) Start(sessionID string, participants []string, attrs 
 	}
 	for k, v := range attrs {
 		canonical[k] = v
+	}
+	// PreSharedKeygen: hex-decode pre-generated key bundle bytes
+	// supplied by the smoke client. PhaseKeygen.Exit detects the
+	// presence of CtxCollectivePK + CtxEvalKeys and skips its own
+	// keygen call so encryption (smoke-side) and argmax (server-
+	// side) share the same CryptoContext-bound bundle.
+	for _, key := range []string{rideshare.CtxCollectivePK, rideshare.CtxEvalKeys} {
+		if v, ok := canonical[key]; ok {
+			if s, isString := v.(string); isString && s != "" {
+				decoded, err := hex.DecodeString(s)
+				if err != nil {
+					return fmt.Errorf("decode %s as hex: %w", key, err)
+				}
+				canonical[key] = decoded
+			}
+		}
 	}
 	if err := t.inner.Start(sessionID, participants, canonical); err != nil {
 		return err

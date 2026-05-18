@@ -92,15 +92,17 @@ func TestCohortService_WeeklyAcceptsSeededBundleAndAdvances(t *testing.T) {
 	base, runner, _, stop := startTestService(t, "weekly")
 	defer stop()
 
+	// CtxCollectivePK and CtxEvalKeys are hex-decoded by the trigger;
+	// supply hex strings so the decode succeeds.
 	body, _ := json.Marshal(map[string]any{
 		"session_id":   "w-good",
 		"participants": []string{"m1", "m2"},
 		"attrs": map[string]any{
-			recurringcohortranking.CtxCollectivePK: "fake-pk-bytes",
+			recurringcohortranking.CtxCollectivePK: "00112233",
 			recurringcohortranking.CtxSecretShares: map[string]any{
 				"m1": "share-1", "m2": "share-2",
 			},
-			recurringcohortranking.CtxEvalKeys: "fake-eval-keys",
+			recurringcohortranking.CtxEvalKeys: "44556677",
 		},
 	})
 	resp, err := http.Post(base+"/admin/sessions", "application/json", bytes.NewReader(body))
