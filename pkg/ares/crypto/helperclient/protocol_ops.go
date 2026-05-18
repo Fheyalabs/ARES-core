@@ -374,3 +374,20 @@ func decodeKeyShare(resp *Response) (KeyShare, error) {
 	}
 	return KeyShare{PublicKey: pk, SecretKeyShare: sk, Lead: lead}, nil
 }
+
+// SupportedOpenFHEVersionPrefix is the OpenFHE major.minor line the
+// framework is tested against. Helpers reporting a different
+// major/minor prefix will trigger a startup warning. Patch-level
+// differences are allowed.
+const SupportedOpenFHEVersionPrefix = "v1.5."
+
+// Version asks the helper subprocess what OpenFHE library version it
+// was linked against. Used by Start to surface version mismatches at
+// daemon startup.
+func (c *Client) Version() (string, error) {
+	res, err := c.call(Request{Op: "version"})
+	if err != nil {
+		return "", err
+	}
+	return res.Version, nil
+}

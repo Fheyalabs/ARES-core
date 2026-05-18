@@ -96,6 +96,10 @@ type Response struct {
 	// Ciphertexts is the list output for ops like argmax that emit
 	// per-candidate mask ciphertexts.
 	Ciphertexts []string `json:"ciphertexts,omitempty"`
+
+	// Version is the linked OpenFHE library version (e.g. "v1.5.1").
+	// Populated only by the `version` op.
+	Version string `json:"version,omitempty"`
 }
 
 // envelope is the on-the-wire daemon-mode message: exactly one of
