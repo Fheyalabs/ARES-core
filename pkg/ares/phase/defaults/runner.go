@@ -21,7 +21,7 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // handler.
 //
 // Application authors take this pipeline as a starting point and
-// either consume it as-is (for the Fheya default behavior) or
+// either compose it as-is for a matchmaking-shaped pipeline, or
 // replace individual phases to retarget the protocol at different
 // use cases. The most common replacements are Phase 2 (the scoring
 // circuit) and Phase D (the post-result phase). See task #12

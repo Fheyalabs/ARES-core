@@ -11,7 +11,7 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // The phase owns SUBMITTING → SCORING.
 //
 // This is the second-most app-specific phase (after Phase2). The
-// "encrypted input" shape — vector dim=128 unit-norm for Fheya,
+// "encrypted input" shape (e.g., a unit-norm profile vector for a matchmaking app,
 // scalar bid for a sealed-bid auction, weighted ballot for a vote —
 // is replaced by swapping this phase. Compatibility with Phase2 is
 // enforced by the context schema: Phase1b produces

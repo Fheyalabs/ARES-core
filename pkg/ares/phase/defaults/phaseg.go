@@ -8,7 +8,7 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // fixed number of onion-shuffle rounds anonymizes the mapping
 // between slot index and long-term participant key, so that the
 // initiator-facing winner-package fan-out in Phase D cannot be
-// correlated to a registered identity by the matchmaker. The phase
+// correlated to a registered identity by the session orchestrator. The phase
 // owns GOSSIP → VERIFYING and consumes `gossip.onion_batch`.
 //
 // The phase is conceptually optional for applications that don't

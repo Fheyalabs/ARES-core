@@ -36,7 +36,7 @@ import (
 // We reference defaults.Ctx* constants so that swapping keygen
 // variants does not break downstream phases (which also reference
 // those constants). The sealed-bid auction uses its own namespace
-// (CtxAuction*) so it's immune; the Fheya pipeline reads these
+// (CtxAuction*) so it is immune; the default pipeline reads these
 // keys and thus any Phase providing them under these names is a
 // valid drop-in.
 var (

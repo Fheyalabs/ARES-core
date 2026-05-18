@@ -8,7 +8,7 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // All-N Broadcast". The decrypted winner package plus a fixed
 // budget of rate-limited fixed-size cover-message slots flow
 // through the same all-N broadcast channel for a time-bounded
-// window (3 hours default in Fheya). The phase owns BROADCASTING →
+// window after the result is published. The phase owns BROADCASTING →
 // CLOSED and consumes `phased.message`.
 //
 // This is the most app-specific phase after Phase 2. For apps that

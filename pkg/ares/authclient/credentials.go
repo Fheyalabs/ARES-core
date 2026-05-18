@@ -11,7 +11,7 @@
 //
 // The scheme is intentionally simple: HMAC-SHA256 over a canonical
 // concatenation of claim fields, hex-encoded. It mirrors the wire format
-// of the existing Fheya auth-service so the same Python client works
+// of a credential-issuance + WS-token derivation flow any ARES app can adopt; the same Python client works
 // against either.
 package authclient
 
