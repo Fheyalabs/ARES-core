@@ -7,11 +7,42 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
-## [0.3.0] — 2026-05-18
+## [0.3.0] — 2026-05-19
 
 First public release. v0.2 was a private snapshot of the framework
 extraction; v0.3 cleans it up, removes app-specific code from the
 framework core, and adds the OSS-launch hygiene.
+
+### Security
+
+- **WebSocket Origin allow-list** (`transport.Config.AllowedOrigins`).
+  Production deployments now reject browser origins that aren't on the
+  list. Non-browser clients (Go / Python) that omit the `Origin` header
+  are unaffected. Legacy `NewHub` keeps the permissive default for the
+  example apps.
+- **Inbound WebSocket message size cap** (`Config.MaxWSMessageSize`,
+  default 32 MiB). Replaces gorilla's default 512 KiB while bounding
+  peer-driven memory.
+- **Artifact PUT body cap** (`Config.MaxArtifactSize`, default 64 MiB).
+  Oversized uploads now return `413 Request Entity Too Large` instead
+  of silently allocating unbounded memory.
+- **SSE log-stream newline-injection fix.** `writeSSE` now splits log
+  lines on `\n` and emits each as a separate `data:` line. Optional
+  `Config.DebugLogsAuth` gate added; default behavior unchanged
+  (suitable for trusted reverse-proxy deployments only).
+- **`ARES_ENV=production` refuses `AllowDevBypass=true`.** Hard
+  configuration error at `NewService` time when the environment
+  declares production and dev bypass is enabled.
+- **Keygen-topology composition guard.** `phase.Compose` now rejects
+  pipelines that wire `SinglePartyKeygen` (or any keygen tagged
+  `topology=single_party` / `plaintext`) into a phase that requires
+  `topology=threshold` (e.g. `Phase3ThresholdDecrypt`). Prevents an
+  app author from silently substituting a server-trusted keygen into a
+  pipeline whose decrypt phase assumes threshold semantics.
+- **WSMessage wire-protocol versioning.** `WSMessage.Version` field +
+  `WireProtocolVersion = "1"` constant. Frames with a declared major
+  that doesn't match are dropped at the hub. Empty version accepted
+  for backward compatibility with pre-v0.3 clients.
 
 ### Added
 

@@ -207,7 +207,12 @@ func (PreSharedKeygenPhase) Requires() phase.ContextSchema {
 		ctxSecretShares: {
 			TypeName: "map[string][]byte",
 			Required: true,
-			Constraints: map[string]any{"topology": "preshared"},
+			// Pre-shared keys ARE threshold-shaped; the "preshared"
+			// distinction is about lifecycle (provisioned out-of-band),
+			// not topology. The upstream cohort-formation phase that
+			// seeded them must tag topology=threshold so downstream
+			// threshold-decrypt phases compose.
+			Constraints: map[string]any{"topology": "threshold"},
 		},
 		ctxEvalKeys: {TypeName: "OpenFHEEvalKeys", Required: true},
 	}

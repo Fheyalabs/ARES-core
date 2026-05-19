@@ -106,6 +106,42 @@ func TestHub_DispatchInboundMessage(t *testing.T) {
 	}
 }
 
+func TestHub_DropsMismatchedWireVersion(t *testing.T) {
+	hub := NewHub(RealClock(), &AuthMiddleware{AllowDevBypass: true})
+
+	var (
+		mu  sync.Mutex
+		got bool
+	)
+	hub.SetMessageHandler(func(_ *Client, _ WSMessage) {
+		mu.Lock()
+		got = true
+		mu.Unlock()
+	})
+
+	conn, teardown := wsServer(t, hub, "carol", "")
+	defer teardown()
+
+	waitFor(t, func() bool { return hub.IsConnected("carol") }, 2*time.Second)
+
+	// Send a frame with a bogus wire version. The hub should drop it
+	// silently (log a warning) and never invoke the message handler.
+	payload := WSMessage{Version: "99", Type: "ride.bid", SessionID: "S1"}
+	body, _ := json.Marshal(payload)
+	if err := conn.WriteMessage(websocket.TextMessage, body); err != nil {
+		t.Fatalf("WriteMessage: %v", err)
+	}
+
+	// Wait a beat to make sure the hub had a chance to process — and
+	// then verify the handler was NOT invoked.
+	time.Sleep(150 * time.Millisecond)
+	mu.Lock()
+	defer mu.Unlock()
+	if got {
+		t.Errorf("expected handler not to be invoked for wire-version-mismatched frame")
+	}
+}
+
 func TestHub_RejectsUnauthorized(t *testing.T) {
 	hub := NewHub(RealClock(), &AuthMiddleware{
 		Secret:         []byte("real-secret"),

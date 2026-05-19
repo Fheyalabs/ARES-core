@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -51,6 +52,24 @@ type Config struct {
 	// EventRing, if non-nil, records per-session dispatch events for
 	// retrieval via GET /admin/sessions/{id}/events. nil disables recording.
 	EventRing *SessionEventRing
+
+	// AllowedOrigins is the WebSocket Origin whitelist. Empty + dev bypass
+	// preserves the historical "accept any origin" behavior; production
+	// must set this to a non-empty list (e.g. ["https://fheya.de"]).
+	AllowedOrigins []string
+
+	// MaxWSMessageSize caps inbound WebSocket frame bytes. Zero falls back
+	// to DefaultMaxMessageSize.
+	MaxWSMessageSize int64
+
+	// MaxArtifactSize caps the request body of PUT /v2/artifacts/{key}.
+	// Zero falls back to DefaultMaxArtifactSize.
+	MaxArtifactSize int64
+
+	// DebugLogsAuth, if non-nil, gates access to the SSE log stream at
+	// GET /v2/debug/logs. nil preserves the historical unauthenticated
+	// access (intended for trusted reverse-proxy deployments only).
+	DebugLogsAuth func(*http.Request) bool
 }
 
 // Service composes Hub + Artifacts + Admin + LogStream into a runnable
@@ -76,6 +95,14 @@ func NewService(cfg Config) (*Service, error) {
 	if len(cfg.Secret) == 0 && !cfg.AllowDevBypass {
 		return nil, errors.New("transport: empty Secret requires AllowDevBypass=true")
 	}
+	// Hard refusal of dev-bypass when the host explicitly says we're
+	// in production. Set ARES_ENV=production in the systemd / docker
+	// environment to make this guard active. The dev-bypass mode
+	// accepts any token; allowing it in production would let any
+	// browser open a WS connection as any pseudonym.
+	if cfg.AllowDevBypass && os.Getenv("ARES_ENV") == "production" {
+		return nil, errors.New("transport: AllowDevBypass=true refused when ARES_ENV=production")
+	}
 
 	// Default event ring if caller didn't supply one. 128 events per
 	// session gives ~2 min of visibility at 1 msg/s.
@@ -87,7 +114,16 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	auth := &AuthMiddleware{Secret: cfg.Secret, AllowDevBypass: cfg.AllowDevBypass}
-	hub := NewHub(cfg.Clock, auth)
+	hub := NewHubWithOptions(cfg.Clock, auth, HubOptions{
+		AllowedOrigins: cfg.AllowedOrigins,
+		// Preserve the dev-friendly "accept any Origin" default only
+		// when no whitelist is set AND auth is in dev-bypass mode.
+		// In production (Secret set, no AllowedOrigins), browser
+		// origins are rejected — non-browser clients (Go/Python) omit
+		// Origin entirely and are unaffected.
+		AllowAnyOrigin: len(cfg.AllowedOrigins) == 0 && cfg.AllowDevBypass,
+		MaxMessageSize: cfg.MaxWSMessageSize,
+	})
 	artifacts := NewArtifactStore()
 
 	if cfg.Trigger == nil {
@@ -95,18 +131,19 @@ func NewService(cfg Config) (*Service, error) {
 	}
 
 	admin := &AdminHandlers{
-		ServiceName: cfg.ServiceName,
-		Hub:         hub,
-		Runner:      cfg.Runner,
-		Trigger:     cfg.Trigger,
-		Artifacts:   artifacts,
-		EventRing:   cfg.EventRing,
+		ServiceName:     cfg.ServiceName,
+		Hub:             hub,
+		Runner:          cfg.Runner,
+		Trigger:         cfg.Trigger,
+		Artifacts:       artifacts,
+		EventRing:       cfg.EventRing,
+		MaxArtifactSize: cfg.MaxArtifactSize,
 	}
 
 	mux := http.NewServeMux()
 	admin.RegisterRoutes(mux)
 	if cfg.LogStream != nil {
-		cfg.LogStream.RegisterRoutes(mux)
+		cfg.LogStream.RegisterRoutes(mux, cfg.DebugLogsAuth)
 	}
 	mux.HandleFunc("/v2/ws", hub.HandleWS)
 
