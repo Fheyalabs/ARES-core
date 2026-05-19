@@ -34,8 +34,15 @@ func (Phase3ThresholdDecrypt) InternalStates() []phase.SessionState { return nil
 
 func (Phase3ThresholdDecrypt) Requires() phase.ContextSchema {
 	return phase.ContextSchema{
-		CtxParticipants:        {TypeName: "[]string", Required: true},
-		CtxSecretShares:        {TypeName: "map[string][]byte", Required: true},
+		CtxParticipants: {TypeName: "[]string", Required: true},
+		// Demands threshold-topology secret shares so a single-party
+		// keygen cannot silently substitute. The composition validator
+		// in phase.Compose rejects the mismatch at construction time.
+		CtxSecretShares: {
+			TypeName:    "map[string][]byte",
+			Required:    true,
+			Constraints: map[string]any{"topology": "threshold"},
+		},
 		CtxResultCiphertext: {TypeName: "[]byte", Required: true},
 	}
 }

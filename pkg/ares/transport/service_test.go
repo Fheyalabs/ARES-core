@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -185,6 +186,24 @@ func TestService_RejectsEmptySecretWithoutBypass(t *testing.T) {
 	})
 	if err == nil {
 		t.Errorf("expected NewService to reject empty Secret without AllowDevBypass")
+	}
+}
+
+// TestService_RefusesDevBypassInProduction verifies the production
+// env guard: ARES_ENV=production + AllowDevBypass=true is a hard
+// configuration error.
+func TestService_RefusesDevBypassInProduction(t *testing.T) {
+	t.Setenv("ARES_ENV", "production")
+	_, err := NewService(Config{
+		Addr:           ":9999",
+		Runner:         newDispatchRunner(t, nil),
+		AllowDevBypass: true,
+	})
+	if err == nil {
+		t.Fatalf("expected NewService to reject AllowDevBypass=true under ARES_ENV=production")
+	}
+	if !strings.Contains(err.Error(), "ARES_ENV=production") {
+		t.Errorf("expected error to mention ARES_ENV=production, got: %v", err)
 	}
 }
 

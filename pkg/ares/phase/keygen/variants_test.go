@@ -10,12 +10,13 @@ import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
 
-// TestSinglePartyKeygen_ComposesWithPhase3 verifies SinglePartyKeygenPhase
-// slots into a pipeline alongside Phase 1a and Phase 3 at the
-// LOCKED → GOSSIP arc with identical Provides to threshold keygen.
-// A test-only scoring stub fills the SCORING → DECRYPTING arc and
-// produces CtxResultCiphertext so Phase 3 has something to consume.
-func TestSinglePartyKeygen_ComposesWithPhase3(t *testing.T) {
+// TestSinglePartyKeygen_RejectedByThresholdDecrypt verifies the
+// composition-time topology guard: SinglePartyKeygenPhase tags its
+// secret_shares as topology=single_party, but Phase3ThresholdDecrypt
+// requires topology=threshold. Compose must reject this mismatch so
+// an app author can't accidentally wire a server-trusted keygen into
+// a pipeline whose decrypt phase assumes threshold semantics.
+func TestSinglePartyKeygen_RejectedByThresholdDecrypt(t *testing.T) {
 	_, err := phase.Compose(
 		defaults.NewPhase1aSessionInitiation(),
 		NewSinglePartyKeygen(),
@@ -27,8 +28,27 @@ func TestSinglePartyKeygen_ComposesWithPhase3(t *testing.T) {
 		defaults.NewPhase3ThresholdDecrypt(),
 		stubArcPhase("settle", defaults.StateBroadcasting, phase.StateNone, nil, nil),
 	)
+	if err == nil {
+		t.Fatalf("expected Compose to reject single_party keygen feeding threshold decrypt")
+	}
+	if !strings.Contains(err.Error(), "topology") {
+		t.Errorf("expected topology error, got: %v", err)
+	}
+}
+
+// TestSinglePartyKeygen_ComposesWithoutThresholdDecrypt verifies the
+// happy path: single-party keygen works fine in pipelines that don't
+// include the threshold-decrypt phase (e.g., a server-trusted auction
+// where the auctioneer decrypts unilaterally).
+func TestSinglePartyKeygen_ComposesWithoutThresholdDecrypt(t *testing.T) {
+	_, err := phase.Compose(
+		defaults.NewPhase1aSessionInitiation(),
+		NewSinglePartyKeygen(),
+		stubArcPhase("score", defaults.StateGossip, defaults.StateScoring, nil, nil),
+		stubArcPhase("settle", defaults.StateScoring, phase.StateNone, nil, nil),
+	)
 	if err != nil {
-		t.Fatalf("Compose with SinglePartyKeygen: %v", err)
+		t.Fatalf("expected single-party pipeline without threshold decrypt to compose, got: %v", err)
 	}
 }
 
@@ -104,12 +124,15 @@ func TestPreSharedKeygen_RequiresPriorContext(t *testing.T) {
 // where a non-inline registration-time phase provides the key bundle
 // composes successfully.
 func TestPreSharedKeygen_WithCohortContextSeed(t *testing.T) {
+	// Pre-shared keys ARE threshold-shaped; the cohort-formation
+	// phase that generated them tags topology=threshold so downstream
+	// threshold-decrypt phases compose.
 	cohortPhase := &staticProviderPhase{
 		name:   "cohort-keygen",
 		runsAt: phase.RunsAtRegistration,
 		provides: phase.ContextSchema{
-			ctxCollectivePublicKey: {TypeName: "[]byte", Constraints: map[string]any{"topology": "preshared"}},
-			ctxSecretShares:        {TypeName: "map[string][]byte", Constraints: map[string]any{"topology": "preshared"}},
+			ctxCollectivePublicKey: {TypeName: "[]byte", Constraints: map[string]any{"topology": "threshold"}},
+			ctxSecretShares:        {TypeName: "map[string][]byte", Constraints: map[string]any{"topology": "threshold"}},
 			ctxEvalKeys:            {TypeName: "OpenFHEEvalKeys"},
 			ctxCryptoContract:      {TypeName: "OpenFHEContract", Constraints: map[string]any{"depth": 30, "ring_dim": 4096, "scaling_mod_size": 50}},
 		},

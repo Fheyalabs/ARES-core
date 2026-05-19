@@ -32,15 +32,27 @@ const (
 	// at 256 against the Mac n=6 dim=128 smoke; lower values dropped
 	// messages under bursty broadcast.
 	SendBufferSize = 256
+
+	// DefaultMaxMessageSize caps inbound WebSocket frame size when the
+	// hub is constructed without an explicit limit. 32 MiB accommodates
+	// a single ARES collective public-key or eval-key bundle while
+	// preventing a single peer from exhausting server memory with one
+	// frame. Apps with smaller payloads should set a tighter cap.
+	DefaultMaxMessageSize int64 = 32 << 20
 )
 
-var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true },
-}
+// WireProtocolVersion is the current major wire-format version for
+// WSMessage envelopes. Bump when the JSON shape changes in a way
+// that breaks older clients. Minor changes (additive fields) stay
+// at the same major.
+const WireProtocolVersion = "1"
 
 // WSMessage is the JSON envelope every WebSocket frame carries. Type and
 // SessionID are the dispatch keys; Payload is the app-specific body.
+// Version is the wire-format major; empty is treated as "1" for
+// backward compatibility with pre-v0.3 clients.
 type WSMessage struct {
+	Version   string          `json:"version,omitempty"`
 	Type      string          `json:"type"`
 	SessionID string          `json:"session_id,omitempty"`
 	Seq       int64           `json:"seq,omitempty"`
@@ -60,23 +72,81 @@ type Client struct {
 // One Hub serves many concurrent clients. The Hub itself is safe for
 // concurrent use; per-client state is owned by readPump and writePump.
 type Hub struct {
-	mu      sync.RWMutex
-	clients map[string]*Client
-	clock   Clock
-	auth    *AuthMiddleware
-	onMsg   func(client *Client, msg WSMessage)
-	onClose func(pseudonym string)
+	mu             sync.RWMutex
+	clients        map[string]*Client
+	clock          Clock
+	auth           *AuthMiddleware
+	upgrader       websocket.Upgrader
+	maxMessageSize int64
+	onMsg          func(client *Client, msg WSMessage)
+	onClose        func(pseudonym string)
 }
 
-// NewHub constructs a Hub. If clk is nil, the real clock is used.
+// HubOptions tunes the per-hub upgrade and read limits without forcing
+// every NewHub caller to pass them.
+type HubOptions struct {
+	// AllowedOrigins is the whitelist of Origin headers accepted on the
+	// WebSocket upgrade handshake. An empty list combined with
+	// AllowAnyOrigin=true preserves the historical dev-friendly behavior
+	// of accepting any browser origin; production deployments should
+	// supply an explicit list (e.g. ["https://fheya.de"]).
+	AllowedOrigins []string
+
+	// AllowAnyOrigin keeps the legacy "accept any Origin" behavior.
+	// Required when AllowedOrigins is empty.
+	AllowAnyOrigin bool
+
+	// MaxMessageSize caps inbound WS frame bytes. Zero means
+	// DefaultMaxMessageSize.
+	MaxMessageSize int64
+}
+
+// NewHub constructs a Hub with permissive defaults. Equivalent to
+// NewHubWithOptions(clk, auth, HubOptions{AllowAnyOrigin: true}).
+//
+// Production deployments should prefer NewHubWithOptions and supply an
+// explicit AllowedOrigins list.
 func NewHub(clk Clock, auth *AuthMiddleware) *Hub {
+	return NewHubWithOptions(clk, auth, HubOptions{AllowAnyOrigin: true})
+}
+
+// NewHubWithOptions constructs a Hub with the supplied upgrade/read
+// limits. If clk is nil, the real clock is used.
+func NewHubWithOptions(clk Clock, auth *AuthMiddleware, opts HubOptions) *Hub {
 	if clk == nil {
 		clk = RealClock()
 	}
+	maxMsg := opts.MaxMessageSize
+	if maxMsg <= 0 {
+		maxMsg = DefaultMaxMessageSize
+	}
+	allowed := append([]string(nil), opts.AllowedOrigins...)
+	allowAny := opts.AllowAnyOrigin
+	upgrader := websocket.Upgrader{
+		CheckOrigin: func(r *http.Request) bool {
+			origin := r.Header.Get("Origin")
+			if origin == "" {
+				// Non-browser clients (Go/Python WS libraries) often
+				// omit Origin entirely. Token auth still gates access.
+				return true
+			}
+			if allowAny && len(allowed) == 0 {
+				return true
+			}
+			for _, a := range allowed {
+				if a == origin {
+					return true
+				}
+			}
+			return false
+		},
+	}
 	return &Hub{
-		clients: make(map[string]*Client),
-		clock:   clk,
-		auth:    auth,
+		clients:        make(map[string]*Client),
+		clock:          clk,
+		auth:           auth,
+		upgrader:       upgrader,
+		maxMessageSize: maxMsg,
 	}
 }
 
@@ -101,12 +171,13 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := upgrader.Upgrade(w, r, nil)
+	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("ws upgrade error: %v", err)
 		return
 	}
 
+	conn.SetReadLimit(h.maxMessageSize)
 	conn.SetReadDeadline(time.Now().Add(HeartbeatPongWait))
 	conn.SetPongHandler(func(string) error {
 		conn.SetReadDeadline(time.Now().Add(HeartbeatPongWait))
@@ -150,6 +221,14 @@ func (h *Hub) readPump(c *Client) {
 		}
 		var msg WSMessage
 		if err := json.Unmarshal(data, &msg); err != nil {
+			continue
+		}
+		// Reject frames whose declared major version doesn't match
+		// ours. Empty Version is accepted for backward compat with
+		// pre-v0.3 clients that don't set the field.
+		if msg.Version != "" && msg.Version != WireProtocolVersion {
+			log.Printf("[hub] wire version mismatch pseudo=%s type=%s got=%s want=%s — frame dropped",
+				shortID(c.Pseudonym), msg.Type, msg.Version, WireProtocolVersion)
 			continue
 		}
 		if h.onMsg != nil {

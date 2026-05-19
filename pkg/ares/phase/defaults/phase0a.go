@@ -89,10 +89,12 @@ func (Phase0aThresholdKeygen) Requires() phase.ContextSchema {
 func (Phase0aThresholdKeygen) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
 		CtxCollectivePublicKey: {
-			TypeName: "[]byte",
+			TypeName:    "[]byte",
+			Constraints: map[string]any{"topology": "threshold"},
 		},
 		CtxSecretShares: {
-			TypeName: "map[string][]byte",
+			TypeName:    "map[string][]byte",
+			Constraints: map[string]any{"topology": "threshold"},
 		},
 		CtxEvalKeys: {
 			TypeName: "OpenFHEEvalKeys",

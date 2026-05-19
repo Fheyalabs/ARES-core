@@ -89,8 +89,32 @@ func (ls *LogStream) unsubscribe(ch chan string) {
 }
 
 // RegisterRoutes installs the SSE endpoint at /v2/debug/logs on mux.
-func (ls *LogStream) RegisterRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("GET /v2/debug/logs", ls.handleStream)
+// If authz is non-nil, requests for which it returns false are rejected
+// with 401. Passing nil preserves the historical unauthenticated access
+// (only safe behind a trusted reverse proxy).
+func (ls *LogStream) RegisterRoutes(mux *http.ServeMux, authz ...func(*http.Request) bool) {
+	var check func(*http.Request) bool
+	if len(authz) > 0 {
+		check = authz[0]
+	}
+	mux.HandleFunc("GET /v2/debug/logs", func(w http.ResponseWriter, r *http.Request) {
+		if check != nil && !check(r) {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		ls.handleStream(w, r)
+	})
+}
+
+// writeSSE emits one SSE event for `line`. Per the SSE spec, embedded
+// newlines must be split into separate `data:` lines and the event is
+// terminated by a blank line. Without this split, an attacker who can
+// place a newline into a log message can inject a fake event.
+func writeSSE(w io.Writer, line string) {
+	for _, part := range strings.Split(line, "\n") {
+		fmt.Fprintf(w, "data: %s\n", strings.TrimRight(part, "\r"))
+	}
+	fmt.Fprint(w, "\n")
 }
 
 func (ls *LogStream) handleStream(w http.ResponseWriter, r *http.Request) {
@@ -107,7 +131,7 @@ func (ls *LogStream) handleStream(w http.ResponseWriter, r *http.Request) {
 	defer ls.unsubscribe(ch)
 
 	for _, line := range ls.buffered() {
-		fmt.Fprintf(w, "data: %s\n\n", line)
+		writeSSE(w, line)
 	}
 	flusher.Flush()
 
@@ -116,7 +140,7 @@ func (ls *LogStream) handleStream(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case line := <-ch:
-			fmt.Fprintf(w, "data: %s\n\n", line)
+			writeSSE(w, line)
 			flusher.Flush()
 		case <-heartbeat.C:
 			fmt.Fprintf(w, ": heartbeat\n\n")

@@ -4,11 +4,20 @@ package transport
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"strings"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
+
+// DefaultMaxArtifactSize caps PUT /v2/artifacts/{key} body bytes when the
+// AdminHandlers is constructed without an explicit limit. 64 MiB
+// accommodates large CKKS bundles (collective public keys, eval-key
+// rounds, fused scoring artifacts) while preventing a single request
+// from filling server memory.
+const DefaultMaxArtifactSize int64 = 64 << 20
 
 // AdminHandlers exposes the HTTP admin surface:
 //
@@ -29,6 +38,11 @@ type AdminHandlers struct {
 	Trigger     SessionTrigger
 	Artifacts   *ArtifactStore
 	EventRing   *SessionEventRing
+
+	// MaxArtifactSize caps PUT /v2/artifacts/{key} body bytes. Zero
+	// means DefaultMaxArtifactSize. Negative disables the cap (not
+	// recommended outside tests).
+	MaxArtifactSize int64
 }
 
 // RegisterRoutes mounts the admin endpoints on mux.
@@ -164,16 +178,23 @@ func (a *AdminHandlers) handleArtifactPut(w http.ResponseWriter, r *http.Request
 		http.Error(w, "missing key", http.StatusBadRequest)
 		return
 	}
-	buf := make([]byte, 0, r.ContentLength)
-	tmp := make([]byte, 32*1024)
-	for {
-		n, err := r.Body.Read(tmp)
-		if n > 0 {
-			buf = append(buf, tmp[:n]...)
+	limit := a.MaxArtifactSize
+	if limit == 0 {
+		limit = DefaultMaxArtifactSize
+	}
+	body := r.Body
+	if limit > 0 {
+		body = http.MaxBytesReader(w, r.Body, limit)
+	}
+	buf, err := io.ReadAll(body)
+	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			http.Error(w, "artifact exceeds size limit", http.StatusRequestEntityTooLarge)
+			return
 		}
-		if err != nil {
-			break
-		}
+		http.Error(w, "read body: "+err.Error(), http.StatusBadRequest)
+		return
 	}
 	a.Artifacts.Put(key, buf)
 	w.WriteHeader(http.StatusNoContent)
