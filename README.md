@@ -50,6 +50,126 @@ ctx, err := runner.BeginSession("auction-1", "")
 For a hand-composed pipeline see
 [`pkg/ares/phase/README.md`](pkg/ares/phase/README.md).
 
+## Build your own app in <100 LOC
+
+A complete worked example: an anonymous "highest-rating" picker that
+runs without any FHE. Each participant submits an integer rating; the
+server tallies them and writes the winner to session context.
+
+Three phases — two provided by the framework, one you write.
+
+```go
+// myapp/states.go (16 lines)
+package myapp
+
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
+
+const (
+	StateDone phase.SessionState = "DONE"
+
+	CtxRatings = "myapp.ratings" // map[string]int
+	CtxWinner  = "myapp.winner"  // string
+)
+
+// CtxParticipants is the framework-supplied participant list, written
+// by defaults.Phase1aSessionInitiation. Re-exported for readability.
+const CtxParticipants = defaults.CtxParticipants
+```
+
+```go
+// myapp/phases.go (~55 lines)
+package myapp
+
+import (
+	"encoding/json"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
+)
+
+// PhaseTally is the only app-specific phase. It accumulates one
+// "myapp.rating" frame per participant, picks the highest, and writes
+// the winner pseudonym to the session context. The framework's
+// Phase1a (invitation) and PlaintextKeygen (no-op crypto) sit in
+// front of it so participants are bootstrapped before this phase runs.
+type PhaseTally struct{}
+
+func (PhaseTally) Name() string                         { return "myapp-tally" }
+func (PhaseTally) Lifetime() phase.Lifetime             { return phase.LifetimePerSession }
+func (PhaseTally) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
+func (PhaseTally) EntryState() phase.SessionState       { return defaults.StateGossip }
+func (PhaseTally) ExitState() phase.SessionState        { return StateDone }
+func (PhaseTally) ConsumedMessageTypes() []string       { return []string{"myapp.rating"} }
+func (PhaseTally) InternalStates() []phase.SessionState { return nil }
+func (PhaseTally) Requires() phase.ContextSchema {
+	return phase.ContextSchema{CtxParticipants: {TypeName: "[]string", Required: true}}
+}
+func (PhaseTally) Provides() phase.ContextSchema {
+	return phase.ContextSchema{CtxRatings: {TypeName: "map[string]int"}, CtxWinner: {TypeName: "string"}}
+}
+func (PhaseTally) Enter(*phase.SessionContext) error { return nil }
+func (PhaseTally) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+	phase.AccumulateMessage(ctx, "ratings", from, payload)
+	return nil
+}
+func (PhaseTally) CheckComplete(ctx *phase.SessionContext) bool {
+	return phase.QuorumReached(ctx, "ratings", len(phase.MustGet[[]string](ctx, CtxParticipants)))
+}
+func (PhaseTally) Exit(ctx *phase.SessionContext) error {
+	raw, winner, best := phase.AccumulatedMessages(ctx, "ratings"), "", -1<<31
+	totals := make(map[string]int, len(raw))
+	for who, p := range raw {
+		var m struct{ Value int `json:"value"` }
+		_ = json.Unmarshal(p, &m)
+		totals[who] = m.Value
+		if m.Value > best {
+			winner, best = who, m.Value
+		}
+	}
+	ctx.Set(CtxRatings, totals)
+	ctx.Set(CtxWinner, winner)
+	return nil
+}
+```
+
+```go
+// myapp/runner.go (15 lines)
+package myapp
+
+import (
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/keygen"
+)
+
+func Pipeline() (*phase.SessionRunner, error) {
+	return phase.Compose(
+		defaults.NewPhase1aSessionInitiation(), // INVITING -> LOCKED
+		keygen.NewPlaintextKeygen(),            // LOCKED   -> GOSSIP (no FHE)
+		PhaseTally{},                           // GOSSIP   -> DONE
+	)
+}
+```
+
+That's it — under 90 lines of source. Compose with `phase.Compose`,
+point a `transport.Service` at the runner, and you have a working app
+that handles invitations, participant bootstrap, message accumulation
+with quorum, deterministic state machine validation, and audit logging
+for free.
+
+To swap in real FHE later, replace `keygen.NewPlaintextKeygen()` with
+`defaults.NewPhase0aThresholdKeygen()` and add a
+`defaults.NewPhase3ThresholdDecrypt()` step before the tally — the
+framework's composition guard catches the topology mismatch at
+construction time if you mix them up.
+
+The four reference apps under `examples/` are larger only because they
+add real CKKS, signed transcripts, multiple runners, or amortized
+keygen — none of which is required to *start*. See
+[`examples/voting/`](examples/voting/) for the closest match to this
+shape with tests.
+
 ## Install
 
 ### Go dependency
