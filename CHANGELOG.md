@@ -7,6 +7,29 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
+### Roadmap (Fheya-app-side, recorded here so ARES-core knows what its consumer needs)
+
+The Fheya app at `Fheyalabs/ARES.git` is the load test for ARES-core
+v1.0. Three pieces of work blocking real homelab traffic — none of
+which require ARES-core API changes, but ARES-core's `[Unreleased]`
+records them so the framework knows what its primary consumer is
+moving toward.
+
+- **Post-session memory cleanup.** Orchestrator currently leaks
+  per-session FHE artifacts (`scoringInputs`, `profiles`, accumulator
+  buckets) until container restart. Audit OP-CAP-6. Fheya-app PR.
+- **Nightly amortized keygen.** Threshold keygen is 95% of
+  `n=6` dim=128 session wall-clock. Proposal:
+  `wiki/summaries/nightly-keygen-batch-orchestrator-2026-05-19.md` —
+  split orchestration into cohort-formation / nightly-keygen /
+  daytime-scoring subsystems. Uses ARES-core's existing
+  `keygen.PreSharedKeygen` primitive; no framework changes required.
+- **Self-hosted CI runner on the homelab.** Free GitHub-hosted
+  runners can't carry full `n=6` dim=128 keygen; Fheya's end-to-end
+  lane needs `runs-on: [self-hosted, fheya-homelab]`. ARES-core's CI
+  stays on hosted runners; Fheya's CI gets a separate self-hosted
+  lane.
+
 ### CI
 
 - OpenFHE CI lane now installs to `/opt/openfhe` (instead of
