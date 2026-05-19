@@ -80,6 +80,12 @@ type Hub struct {
 	maxMessageSize int64
 	onMsg          func(client *Client, msg WSMessage)
 	onClose        func(pseudonym string)
+
+	// seqMu guards seqHigh. Separate from `mu` because the seq tracker
+	// is touched on every inbound frame; rolling it into the
+	// client-map lock would serialize unrelated traffic.
+	seqMu   sync.Mutex
+	seqHigh map[string]int64 // key = "session_id|pseudonym|type" -> highest seq accepted
 }
 
 // HubOptions tunes the per-hub upgrade and read limits without forcing
@@ -147,7 +153,30 @@ func NewHubWithOptions(clk Clock, auth *AuthMiddleware, opts HubOptions) *Hub {
 		auth:           auth,
 		upgrader:       upgrader,
 		maxMessageSize: maxMsg,
+		seqHigh:        make(map[string]int64),
 	}
+}
+
+// checkAndRecordSeq enforces per-(session, pseudonym, type) monotonic
+// sequence numbers. Returns true if msg.Seq is accepted (strictly
+// greater than the highest seen, or zero/missing — bypassed). Returns
+// false if the frame is a replay or out-of-order.
+//
+// Empty Seq (zero) is treated as "client doesn't speak the replay
+// protocol" and bypasses the check. Apps that want hard enforcement
+// should reject Seq=0 in a higher-level handler.
+func (h *Hub) checkAndRecordSeq(pseudonym string, msg WSMessage) bool {
+	if msg.Seq == 0 {
+		return true
+	}
+	key := msg.SessionID + "|" + pseudonym + "|" + msg.Type
+	h.seqMu.Lock()
+	defer h.seqMu.Unlock()
+	if last, ok := h.seqHigh[key]; ok && msg.Seq <= last {
+		return false
+	}
+	h.seqHigh[key] = msg.Seq
+	return true
 }
 
 // SetMessageHandler installs the callback invoked for every inbound WS
@@ -229,6 +258,13 @@ func (h *Hub) readPump(c *Client) {
 		if msg.Version != "" && msg.Version != WireProtocolVersion {
 			log.Printf("[hub] wire version mismatch pseudo=%s type=%s got=%s want=%s — frame dropped",
 				shortID(c.Pseudonym), msg.Type, msg.Version, WireProtocolVersion)
+			continue
+		}
+		// Replay protection: per-(session, pseudonym, type) monotonic
+		// seq. Empty Seq is bypassed for backward compat.
+		if !h.checkAndRecordSeq(c.Pseudonym, msg) {
+			log.Printf("[hub] replay drop pseudo=%s session=%s type=%s seq=%d — frame dropped",
+				shortID(c.Pseudonym), msg.SessionID, msg.Type, msg.Seq)
 			continue
 		}
 		if h.onMsg != nil {

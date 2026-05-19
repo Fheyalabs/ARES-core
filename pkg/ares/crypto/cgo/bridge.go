@@ -31,6 +31,25 @@ import (
 	"unsafe"
 )
 
+// INVARIANT (read before adding a new exported function in this file):
+//
+// Every exported function that passes a Go slice through cgo via
+// `(*C.X)(unsafe.Pointer(&slice[0]))` MUST guard against `len(slice)
+// == 0` at function entry. Indexing an empty slice — even just for
+// the address — panics. The convention across this file is to return
+// `fmt.Errorf("<name> is required")` (or the equivalent
+// `<name>_count` check on `[][]byte` arguments) BEFORE the C call.
+//
+// The single helper `requireNonEmptyBytes` below is provided for the
+// common case; multi-element checks stay inline at the call site so
+// the error message can name the specific slice that failed.
+func requireNonEmptyBytes(name string, b []byte) error {
+	if len(b) == 0 {
+		return fmt.Errorf("%s is required (empty slice)", name)
+	}
+	return nil
+}
+
 type ContractParams struct {
 	RingDim       uint32
 	ScalingFactor float64

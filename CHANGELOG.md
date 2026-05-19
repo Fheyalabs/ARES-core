@@ -7,6 +7,25 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
+### Security
+
+- **Replay protection.** Per-`(session_id, pseudonym, message_type)`
+  monotonic sequence-number tracking in `transport.Hub`. Frames whose
+  `WSMessage.Seq` is `<=` the highest accepted for the same tuple are
+  silently dropped with a `[hub] replay drop` log line; the connection
+  stays open. Empty / zero `Seq` bypasses the check for backward
+  compatibility with pre-v0.3 clients.
+
+### Added
+
+- `ARESSession.connect(..., ssl_context=...)` accepts an
+  `ssl.SSLContext` (or `False` to disable verification, or `None` to
+  use the system default for `wss://`). Docs in
+  `clients/python/README.md`.
+- `pkg/ares/crypto/cgo/bridge.go` documents the "guard before
+  `&slice[0]`" invariant + ships `requireNonEmptyBytes` helper for
+  future contributors.
+
 ## [0.3.0] — 2026-05-19
 
 First public release. v0.2 was a private snapshot of the framework
