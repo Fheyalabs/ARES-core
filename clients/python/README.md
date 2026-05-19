@@ -105,3 +105,39 @@ so smokes can exercise wire / state-machine logic. The real
 `openfhe-contract-helper` lands in Phase 4 of the
 example-app deployment work; until then smokes verify transport and
 phase transitions but not the homomorphic computation.
+
+## TLS / certificate verification
+
+`ARESSession.connect(server_url, ...)` selects the transport based on
+the URL scheme:
+
+| URL scheme | Transport | Cert verification |
+|---|---|---|
+| `https://` / `wss://` | TLS | System trust store (CA-signed certs) |
+| `http://` / `ws://` | Plain WebSocket | None |
+
+For a homelab with a private CA, or any setup that needs a custom
+trust bundle, pass an `ssl.SSLContext`:
+
+```python
+import ssl
+from ares_client import ARESSession
+
+ctx = ssl.create_default_context(cafile="/etc/my-ca.crt")
+session = await ARESSession.connect(
+    server_url="https://api.fheya.de",
+    pseudonym="bidder-01",
+    session_id="auction-1",
+    ssl_context=ctx,
+)
+```
+
+To **disable** verification (only for local development against
+self-signed certs), pass `ssl_context=False`. Never disable
+verification in production — it makes the WS token transmitted over
+the connection trivially interceptable.
+
+If `auth_secret` is set against a plain `http://` / `ws://` URL the
+WS token is sent in plaintext on the wire. Use `wss://` in any
+deployment where the auth token actually authenticates a real
+identity.

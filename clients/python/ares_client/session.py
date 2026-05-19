@@ -101,19 +101,46 @@ class ARESSession:
         session_id: str,
         auth_secret: str = "",
         default_timeout: float = 30.0,
+        ssl_context: "ssl.SSLContext | bool | None" = None,
     ) -> "ARESSession":
-        """Open a WS connection, authenticated for ``pseudonym``."""
+        """Open a WS connection, authenticated for ``pseudonym``.
+
+        TLS / certificate verification:
+
+        * If ``server_url`` starts with ``https://`` or ``wss://``, the
+          underlying ``websockets.connect`` call uses TLS with the
+          system's default trust store and verifies the server
+          certificate against the URL hostname. No additional
+          configuration is needed for public CAs (Let's Encrypt,
+          public CA-signed certs).
+
+        * Pass ``ssl_context=ssl.create_default_context(cafile="...")``
+          to supply a custom CA bundle (e.g. for a homelab with a
+          private CA). The argument is forwarded as ``ssl=`` to
+          ``websockets.connect``.
+
+        * Pass ``ssl_context=False`` to **disable** verification.
+          Useful for local development against self-signed certs;
+          never use in production.
+
+        * Plain ``http://`` / ``ws://`` URLs skip TLS entirely. The
+          framework warns when ``auth_secret`` is set against a plain
+          URL (token leaks over plaintext); leave ``auth_secret=""``
+          for dev-bypass mode in that case.
+        """
         token = _derive_ws_token(auth_secret, pseudonym) if auth_secret else ""
         url = _ws_url(server_url, pseudonym, token)
         log.debug("[%s] dialing %s", pseudonym, url)
+        kwargs: dict[str, "Any"] = {
+            "ping_interval": 20,
+            "ping_timeout": 30,
+            "close_timeout": 5,
+            "max_size": 64 * 1024 * 1024,  # 64 MiB — large CKKS payloads
+        }
+        if ssl_context is not None:
+            kwargs["ssl"] = ssl_context
         try:
-            ws = await websockets.connect(
-                url,
-                ping_interval=20,
-                ping_timeout=30,
-                close_timeout=5,
-                max_size=64 * 1024 * 1024,  # 64 MiB — large CKKS payloads
-            )
+            ws = await websockets.connect(url, **kwargs)
         except Exception as e:
             raise ARESClientError(f"dial WS for {pseudonym!r}: {e}") from e
         session = cls(pseudonym, ws, session_id, default_timeout=default_timeout)
