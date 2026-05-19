@@ -7,6 +7,25 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
+### CI
+
+- OpenFHE CI lane now installs to `/opt/openfhe` (instead of
+  `/usr/local`) and caches that prefix only. Three concrete wins:
+  cache restore drops from ~4 min to ~2 s, the build step is reliably
+  skipped on cache hit (was incrementally rebuilding before), and a
+  `concurrency: openfhe-${{ github.ref }}` group prevents parallel
+  pushes from racing on the cache key. Warm-run wall time drops from
+  14-18 min to ~3 min.
+
+### Docs
+
+- `docs/migrations/fheya-server.md` records the durable plan for
+  retiring the historical `fheya-server` REST server in favor of an
+  ARES-core + Fheya app composition. Surface map for all 25 legacy
+  endpoints, six PR-sized migration steps, and the hard preconditions
+  blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
+  1b/2/D real implementations).
+
 ## [0.3.1] — 2026-05-19
 
 Patch release: post-launch hardening from the 2026-05-19 audit
