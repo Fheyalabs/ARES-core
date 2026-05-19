@@ -50,117 +50,158 @@ ctx, err := runner.BeginSession("auction-1", "")
 For a hand-composed pipeline see
 [`pkg/ares/phase/README.md`](pkg/ares/phase/README.md).
 
-## Build your own app in <100 LOC
+## Build your own app
 
 A complete worked example: an anonymous "highest-rating" picker that
 runs without any FHE. Each participant submits an integer rating; the
-server tallies them and writes the winner to session context.
-
-Three phases — two provided by the framework, one you write.
+server tallies them and announces the winner. Five phases — two
+provided by the framework, three you write — wired into one runner.
+Each phase owns exactly one state-machine arc, which is the framework's
+core teaching point.
 
 ```go
-// myapp/states.go (16 lines)
+// myapp/states.go
 package myapp
 
 import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
-import "github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 
 const (
-	StateDone phase.SessionState = "DONE"
+    StateInviting phase.SessionState = "INVITING"
+    StateLocked   phase.SessionState = "LOCKED"
+    StateGossip   phase.SessionState = "GOSSIP"     // PlaintextKeygen reuses this label
+    StateScoring  phase.SessionState = "SCORING"
+    StateDone     phase.SessionState = "DONE"
 
-	CtxRatings = "myapp.ratings" // map[string]int
-	CtxWinner  = "myapp.winner"  // string
+    CtxParticipants = "participants"
+    CtxRatings      = "ratings"
+    CtxWinner       = "winner"
 )
-
-// CtxParticipants is the framework-supplied participant list, written
-// by defaults.Phase1aSessionInitiation. Re-exported for readability.
-const CtxParticipants = defaults.CtxParticipants
 ```
 
 ```go
-// myapp/phases.go (~55 lines)
+// myapp/phases.go
 package myapp
 
 import (
-	"encoding/json"
+    "encoding/json"
 
-	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
-	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
+    "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 )
 
-// PhaseTally is the only app-specific phase. It accumulates one
-// "myapp.rating" frame per participant, picks the highest, and writes
-// the winner pseudonym to the session context. The framework's
-// Phase1a (invitation) and PlaintextKeygen (no-op crypto) sit in
-// front of it so participants are bootstrapped before this phase runs.
-type PhaseTally struct{}
+// PhaseInvite seeds the participant list. The session-service supplies
+// it via the trigger; this phase just transitions to LOCKED.
+type PhaseInvite struct{}
 
-func (PhaseTally) Name() string                         { return "myapp-tally" }
-func (PhaseTally) Lifetime() phase.Lifetime             { return phase.LifetimePerSession }
-func (PhaseTally) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
-func (PhaseTally) EntryState() phase.SessionState       { return defaults.StateGossip }
-func (PhaseTally) ExitState() phase.SessionState        { return StateDone }
-func (PhaseTally) ConsumedMessageTypes() []string       { return []string{"myapp.rating"} }
-func (PhaseTally) InternalStates() []phase.SessionState { return nil }
-func (PhaseTally) Requires() phase.ContextSchema {
-	return phase.ContextSchema{CtxParticipants: {TypeName: "[]string", Required: true}}
+func (PhaseInvite) Name() string                                                  { return "myapp-invite" }
+func (PhaseInvite) Lifetime() phase.Lifetime                                      { return phase.LifetimePerSession }
+func (PhaseInvite) RunsAt() phase.RunsAt                                          { return phase.RunsAtInline }
+func (PhaseInvite) EntryState() phase.SessionState                                { return StateInviting }
+func (PhaseInvite) ExitState() phase.SessionState                                 { return StateLocked }
+func (PhaseInvite) ConsumedMessageTypes() []string                                { return nil }
+func (PhaseInvite) InternalStates() []phase.SessionState                          { return nil }
+func (PhaseInvite) Requires() phase.ContextSchema                                 { return nil }
+func (PhaseInvite) Provides() phase.ContextSchema                                 { return phase.ContextSchema{CtxParticipants: {TypeName: "[]string"}} }
+func (PhaseInvite) Enter(*phase.SessionContext) error                             { return nil }
+func (PhaseInvite) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
+func (PhaseInvite) CheckComplete(*phase.SessionContext) bool                      { return true }
+func (PhaseInvite) Exit(*phase.SessionContext) error                              { return nil }
+
+// PhaseCollect accumulates one "myapp.rating" frame per participant
+// and exits when the quorum is reached.
+type PhaseCollect struct{}
+
+func (PhaseCollect) Name() string                         { return "myapp-collect" }
+func (PhaseCollect) Lifetime() phase.Lifetime             { return phase.LifetimePerSession }
+func (PhaseCollect) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
+func (PhaseCollect) EntryState() phase.SessionState       { return StateGossip }
+func (PhaseCollect) ExitState() phase.SessionState        { return StateScoring }
+func (PhaseCollect) ConsumedMessageTypes() []string       { return []string{"myapp.rating"} }
+func (PhaseCollect) InternalStates() []phase.SessionState { return nil }
+func (PhaseCollect) Requires() phase.ContextSchema {
+    return phase.ContextSchema{CtxParticipants: {TypeName: "[]string", Required: true}}
 }
-func (PhaseTally) Provides() phase.ContextSchema {
-	return phase.ContextSchema{CtxRatings: {TypeName: "map[string]int"}, CtxWinner: {TypeName: "string"}}
+func (PhaseCollect) Provides() phase.ContextSchema {
+    return phase.ContextSchema{CtxRatings: {TypeName: "map[string]int"}}
 }
-func (PhaseTally) Enter(*phase.SessionContext) error { return nil }
-func (PhaseTally) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
-	phase.AccumulateMessage(ctx, "ratings", from, payload)
-	return nil
+func (PhaseCollect) Enter(*phase.SessionContext) error { return nil }
+func (PhaseCollect) OnMessage(ctx *phase.SessionContext, _, from string, payload []byte) error {
+    phase.AccumulateMessage(ctx, "ratings", from, payload)
+    return nil
 }
-func (PhaseTally) CheckComplete(ctx *phase.SessionContext) bool {
-	return phase.QuorumReached(ctx, "ratings", len(phase.MustGet[[]string](ctx, CtxParticipants)))
+func (PhaseCollect) CheckComplete(ctx *phase.SessionContext) bool {
+    return phase.QuorumReached(ctx, "ratings", len(phase.MustGet[[]string](ctx, CtxParticipants)))
 }
-func (PhaseTally) Exit(ctx *phase.SessionContext) error {
-	raw, winner, best := phase.AccumulatedMessages(ctx, "ratings"), "", -1<<31
-	totals := make(map[string]int, len(raw))
-	for who, p := range raw {
-		var m struct{ Value int `json:"value"` }
-		_ = json.Unmarshal(p, &m)
-		totals[who] = m.Value
-		if m.Value > best {
-			winner, best = who, m.Value
-		}
-	}
-	ctx.Set(CtxRatings, totals)
-	ctx.Set(CtxWinner, winner)
-	return nil
+func (PhaseCollect) Exit(ctx *phase.SessionContext) error {
+    raw := phase.AccumulatedMessages(ctx, "ratings")
+    out := make(map[string]int, len(raw))
+    for who, p := range raw {
+        var msg struct{ Value int `json:"value"` }
+        _ = json.Unmarshal(p, &msg)
+        out[who] = msg.Value
+    }
+    ctx.Set(CtxRatings, out)
+    return nil
 }
+
+// PhaseAnnounce picks the highest rating and writes the winner.
+type PhaseAnnounce struct{}
+
+func (PhaseAnnounce) Name() string                                                  { return "myapp-announce" }
+func (PhaseAnnounce) Lifetime() phase.Lifetime                                      { return phase.LifetimePerSession }
+func (PhaseAnnounce) RunsAt() phase.RunsAt                                          { return phase.RunsAtInline }
+func (PhaseAnnounce) EntryState() phase.SessionState                                { return StateScoring }
+func (PhaseAnnounce) ExitState() phase.SessionState                                 { return StateDone }
+func (PhaseAnnounce) ConsumedMessageTypes() []string                                { return nil }
+func (PhaseAnnounce) InternalStates() []phase.SessionState                          { return nil }
+func (PhaseAnnounce) Requires() phase.ContextSchema {
+    return phase.ContextSchema{CtxRatings: {TypeName: "map[string]int", Required: true}}
+}
+func (PhaseAnnounce) Provides() phase.ContextSchema {
+    return phase.ContextSchema{CtxWinner: {TypeName: "string"}}
+}
+func (PhaseAnnounce) Enter(ctx *phase.SessionContext) error {
+    ratings := phase.MustGet[map[string]int](ctx, CtxRatings)
+    winner, best := "", -1<<31
+    for who, v := range ratings {
+        if v > best {
+            winner, best = who, v
+        }
+    }
+    ctx.Set(CtxWinner, winner)
+    return nil
+}
+func (PhaseAnnounce) OnMessage(*phase.SessionContext, string, string, []byte) error { return nil }
+func (PhaseAnnounce) CheckComplete(*phase.SessionContext) bool                      { return true }
+func (PhaseAnnounce) Exit(*phase.SessionContext) error                              { return nil }
 ```
 
 ```go
-// myapp/runner.go (15 lines)
+// myapp/runner.go
 package myapp
 
 import (
-	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
-	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
-	"github.com/Fheyalabs/ares-core/pkg/ares/phase/keygen"
+    "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+    "github.com/Fheyalabs/ares-core/pkg/ares/phase/keygen"
 )
 
 func Pipeline() (*phase.SessionRunner, error) {
-	return phase.Compose(
-		defaults.NewPhase1aSessionInitiation(), // INVITING -> LOCKED
-		keygen.NewPlaintextKeygen(),            // LOCKED   -> GOSSIP (no FHE)
-		PhaseTally{},                           // GOSSIP   -> DONE
-	)
+    return phase.Compose(
+        PhaseInvite{},               // INVITING → LOCKED
+        keygen.NewPlaintextKeygen(), // LOCKED   → GOSSIP   (framework)
+        PhaseCollect{},              // GOSSIP   → SCORING
+        PhaseAnnounce{},             // SCORING  → DONE
+    )
 }
 ```
 
-That's it — under 90 lines of source. Compose with `phase.Compose`,
-point a `transport.Service` at the runner, and you have a working app
-that handles invitations, participant bootstrap, message accumulation
-with quorum, deterministic state machine validation, and audit logging
-for free.
+That's it. Compose with `phase.Compose`, point a `transport.Service`
+at the runner, and you have a working app that handles invitations,
+participant bootstrap, message accumulation with quorum, deterministic
+state-machine validation, and audit logging for free.
 
 To swap in real FHE later, replace `keygen.NewPlaintextKeygen()` with
 `defaults.NewPhase0aThresholdKeygen()` and add a
-`defaults.NewPhase3ThresholdDecrypt()` step before the tally — the
+`defaults.NewPhase3ThresholdDecrypt()` step before announce — the
 framework's composition guard catches the topology mismatch at
 construction time if you mix them up.
 

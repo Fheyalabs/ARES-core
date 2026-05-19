@@ -25,10 +25,10 @@ versions may include breaking changes).
 - `pkg/ares/crypto/cgo/bridge.go` documents the "guard before
   `&slice[0]`" invariant + ships `requireNonEmptyBytes` helper for
   future contributors.
-- README "Build your own app in <100 LOC" tutorial — 77-line worked
-  example with three phases (two framework-provided, one user-written)
-  showing the minimum viable ARES app shape. Compile-verified against
-  the live framework before commit.
+- README "Build your own app" tutorial — five-phase worked example
+  (Invite + PlaintextKeygen + Collect + Announce + runner) showing the
+  minimum viable ARES app shape with one state arc per phase.
+  Compile-verified against the live framework before commit.
 
 ## [0.3.0] — 2026-05-19
 
