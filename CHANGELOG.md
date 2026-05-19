@@ -7,6 +7,11 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-05-19
+
+Patch release: post-launch hardening from the 2026-05-19 audit
+follow-up items, plus a "build your own app" tutorial in the README.
+
 ### Security
 
 - **Replay protection.** Per-`(session_id, pseudonym, message_type)`
@@ -142,6 +147,7 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Fheyalabs/ARES-core/releases/tag/v0.2.0
