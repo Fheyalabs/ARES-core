@@ -82,6 +82,10 @@ type Client struct {
 	Pseudonym string
 	Conn      *websocket.Conn
 	Send      chan []byte
+
+	// limiter, when non-nil, gates inbound frames to a token-bucket
+	// budget. Nil means no per-connection rate limit (the default).
+	limiter *rateLimiter
 }
 
 // Hub is the WebSocket hub: connect, authenticate, heartbeat, broadcast.
@@ -94,6 +98,8 @@ type Hub struct {
 	auth           *AuthMiddleware
 	upgrader       websocket.Upgrader
 	maxMessageSize int64
+	inboundRate    float64 // frames/sec; 0 disables the per-conn limiter
+	inboundBurst   float64 // token-bucket capacity; 0 disables the limiter
 	onMsg          func(client *Client, msg WSMessage)
 	onClose        func(pseudonym string)
 
@@ -121,6 +127,19 @@ type HubOptions struct {
 	// MaxMessageSize caps inbound WS frame bytes. Zero means
 	// DefaultMaxMessageSize.
 	MaxMessageSize int64
+
+	// InboundRate caps the per-connection inbound frame rate, in
+	// frames per second, via a token-bucket limiter applied in
+	// readPump after JSON parsing. Zero disables the limiter (the
+	// historical default).
+	InboundRate float64
+
+	// InboundBurst is the token-bucket capacity: the maximum number
+	// of consecutive frames a client may send at the head of a
+	// burst before being throttled to InboundRate. Zero disables the
+	// limiter. A reasonable production default is a small multiple
+	// of InboundRate (e.g. rate=10, burst=20).
+	InboundBurst float64
 }
 
 // NewHub constructs a Hub with permissive defaults. Equivalent to
@@ -169,6 +188,8 @@ func NewHubWithOptions(clk Clock, auth *AuthMiddleware, opts HubOptions) *Hub {
 		auth:           auth,
 		upgrader:       upgrader,
 		maxMessageSize: maxMsg,
+		inboundRate:    opts.InboundRate,
+		inboundBurst:   opts.InboundBurst,
 		seqHigh:        make(map[string]int64),
 	}
 }
@@ -233,6 +254,7 @@ func (h *Hub) HandleWS(w http.ResponseWriter, r *http.Request) {
 		Pseudonym: pseudonym,
 		Conn:      conn,
 		Send:      make(chan []byte, SendBufferSize),
+		limiter:   newRateLimiter(h.inboundRate, h.inboundBurst, h.clock.Now()),
 	}
 
 	h.mu.Lock()
@@ -283,6 +305,16 @@ func (h *Hub) readPump(c *Client) {
 		if !h.checkAndRecordSeq(c.Pseudonym, msg) {
 			log.Printf("[hub] replay drop pseudo=%s session=%s type=%s seq=%d — frame dropped",
 				shortID(c.Pseudonym), msg.SessionID, msg.Type, msg.Seq)
+			continue
+		}
+		// Per-connection rate limit: drop the frame on bucket-empty
+		// rather than tearing down the connection. A truly hostile
+		// client keeps burning network for nothing; legitimate
+		// bursts (key publication, big batch broadcast) refill
+		// against the InboundRate within seconds.
+		if !c.limiter.Allow(h.clock.Now()) {
+			log.Printf("[hub] rate-limit drop pseudo=%s session=%s type=%s — frame dropped",
+				shortID(c.Pseudonym), msg.SessionID, msg.Type)
 			continue
 		}
 		if h.onMsg != nil {
