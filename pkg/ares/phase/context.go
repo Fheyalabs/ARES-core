@@ -3,8 +3,12 @@
 package phase
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"sync"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 )
 
 // SessionContext is the typed bag of state shared across phases of one
@@ -33,6 +37,12 @@ type SessionContext struct {
 
 	mu     sync.RWMutex
 	values map[string]any
+
+	// lineageStore is set by ComposeWith-built runners during
+	// BeginSession; nil for Compose-built runners. The runner
+	// injects this so LineageDAG() can return per-session nodes
+	// without phases needing to import the runner package.
+	lineageStore lineage.Store
 }
 
 // NewSessionContext returns a SessionContext for the given session.
@@ -40,6 +50,29 @@ func NewSessionContext(sessionID string) *SessionContext {
 	return &SessionContext{
 		SessionID: sessionID,
 		values:    make(map[string]any),
+	}
+}
+
+// LineageDAG returns an iterator over all DAGNodes committed for
+// this session. Returns an empty iterator if lineage is disabled
+// (Compose-built runners). Read-only; mutating the store directly
+// is not supported via this accessor.
+//
+// Useful for apps that want to inspect the chain mid-session or
+// persist a snapshot to their own audit store.
+func (c *SessionContext) LineageDAG() iter.Seq[lineage.DAGNode] {
+	return func(yield func(lineage.DAGNode) bool) {
+		if c.lineageStore == nil {
+			return
+		}
+		for node, err := range c.lineageStore.WalkSession(context.Background(), c.SessionID) {
+			if err != nil {
+				return
+			}
+			if !yield(node) {
+				return
+			}
+		}
 	}
 }
 

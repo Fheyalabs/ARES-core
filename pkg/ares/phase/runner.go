@@ -307,6 +307,7 @@ func (r *SessionRunner) BeginSession(sessionID, cohortID string) (*SessionContex
 	}
 	ctx := NewSessionContext(sessionID)
 	ctx.CohortID = cohortID
+	ctx.lineageStore = r.lineageStore // nil for Compose-built runners
 	first, ok := r.byEntryState[r.initialState]
 	if !ok {
 		r.mu.Unlock()
