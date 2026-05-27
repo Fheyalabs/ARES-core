@@ -77,3 +77,30 @@ func TestEd25519Signer_PublicKeyIsCopy(t *testing.T) {
 		t.Fatal("PublicKey() returned mutable shared slice")
 	}
 }
+
+func TestEd25519Signer_ConcurrentSignVerify(t *testing.T) {
+	// Signer is used concurrently by the runner's auto-wrap dispatch
+	// across many in-flight messages. Confirm Sign + Verify are
+	// goroutine-safe (they call ed25519 stdlib funcs that are
+	// re-entrant; this test guards against future regressions).
+	s, _ := sign.NewEd25519Signer()
+	pk := s.PublicKey()
+	msg := []byte("concurrent")
+	const N = 64
+	done := make(chan error, N)
+	for i := 0; i < N; i++ {
+		go func() {
+			sig, err := s.Sign(msg)
+			if err != nil {
+				done <- err
+				return
+			}
+			done <- s.Verify(pk, msg, sig)
+		}()
+	}
+	for i := 0; i < N; i++ {
+		if err := <-done; err != nil {
+			t.Errorf("goroutine %d: %v", i, err)
+		}
+	}
+}
