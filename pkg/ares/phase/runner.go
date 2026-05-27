@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
+	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 )
 
 // SessionRunner composes a list of Phases into one session pipeline.
@@ -38,6 +41,31 @@ type SessionRunner struct {
 
 	mu       sync.RWMutex
 	sessions map[string]*sessionTracker
+
+	// Lineage state (populated by ComposeWith via attachLineage;
+	// nil for Compose-built runners, which skip lineage and behave
+	// identically to v0.3.x).
+	lineageStore       lineage.Store
+	lineageSigner      sign.Signer
+	lineageVerifiers   map[string]sign.Signer
+	lineageFailureHook LineageFailureFn
+}
+
+// attachLineage stashes lineage state on the runner for use by the
+// auto-wrap dispatch hooks. Called by ComposeWith. The hooks
+// themselves (pre-OnMessage verification in HandleLineageMessage,
+// post-Exit auto-commit in commitPhaseOutputs) land in
+// runner_lineage.go.
+func (r *SessionRunner) attachLineage(
+	store lineage.Store,
+	signer sign.Signer,
+	verifiers map[string]sign.Signer,
+	hook LineageFailureFn,
+) {
+	r.lineageStore = store
+	r.lineageSigner = signer
+	r.lineageVerifiers = verifiers
+	r.lineageFailureHook = hook
 }
 
 // sessionTracker keeps the per-session, per-runner state needed to
