@@ -3,6 +3,9 @@
 package transport
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -99,4 +102,43 @@ func (s *ArtifactStore) Resolve(key string) ([]byte, error) {
 		return data, nil
 	}
 	return nil, fmt.Errorf("artifact %q not found", key)
+}
+
+// ErrCorrupted is returned by GetContent when the stored bytes no
+// longer hash to the requested handle. Indicates in-memory
+// corruption or tampering by colocated code.
+var ErrCorrupted = errors.New("artifact: content hash mismatch")
+
+// ContentKey converts a 32-byte content handle to the string key used
+// internally by the Put/Get API. Exposed so tests can simulate
+// in-memory corruption; production code uses PutContent/GetContent
+// exclusively.
+func ContentKey(handle [32]byte) string {
+	return "content:" + hex.EncodeToString(handle[:])
+}
+
+// PutContent stores data under a content-addressed key (the SHA-256
+// of data) and returns the handle. Idempotent: putting the same
+// content twice returns the same handle. Used by SC-10 lineage to
+// hold large CKKS payloads (eval keys, score ciphertexts, winner
+// packages) that are too big to inline on WSMessage.
+func (s *ArtifactStore) PutContent(data []byte) ([32]byte, error) {
+	handle := sha256.Sum256(data)
+	s.Put(ContentKey(handle), data)
+	return handle, nil
+}
+
+// GetContent retrieves the bytes behind handle. Re-hashes the stored
+// bytes and returns ErrCorrupted if the result no longer equals
+// handle (defends against in-memory corruption or tampering).
+func (s *ArtifactStore) GetContent(handle [32]byte) ([]byte, error) {
+	data, ok := s.Get(ContentKey(handle))
+	if !ok {
+		return nil, fmt.Errorf("artifact: handle %x not found", handle)
+	}
+	verify := sha256.Sum256(data)
+	if verify != handle {
+		return nil, ErrCorrupted
+	}
+	return data, nil
 }
