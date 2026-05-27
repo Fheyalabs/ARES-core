@@ -104,4 +104,15 @@ type ContextKeyType struct {
 	// keygen phase may declare {"depth": 30} for the same key it
 	// produces. The runner cross-references them at startup.
 	Constraints map[string]any
+
+	// NoLineage opts this context key out of SC-10 ciphertext
+	// lineage when the runner is constructed via
+	// phase.ComposeWith. Default false means lineage IS enforced.
+	// Set true for ephemeral or public values that need not be
+	// cryptographically bound (e.g. heartbeat flags, public
+	// broadcast constants). Auditable from one place: grep
+	// "NoLineage: true" across the codebase finds every escape
+	// hatch. Compose-built runners ignore the field entirely
+	// (legacy lineage-disabled path).
+	NoLineage bool
 }
