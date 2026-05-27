@@ -98,6 +98,42 @@ func (r *SessionRunner) fireFailureHook(ev LineageFailureEvent) {
 	r.lineageFailureHook(ev)
 }
 
+// BuildMismatchClaim constructs a signed DAGNode representing a
+// lineage.mismatch broadcast frame. The claim's payload is the
+// stringified mismatch error (for forensic legibility); parents
+// are empty (the original commit ref is encoded in the
+// MismatchError.NodeHash for audit but not as a DAG parent — the
+// claim stands on its own as a signed assertion).
+//
+// Transport layer wraps the returned DAGNode in a WSMessage of
+// type "lineage.mismatch" and broadcasts to all session
+// participants for re-verification.
+func (r *SessionRunner) BuildMismatchClaim(sessionID, phaseID, role string, mismatchErr error) (lineage.DAGNode, error) {
+	if r.lineageSigner == nil {
+		return lineage.DAGNode{}, errors.New("phase: BuildMismatchClaim requires lineage-enabled runner")
+	}
+	payload := []byte(mismatchErr.Error())
+	return lineage.Commit(sessionID, phaseID, "mismatch-claim", payload, nil, r.lineageSigner)
+}
+
+// ReportFalseLineageClaim is invoked by the transport layer when
+// cross-verification of a mismatch claim concludes the claim was
+// unjustified (the original commit verifies cleanly against the
+// payload other parties received). Fires the LineageFailureFn
+// hook with Kind="mismatch-false-claim" attributing the claimant.
+//
+// claim is the signed DAGNode the claimant broadcast.
+func (r *SessionRunner) ReportFalseLineageClaim(sessionID string, claim lineage.DAGNode) {
+	r.fireFailureHook(LineageFailureEvent{
+		Kind:       "mismatch-false-claim",
+		SessionID:  sessionID,
+		PhaseID:    claim.PhaseID,
+		Role:       claim.Role,
+		Attributee: string(claim.Producer),
+		DAGNodes:   []lineage.DAGNode{claim},
+	})
+}
+
 // commitPhaseOutputsIfEnabled is invoked by the runner's advance
 // loop after Phase.Exit completes successfully. No-op for
 // Compose-built runners (lineageStore == nil). For
