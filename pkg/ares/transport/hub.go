@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 )
 
 const (
@@ -41,11 +43,16 @@ const (
 	DefaultMaxMessageSize int64 = 32 << 20
 )
 
-// WireProtocolVersion is the current major wire-format version for
-// WSMessage envelopes. Bump when the JSON shape changes in a way
-// that breaks older clients. Minor changes (additive fields) stay
-// at the same major.
+// WireProtocolVersion is the version emitted by phase.Compose(...)
+// (lineage-disabled) pipelines. Existing apps that have not migrated
+// to ComposeWith continue speaking version "1".
 const WireProtocolVersion = "1"
+
+// WireProtocolVersionLineage is the version emitted by
+// phase.ComposeWith(...) pipelines. Frames at this version MUST
+// carry a non-nil Lineage field; the hub's strict-mode validator
+// (ValidateInboundMessage) rejects v2 frames missing it. SC-10.
+const WireProtocolVersionLineage = "2"
 
 // WSMessage is the JSON envelope every WebSocket frame carries. Type and
 // SessionID are the dispatch keys; Payload is the app-specific body.
@@ -58,6 +65,15 @@ type WSMessage struct {
 	Seq       int64           `json:"seq,omitempty"`
 	Payload   json.RawMessage `json:"payload,omitempty"`
 	Timestamp string          `json:"timestamp"`
+
+	// Lineage carries the producer's signed DAGNode binding this
+	// message's Payload to (SessionID, PhaseID, Role) per SC-10.
+	// Required when Version == WireProtocolVersionLineage; ignored
+	// when Version is empty or "1" (Compose-built pipelines never
+	// set it). The full node rides inline rather than via a
+	// separate frame to eliminate ordering windows between payload
+	// and commit.
+	Lineage *lineage.DAGNode `json:"lineage,omitempty"`
 }
 
 // Client is one connected participant. Pseudonym is the auth identity;
@@ -252,12 +268,14 @@ func (h *Hub) readPump(c *Client) {
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
 		}
-		// Reject frames whose declared major version doesn't match
-		// ours. Empty Version is accepted for backward compat with
-		// pre-v0.3 clients that don't set the field.
-		if msg.Version != "" && msg.Version != WireProtocolVersion {
-			log.Printf("[hub] wire version mismatch pseudo=%s type=%s got=%s want=%s — frame dropped",
-				shortID(c.Pseudonym), msg.Type, msg.Version, WireProtocolVersion)
+		// Accept v1 (Compose-built pipelines) and v2 (ComposeWith
+		// pipelines, SC-10). Empty Version is treated as v1 for
+		// backward compat with pre-v0.3 clients. The stricter
+		// per-version invariants (v2 requires non-nil Lineage)
+		// are checked by ValidateInboundMessage.
+		if err := ValidateInboundMessage(msg); err != nil {
+			log.Printf("[hub] frame validation pseudo=%s type=%s: %v — frame dropped",
+				shortID(c.Pseudonym), msg.Type, err)
 			continue
 		}
 		// Replay protection: per-(session, pseudonym, type) monotonic
