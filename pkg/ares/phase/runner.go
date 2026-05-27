@@ -380,6 +380,9 @@ func (r *SessionRunner) advance(tracker *sessionTracker) (bool, error) {
 		if err := current.Exit(tracker.ctx); err != nil {
 			return false, fmt.Errorf("phase %q: Exit: %w", current.Name(), err)
 		}
+		if err := r.commitPhaseOutputsIfEnabled(current, tracker.ctx); err != nil {
+			return false, fmt.Errorf("phase %q: lineage commit: %w", current.Name(), err)
+		}
 		next := current.ExitState()
 		if next == StateNone {
 			r.mu.Lock()
@@ -466,6 +469,9 @@ func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) er
 		// Exit current and step to next.
 		if err := current.Exit(tracker.ctx); err != nil {
 			return fmt.Errorf("phase %q: Exit during AdvanceToState: %w", current.Name(), err)
+		}
+		if err := r.commitPhaseOutputsIfEnabled(current, tracker.ctx); err != nil {
+			return fmt.Errorf("phase %q: lineage commit during AdvanceToState: %w", current.Name(), err)
 		}
 		next := current.ExitState()
 		if next == StateNone {

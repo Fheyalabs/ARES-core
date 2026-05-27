@@ -97,3 +97,94 @@ func (r *SessionRunner) fireFailureHook(ev LineageFailureEvent) {
 	}()
 	r.lineageFailureHook(ev)
 }
+
+// commitPhaseOutputsIfEnabled is invoked by the runner's advance
+// loop after Phase.Exit completes successfully. No-op for
+// Compose-built runners (lineageStore == nil). For
+// ComposeWith-built runners, iterates the phase's Provides schema
+// and auto-commits each output key whose declared value is []byte
+// and is not marked NoLineage.
+//
+// Non-[]byte values are skipped silently — apps wanting to commit
+// struct types must serialize to []byte themselves before
+// ctx.Set. This keeps v0.4.0 framework scope narrow; structured
+// auto-serialization is a future enhancement.
+//
+// Parents are resolved by inspecting Phase.Requires: each
+// required key whose current value in ctx is []byte and which has
+// a corresponding lineage node in the store contributes a parent
+// ref.
+func (r *SessionRunner) commitPhaseOutputsIfEnabled(p Phase, ctx *SessionContext) error {
+	if r.lineageStore == nil {
+		return nil
+	}
+	parents, err := r.resolveParents(p, ctx)
+	if err != nil {
+		return err
+	}
+	for key, kt := range p.Provides() {
+		if kt.NoLineage {
+			continue
+		}
+		raw, ok := ctx.Get(key)
+		if !ok {
+			continue
+		}
+		payload, ok := raw.([]byte)
+		if !ok {
+			// Non-byte output; skip auto-commit.
+			continue
+		}
+		node, err := lineage.Commit(
+			ctx.SessionID,
+			p.Name(),
+			key, // role = context key name
+			payload,
+			parents,
+			r.lineageSigner,
+		)
+		if err != nil {
+			return fmt.Errorf("Commit %s.%s: %w", p.Name(), key, err)
+		}
+		if err := r.lineageStore.Append(context.Background(), node); err != nil && !errors.Is(err, lineage.ErrNodeExists) {
+			return fmt.Errorf("Append %s.%s: %w", p.Name(), key, err)
+		}
+	}
+	return nil
+}
+
+// resolveParents builds the parent DAGNode list for a phase about
+// to commit. For each key in p.Requires(): if the key's current
+// context value is []byte, hash it and look up a matching node in
+// the store; if found, include as parent. Missing matches are not
+// errors (the producer of the input may be on a different runner;
+// lineage chains across boundaries are app-layer concerns for
+// v0.4.0).
+func (r *SessionRunner) resolveParents(p Phase, ctx *SessionContext) ([]lineage.DAGNode, error) {
+	var parents []lineage.DAGNode
+	for key := range p.Requires() {
+		raw, ok := ctx.Get(key)
+		if !ok {
+			continue
+		}
+		payload, ok := raw.([]byte)
+		if !ok {
+			continue
+		}
+		hash := lineage.HashPayload(payload)
+		// Walk the session to find a node whose PayloadHash matches.
+		// O(N) per resolve — fine for v0.4.0 typical N≤6 sessions; an
+		// index by PayloadHash is a v0.5.0 optimization if profiling
+		// shows it.
+		for node, err := range r.lineageStore.WalkSession(context.Background(), ctx.SessionID) {
+			if err != nil {
+				return nil, err
+			}
+			if node.PayloadHash == hash {
+				parents = append(parents, node)
+				break
+			}
+		}
+	}
+	return parents, nil
+}
