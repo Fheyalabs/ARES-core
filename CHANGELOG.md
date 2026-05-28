@@ -295,7 +295,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.2...v0.4.0
 [0.3.1]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/Fheyalabs/ARES-core/releases/tag/v0.2.0
