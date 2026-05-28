@@ -815,6 +815,33 @@ func hasNonConstantTerm(coeffs []float64) bool {
 	return false
 }
 
+// RoundTripCiphertext deserializes ct under the given parameters
+// and immediately re-serializes the resulting CKKS Ciphertext
+// object. Used by the SC-10 serialization golden test to detect
+// OpenFHE version-drift that would break SC-10 lineage interop
+// across deployments.
+//
+// Under a stable OpenFHE version, the returned bytes must be
+// byte-identical to ct.
+func RoundTripCiphertext(params ContractParams, ct []byte) ([]byte, error) {
+	if len(ct) == 0 {
+		return nil, fmt.Errorf("ciphertext is required")
+	}
+	cctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(cctx)
+
+	ctH, err := deserializeCiphertext(cctx, ct)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(ctH)
+
+	return serializeCiphertext(ctH)
+}
+
 func EncryptCKKSForContract(params ContractParams, jointPublicKey []byte, values []float64) ([]byte, error) {
 	if len(jointPublicKey) == 0 {
 		return nil, fmt.Errorf("joint public key is required")
