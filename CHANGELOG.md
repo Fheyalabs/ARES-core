@@ -49,6 +49,19 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.5.0] — Unreleased
+
+### Added
+
+- **`pkg/ares/onion`** — client-side slot-anonymization crypto:
+  X25519 ECIES envelopes (HKDF-SHA256 `ares_onion_v1` + AES-256-GCM,
+  Python wire-parity), SC-2-correct onion construction
+  (`BuildOnion`/`PeelBatch` with self-layer + ciphertext-memory-match
+  identification), and a deterministic coordinator-free
+  `SlotPermutation`. Package godoc documents the SC-7 collusion bound
+  (certain deanonymization requires `k >= N-2` colluders; 50% floor at
+  `k = N-3`). Foundation for the canonical onion-shuffle phases (next).
+
 ## [0.4.1] — 2026-05-28
 
 Developer-experience patch. No new protocol features, no API breaks.
