@@ -54,8 +54,14 @@ func WithPeerVerifiers(v map[string]sign.Signer) ComposeOption {
 // deduction in Fheya).
 //
 // Hook is fire-and-forget — must not block on network or other
-// long operations; spawn a goroutine if needed. Hook panics are
-// recovered() by the runner.
+// long operations; spawn a goroutine if needed.
+//
+// Panic handling: the runner recovers from hook panics so a
+// buggy app hook cannot take down the runner. Recovered panics
+// are logged to stderr by default (override the destination via
+// phase.SetHookPanicLog — io.Discard silences entirely).
+// Recovery is not a substitute for not panicking; the log line
+// is meant to surface the bug, not normalize it.
 func WithLineageFailureHook(fn LineageFailureFn) ComposeOption {
 	return func(o *runnerOpts) { o.failureHook = fn }
 }

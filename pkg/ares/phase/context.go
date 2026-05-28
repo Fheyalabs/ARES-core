@@ -155,6 +155,15 @@ type MissingContextError struct {
 	Phase string
 }
 
+// Error implements the error interface. Format:
+//
+//	phase: <Phase> requires context key <Key> which is not set
+//
+// Apps catching this via errors.As(err, &mce) can branch on the
+// missing key name (e.g. to inject a default or trigger a recovery
+// fetch). Phases returning this from Enter abort the session;
+// returning it from other hooks is a phase-bug pattern (the runner
+// won't restart the phase).
 func (e *MissingContextError) Error() string {
 	return "phase: " + e.Phase + " requires context key " + e.Key + " which is not set"
 }
