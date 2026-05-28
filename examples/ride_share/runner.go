@@ -4,7 +4,9 @@ package rideshare
 
 import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 )
 
 // Pipeline builds a SessionRunner for the inDrive-style
@@ -47,5 +49,49 @@ func PipelineWithHelper(
 		NewPhaseScoreWithHelper(helper, sharpening),
 		NewPhaseDecryptWithHelper(helper),
 		NewPhaseSettle(),
+	)
+}
+
+// PipelineWithLineage builds the ride-share pipeline with SC-10
+// ciphertext lineage enabled. signer is the dispatcher's signing
+// key; peerVerifiers maps signature-scheme name to a Signer that
+// can verify peer signatures on inbound DAGNodes (the producer
+// pubkey lives on the node itself).
+func PipelineWithLineage(signer sign.Signer, peerVerifiers map[string]sign.Signer) (*phase.SessionRunner, error) {
+	return phase.ComposeWith(
+		[]phase.Phase{
+			NewPhaseInvite(),
+			NewPhaseKeygen(),
+			NewPhaseSubmit(),
+			NewPhaseScore(),
+			NewPhaseDecrypt(),
+			NewPhaseSettle(),
+		},
+		phase.WithSigner(signer),
+		phase.WithPeerVerifiers(peerVerifiers),
+		phase.WithStore(lineage.NewInMemoryStore()),
+	)
+}
+
+// PipelineWithLineageAndHelper is the lineage-enabled variant
+// using openfhe-contract-helper for real CKKS work.
+func PipelineWithLineageAndHelper(
+	helper *helperclient.Client,
+	sharpening helperclient.EvalPolyParams,
+	signer sign.Signer,
+	peerVerifiers map[string]sign.Signer,
+) (*phase.SessionRunner, error) {
+	return phase.ComposeWith(
+		[]phase.Phase{
+			NewPhaseInvite(),
+			NewPhaseKeygenWithHelper(helper),
+			NewPhaseSubmit(),
+			NewPhaseScoreWithHelper(helper, sharpening),
+			NewPhaseDecryptWithHelper(helper),
+			NewPhaseSettle(),
+		},
+		phase.WithSigner(signer),
+		phase.WithPeerVerifiers(peerVerifiers),
+		phase.WithStore(lineage.NewInMemoryStore()),
 	)
 }
