@@ -49,6 +49,112 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.4.0] — 2026-05-28
+
+**SC-10 Ciphertext Lineage Primitive** — framework-level Merkle DAG
+binding every byte payload at every phase boundary. Closes
+ultrareview findings C1 (SC-5 `C_emb` undefined) and substantially
+addresses H2 (Phase 2 ciphertext-binding gap) for the framework code
+path. See ARES Spec v2.5 §SC-10 for protocol-level documentation;
+`pkg/ares/lineage/README.md` and `pkg/ares/sign/README.md` for the
+Go-side API.
+
+### Added
+
+- **`pkg/ares/sign/`** — new package. Pluggable `Signer` interface;
+  `Ed25519Signer` default (crypto/ed25519 from stdlib). HSM-backed
+  and post-quantum schemes substitutable via the interface.
+- **`pkg/ares/lineage/`** — new package. `DAGNode`, `Commit`,
+  `Verify`, `Store` interface, `InMemoryStore` default; structured
+  `*MismatchError` for failure forensics. Idempotent `Append`;
+  `WalkSession` returns `iter.Seq2[DAGNode, error]` for lazy
+  iteration.
+- **`phase.ContextKeyType.NoLineage`** — opt-out field on
+  context-key declarations. Default `false` (lineage enforced). Set
+  `true` for ephemeral or public outputs that don't need
+  cryptographic binding. Auditable from one place: grep
+  `"NoLineage: true"`.
+- **`phase.ComposeWith(phases, opts...)`** — new constructor for
+  lineage-enabled pipelines. Options: `WithSigner` (required),
+  `WithPeerVerifiers` (required for multi-party), `WithStore`
+  (default `InMemoryStore`), `WithLineageFailureHook`.
+- **`phase.LineageFailureEvent` + `phase.LineageFailureFn`** —
+  structured callback for app-level penalty handlers (Fheya's
+  brownie deductions, etc.). Kinds: `"mismatch-confirmed"`,
+  `"mismatch-false-claim"`.
+- **`SessionContext.LineageDAG()`** — read-only `iter.Seq[DAGNode]`
+  over the session's DAG nodes. Empty on `Compose`-built runners.
+- **`SessionRunner.HandleLineageMessage(...)`** — transport-layer
+  entry point that verifies + persists inbound lineage before
+  dispatching to `Phase.OnMessage`. Compose-built runners fall
+  through to the legacy `HandleMessage` path.
+- **`SessionRunner.BuildMismatchClaim(...)` /
+  `SessionRunner.ReportFalseLineageClaim(...)`** — framework hooks
+  for the transport layer's mismatch cross-verification flow.
+- **`transport.WSMessage.Lineage *lineage.DAGNode`** — required
+  field on v2 frames. Full signed `DAGNode` rides inline with the
+  payload (no separate commit frame, no ordering window).
+- **`transport.WireProtocolVersionLineage = "2"`** — new wire
+  version for ComposeWith-built pipelines. Existing
+  `WireProtocolVersion = "1"` preserved for Compose-built
+  pipelines.
+- **`transport.ArtifactStore.PutContent` /
+  `transport.ArtifactStore.GetContent`** — content-addressed methods
+  alongside the existing app-keyed API. `GetContent` detects
+  in-memory corruption via re-hash, returns `ErrCorrupted` on
+  mismatch.
+- **`transport.ValidateInboundMessage`** — hub strict-mode validator.
+  v2 frames missing `Lineage` are rejected; unknown versions
+  rejected; v1 frames accepted regardless of `Lineage` (backward
+  compat).
+- **`cgo.RoundTripCiphertext`** (`-tags openfhe`) — exported wrapper
+  for the OpenFHE serialization golden-hash test
+  (`pkg/ares/crypto/cgo/serialization_golden_test.go`) which guards
+  the OpenFHE 1.5.1 pin against drift via a checked-in fixture in
+  `pkg/ares/crypto/cgo/testdata/`.
+- Reference apps migrated:
+  - `examples/sealed_bid_auction/` — `PipelineWithLineage` +
+    `PipelineWithLineageAndHelper` + tamper smoke test.
+  - `examples/ride_share/` — same shape.
+  - `examples/recurring_cohort_ranking/` —
+    `FormationPipelineWithLineage` +
+    `WeeklyPipelineWithLineage` (both take a shared
+    `lineage.Store`) + tamper smoke test on the standalone-
+    composable formation pipeline.
+  - `examples/voting/` — `PipelineWithLineage` + tamper smoke
+    (demonstrates SC-10 protects non-FHE byte payloads too).
+  - Legacy `Pipeline()` / `PipelineWithHelper()` / `WeeklyPipeline()`
+    / `FormationPipeline()` constructors preserved unchanged.
+
+### Compatibility notes
+
+- Existing `phase.Compose(phases...)` call sites unchanged; emit v1
+  wire frames; lineage stays off. No breakage for v0.3.x consumers.
+- Applications opt into lineage by switching to
+  `phase.ComposeWith(...)`. Fail-fast at construction time if
+  required options (Signer; PeerVerifiers for multi-party) are
+  missing.
+- WSMessage v2 frames are accepted by the hub iff `Lineage` is
+  non-nil; v1 frames continue working as before.
+
+### Developer-experience follow-ups (deferred to v0.4.x patches)
+
+The first review pass of the v0.4.0 implementation flagged several
+DX items that don't block the release but are tracked for a
+dedicated pass before the Fheya migration:
+
+- Tighten every framework-layer error message: include phase name,
+  context key, root cause; reject generic phrasing.
+- Distinguish failure types (transient / permanent /
+  app-attributable / framework-bug) via concrete types or sentinels
+  so apps can branch policy without string-matching.
+- Audit every exported symbol for godoc coverage (what / when /
+  when-not / parameters / returns / failure modes).
+- Surface load-bearing implicit behaviors explicitly (e.g.,
+  non-`[]byte` Provides outputs silently skipped from auto-commit).
+- Add stderr logging to `fireFailureHook`'s `recover()` so buggy
+  app hooks are visible at runtime, not just postmortem.
+
 ## [0.3.1] — 2026-05-19
 
 Patch release: post-launch hardening from the 2026-05-19 audit

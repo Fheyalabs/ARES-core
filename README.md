@@ -37,6 +37,30 @@ at [fheya.de](https://fheya.de) — it's not open-source, but exists as
 proof the framework supports the most complex shape it's designed for
 (cosine + location + reputation scoring across 6 parties at depth 30).
 
+## Ciphertext lineage (SC-10, v0.4.0)
+
+New in v0.4.0: a session-rooted Merkle DAG covering every byte payload
+at every phase boundary. Each node is signed by its producer (default
+Ed25519, pluggable via the `sign.Signer` interface). Opt-out per
+output via `phase.ContextKeyType.NoLineage`; secure by default for
+runners built with `phase.ComposeWith(...)`.
+
+Closes the SC-5 `C_emb` definition gap and substantially addresses H2
+(Phase 2 ciphertext-binding) from the ARES v2.5 ultrareview. Apps
+that don't need lineage continue to call `phase.Compose(...)` and
+emit v1 wire frames — fully backward-compatible.
+
+Per-package detail:
+- [`pkg/ares/sign/`](pkg/ares/sign/) — `Signer` interface +
+  `Ed25519Signer` default
+- [`pkg/ares/lineage/`](pkg/ares/lineage/) — `DAGNode`, `Commit`,
+  `Verify`, `Store` + `InMemoryStore`
+
+Threat-model nuance for the framework's target audience
+(financial-grade-with-real-economic-stakes vs Fheya-grade-where-the
+-encrypted-profile-removes-the-incentive) is documented in
+ARES Spec v2.5 §SC-10.
+
 ## Quickstart
 
 ```go
