@@ -22,8 +22,33 @@ import (
 // without Lineage (lineage-disabled backward-compatibility
 // path).
 //
+// # Auto-commit semantics (load-bearing)
+//
+// After every Phase.Exit, the runner walks the phase's Provides
+// schema and auto-commits each output key. Three exemption rules
+// apply — these are intentional but easy to miss:
+//
+//  1. Outputs declared NoLineage:true in ContextKeyType are skipped
+//     entirely. Use this for ephemeral or public outputs that don't
+//     need cryptographic binding (e.g. liveness pings, debug
+//     metadata). Audit from one place: grep `"NoLineage: true"`.
+//  2. Outputs whose runtime value is NOT a []byte slice are silently
+//     skipped. Phase.Provides declares the TypeName but the
+//     auto-commit hook checks the concrete type. Apps wanting to
+//     commit struct types MUST serialize to []byte themselves
+//     before ctx.Set (json.Marshal, proto.Marshal, etc.).
+//  3. Outputs not yet ctx.Set at Exit time are skipped (no value
+//     to hash). This usually indicates a phase bug — the Provides
+//     contract said the key would be set but Exit ran without it.
+//
+// Returns:
+//   - *SessionRunner: ready for BeginSession + HandleLineageMessage.
+//   - error wrapped with ErrPermanent for missing/invalid options.
+//
 // Default store (when WithStore is omitted):
-// lineage.NewInMemoryStore().
+// lineage.NewInMemoryStore() — in-memory, per-runner, NOT shared
+// across runners unless the caller injects a shared store via
+// WithStore.
 func ComposeWith(phases []Phase, opts ...ComposeOption) (*SessionRunner, error) {
 	o := &runnerOpts{}
 	for _, opt := range opts {

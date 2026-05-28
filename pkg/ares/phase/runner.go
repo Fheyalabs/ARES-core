@@ -83,6 +83,10 @@ type sessionTracker struct {
 // that each phase's Requires are satisfied by some preceding phase's
 // Provides.
 //
+// Use ComposeWith(...) instead when SC-10 ciphertext lineage is
+// required. Compose-built runners emit v1 wire frames without
+// Lineage and skip the auto-commit / verify-before-dispatch flow.
+//
 // Validation rules enforced here:
 //   - Phase names are unique within the runner.
 //   - Every inline phase's Requires keys are produced by some
@@ -95,6 +99,10 @@ type sessionTracker struct {
 //   - Inline phases form a chain: ExitState of phase k equals
 //     EntryState of phase k+1 (in inline order). The terminal inline
 //     phase may have ExitState = StateNone.
+//
+// Returns an error wrapped with ErrPermanent for any validation
+// failure. Apps should fail-fast on Compose errors (config bug,
+// no retry possible).
 func Compose(phases ...Phase) (*SessionRunner, error) {
 	if len(phases) == 0 {
 		return nil, fmt.Errorf("%w: Compose needs at least one phase", ErrPermanent)
@@ -295,6 +303,24 @@ func (r *SessionRunner) PhaseForState(s SessionState) (Phase, bool) {
 // initial state, and calls Enter on the first inline phase. Returns
 // the SessionContext so the caller can seed cohort-lifetime context
 // values before any messages arrive.
+//
+// Load-bearing behavior: BeginSession does NOT cascade past the
+// initial phase even if that phase's CheckComplete returns true.
+// This is intentional — the typical caller (a SessionTrigger
+// implementation) needs to ctx.Set canonical context entries
+// AFTER BeginSession returns and BEFORE the second phase's Enter
+// runs (because Enter-time validation patterns like
+// PhasePreSharedKeyLookup check runtime ctx for required keys).
+// Use AdvanceToState(...) to walk into the first
+// message-consuming phase once the trigger has seeded its
+// context.
+//
+// Errors:
+//   - ErrPermanent: empty sessionID; session already active.
+//   - ErrFrameworkBug: no phase claims the runner's initialState
+//     (indicates a Compose() / ComposeWith() bug, since both
+//     constructors set initialState from a phase's EntryState).
+//   - phase.Enter pass-through (the first phase's own error).
 func (r *SessionRunner) BeginSession(sessionID, cohortID string) (*SessionContext, error) {
 	if sessionID == "" {
 		return nil, fmt.Errorf("%w: BeginSession requires non-empty sessionID", ErrPermanent)
@@ -344,6 +370,19 @@ func (r *SessionRunner) BeginSession(sessionID, cohortID string) (*SessionContex
 // the named session. Returns (transitioned, error). When transitioned
 // is true, the session's state has advanced and the next phase's
 // Enter has been called.
+//
+// Use HandleLineageMessage instead for runners built with
+// ComposeWith(...) — HandleMessage on a lineage-enabled runner
+// works (legacy passthrough) but skips lineage verification.
+//
+// Errors:
+//   - ErrPermanent: session not active; current phase does not
+//     consume msgType in its current state.
+//   - phase.{OnMessage,Exit,Enter} pass-through: the phase's own
+//     errors bubble up unwrapped (apps classify per their own
+//     contract).
+//   - ErrFrameworkBug: cascade hop limit exceeded (pipeline cycle),
+//     or no phase claims a downstream state.
 func (r *SessionRunner) HandleMessage(sessionID, msgType, from string, payload []byte) (bool, error) {
 	r.mu.RLock()
 	tracker, ok := r.sessions[sessionID]
@@ -429,11 +468,28 @@ func (r *SessionRunner) advance(tracker *sessionTracker) (bool, error) {
 // already advanced the session and the runner needs to catch up
 // to maintain a parallel view.
 //
-// Returns nil when the runner is already at the target (no-op).
-// Returns an error if the target is not reachable from the
-// current state walking forward (the caller passed a target that
-// no later phase claims, or the target is "behind" the current
-// runner position — runners never rewind).
+// Special cases:
+//   - target == current state: no-op, returns nil.
+//   - target is an InternalState of the current phase: no-op,
+//     returns nil (handles coarse-phase / fine-state mismatches
+//     like LOCKED → KEYGEN where KEYGEN is internal to Phase 0a).
+//   - target == StateNone: rejected. Runners advance forward
+//     through declared states only; the terminal cascade to
+//     StateNone happens automatically when a phase with
+//     ExitState=StateNone fires its Exit. Callers wanting to end
+//     a session should EndSession(sessionID) explicitly.
+//
+// Errors:
+//   - ErrPermanent: session not active; target is unreachable
+//     (no phase walks to it, or target is "behind" — runners never
+//     rewind).
+//   - ErrFrameworkBug: cascade hop limit exceeded (pipeline cycle);
+//     no phase claims a downstream state declared by a phase's
+//     ExitState.
+//   - phase.{Exit,Enter} pass-through.
+//   - Lineage commit errors during Exit pass through wrapped with
+//     ErrFrameworkBug (the auto-commit hook should never fail
+//     legitimately; failures indicate a Store or Signer bug).
 func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) error {
 	r.mu.RLock()
 	tracker, ok := r.sessions[sessionID]

@@ -141,15 +141,33 @@ func (r *SessionRunner) fireFailureHook(ev LineageFailureEvent) {
 // MismatchError.NodeHash for audit but not as a DAG parent — the
 // claim stands on its own as a signed assertion).
 //
+// Parameters:
+//   - sessionID: the session whose lineage was disputed.
+//   - phaseID:   the phase of the disputed commit. Stored on the
+//     claim DAGNode's PhaseID field.
+//   - role:      the role label of the disputed commit. Currently
+//     accepted for API symmetry with the disputed commit's
+//     construction but NOT propagated to the claim's DAGNode —
+//     the claim's Role is hardcoded to "mismatch-claim" so
+//     receivers can distinguish a claim from a real commit. A
+//     v0.5.0 follow-up may either embed `role` in the payload or
+//     deprecate the parameter.
+//   - mismatchErr: the underlying lineage error. Its Error()
+//     string becomes the DAGNode's payload bytes.
+//
 // Transport layer wraps the returned DAGNode in a WSMessage of
 // type "lineage.mismatch" and broadcasts to all session
 // participants for re-verification.
+//
+// Returns ErrPermanent if called on a Compose-built (non-lineage)
+// runner.
 func (r *SessionRunner) BuildMismatchClaim(sessionID, phaseID, role string, mismatchErr error) (lineage.DAGNode, error) {
 	if r.lineageSigner == nil {
 		return lineage.DAGNode{}, fmt.Errorf(
 			"%w: BuildMismatchClaim requires lineage-enabled runner (build via ComposeWith, not Compose)",
 			ErrPermanent)
 	}
+	_ = role // see godoc — currently informational; reserved for v0.5.0.
 	payload := []byte(mismatchErr.Error())
 	return lineage.Commit(sessionID, phaseID, "mismatch-claim", payload, nil, r.lineageSigner)
 }
