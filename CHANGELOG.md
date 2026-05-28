@@ -49,6 +49,94 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.4.1] — 2026-05-28
+
+Developer-experience patch. No new protocol features, no API breaks.
+Cuts the consumer-facing rough edges flagged during the v0.4.0
+implementation review so the next consumer integration (Fheya
+app's opportunistic ComposeWith migration; external app authors
+adopting the framework) reads well-documented, classifiable
+errors.
+
+### Added
+
+- **Failure-type sentinels** in `pkg/ares/phase`. Four sentinel
+  errors apps use to branch retry / penalty / report-bug policy
+  via `errors.Is(err, phase.ErrXxx)` without string-matching:
+  - `phase.ErrTransient` — retryable (backend unreachable, lock
+    contention, transient network).
+  - `phase.ErrPermanent` — non-retryable (config, schema,
+    invariant breach, caller misuse).
+  - `phase.ErrAppAttributable` — counterparty caused (tampered
+    payload, false mismatch claim, malformed commit).
+    `errors.As(err, &mismatchErr)` still recovers the typed
+    `*lineage.MismatchError` underneath.
+  - `phase.ErrFrameworkBug` — unexpected internal condition
+    (apps surface, do not silently recover).
+- **`phase.SetHookPanicLog(io.Writer) io.Writer`** — process-init
+  override for the destination `fireFailureHook` writes to when
+  an app-registered `LineageFailureFn` panics. Default
+  `os.Stderr`. Pass `io.Discard` to silence; pass a
+  `*bytes.Buffer` in tests to capture and assert.
+
+### Changed
+
+- **Every framework-level error from the `SessionRunner` public
+  API is now classified with a sentinel.** Apps that previously
+  string-matched error messages now branch via `errors.Is`. The
+  underlying typed errors (e.g. `*lineage.MismatchError`) remain
+  recoverable via `errors.As`. See `errors_classify_test.go` for
+  the full classification table.
+- **`fireFailureHook` panic-recovery logs to stderr** instead of
+  silently swallowing the recovered value. The runner still
+  recovers (so a buggy hook doesn't crash the runner), but the
+  misbehavior is now observable at runtime.
+
+### Docs
+
+Five load-bearing-but-implicit behaviors now surface in the public
+godoc rather than only in the implementation:
+
+- `ComposeWith` auto-commit exemption rules — non-`[]byte` runtime
+  values are silently skipped (apps must marshal struct types
+  before `ctx.Set`); `NoLineage: true` Provides outputs are
+  intentionally skipped.
+- `BeginSession` does NOT cascade past the initial phase even if
+  `CheckComplete` returns true. The pause exists so
+  `SessionTrigger` implementations can seed canonical context
+  entries before the second phase's `Enter` runs.
+- `AdvanceToState` behavior on the three corner cases:
+  target == current (no-op), target ∈ InternalStates of current
+  phase (no-op), target == `StateNone` (rejected — callers should
+  `EndSession` explicitly).
+- `HandleMessage` vs `HandleLineageMessage` on a `ComposeWith`-built
+  runner — `HandleMessage` works but skips lineage verification.
+- `BuildMismatchClaim`: the `role` parameter is accepted but NOT
+  propagated to the resulting `DAGNode` (whose `Role` is
+  hardcoded to `"mismatch-claim"` so receivers can distinguish a
+  claim from a real commit). Documented as a known v0.5.0
+  follow-up rather than fixed in v0.4.1 (would be a behavior
+  change to v0.4.0 API surface).
+
+Every public-method godoc now also lists the sentinels its
+errors classify with so apps know which branch to take without
+reading the implementation.
+
+### Tests
+
+- Per-app **bitflip tests at every lineage-protected stage**
+  (15 new subtests across the 4 reference apps). Each subtest
+  flips a single payload bit between `lineage.Commit` and
+  `HandleLineageMessage` and asserts `*MismatchError{Field:"PayloadHash"}`
+  at every phase boundary the framework auto-binds. Strong-form
+  SC-10 demonstration: not just "lineage detects tampering at
+  the bid stage" but "every stage and any single-bit flip."
+- New **helper+lineage combined tests** (5 new subtests across
+  the 3 FHE reference apps). `PipelineWithLineageAndHelper`
+  constructors had zero prior coverage — a constructor-arg-order
+  bug would have shipped silently. Now exercised end-to-end
+  with a live OpenFHE helper subprocess.
+
 ## [0.4.0] — 2026-05-28
 
 **SC-10 Ciphertext Lineage Primitive** — framework-level Merkle DAG
@@ -295,7 +383,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Fheyalabs/ARES-core/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.2...v0.4.0
 [0.3.1]: https://github.com/Fheyalabs/ARES-core/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.2.0...v0.3.0
