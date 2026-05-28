@@ -63,6 +63,9 @@ ARES Spec v2.5 §SC-10.
 
 ## Quickstart
 
+Legacy path (v1 wire frames, lineage off — fully backward-compatible
+with v0.3.x):
+
 ```go
 import auction "github.com/Fheyalabs/ARES-core/examples/sealed_bid_auction"
 
@@ -70,6 +73,26 @@ runner, err := auction.Pipeline()
 ctx, err := runner.BeginSession("auction-1", "")
 // Route messages through runner.HandleMessage(...)
 ```
+
+v0.4.0 lineage path (v2 wire frames, every byte signed):
+
+```go
+import (
+    auction "github.com/Fheyalabs/ARES-core/examples/sealed_bid_auction"
+    "github.com/Fheyalabs/ARES-core/pkg/ares/sign"
+)
+
+signer, _ := sign.NewEd25519Signer()
+verifiers := map[string]sign.Signer{sign.Ed25519Algorithm: signer}
+
+runner, err := auction.PipelineWithLineage(signer, verifiers)
+ctx, err := runner.BeginSession("auction-1", "")
+// Route messages through runner.HandleLineageMessage(...)
+```
+
+Each reference app under `examples/` ships both constructors and a
+`tamper_test.go` smoke that demonstrates the lineage path detecting a
+server-relay byte swap.
 
 For a hand-composed pipeline see
 [`pkg/ares/phase/README.md`](pkg/ares/phase/README.md).
