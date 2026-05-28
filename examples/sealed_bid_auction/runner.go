@@ -4,7 +4,9 @@ package auction
 
 import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 )
 
 // Pipeline builds a SessionRunner over the auction
@@ -51,5 +53,56 @@ func PipelineWithHelper(
 		NewPhaseArgmaxWithHelper(helper, sharpening),
 		NewPhaseDecryptWithHelper(helper),
 		NewPhaseSettlement(),
+	)
+}
+
+// PipelineWithLineage builds the auction pipeline with SC-10
+// ciphertext lineage enabled. signer is the auctioneer's signing
+// keypair; peerVerifiers maps signature-scheme name (e.g.
+// sign.Ed25519Algorithm) to a Signer that can verify peer
+// signatures (typically a Signer with the matching scheme;
+// pubkey is supplied per-DAGNode via node.Producer). Bidders'
+// signed bid commits arrive on WSMessage.Lineage.
+//
+// Pipelines built via this constructor emit
+// transport.WireProtocolVersionLineage ("2") frames with required
+// Lineage fields. The hub rejects malformed v2 frames before they
+// reach the runner.
+func PipelineWithLineage(signer sign.Signer, peerVerifiers map[string]sign.Signer) (*phase.SessionRunner, error) {
+	return phase.ComposeWith(
+		[]phase.Phase{
+			NewPhaseInvitation(),
+			NewPhaseKeygen(),
+			NewPhaseScalarBid(),
+			NewPhaseArgmax(),
+			NewPhaseDecrypt(),
+			NewPhaseSettlement(),
+		},
+		phase.WithSigner(signer),
+		phase.WithPeerVerifiers(peerVerifiers),
+		phase.WithStore(lineage.NewInMemoryStore()),
+	)
+}
+
+// PipelineWithLineageAndHelper is the lineage-enabled variant that
+// also accepts an openfhe-contract-helper for real CKKS work.
+func PipelineWithLineageAndHelper(
+	helper *helperclient.Client,
+	sharpening helperclient.EvalPolyParams,
+	signer sign.Signer,
+	peerVerifiers map[string]sign.Signer,
+) (*phase.SessionRunner, error) {
+	return phase.ComposeWith(
+		[]phase.Phase{
+			NewPhaseInvitation(),
+			NewPhaseKeygenWithHelper(helper),
+			NewPhaseScalarBid(),
+			NewPhaseArgmaxWithHelper(helper, sharpening),
+			NewPhaseDecryptWithHelper(helper),
+			NewPhaseSettlement(),
+		},
+		phase.WithSigner(signer),
+		phase.WithPeerVerifiers(peerVerifiers),
+		phase.WithStore(lineage.NewInMemoryStore()),
 	)
 }
