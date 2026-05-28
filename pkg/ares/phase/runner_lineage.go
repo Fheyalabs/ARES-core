@@ -6,9 +6,32 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 )
+
+// hookPanicLog is the destination for fireFailureHook's recover()
+// reports. Default os.Stderr; tests can override via
+// SetHookPanicLog.
+var hookPanicLog io.Writer = os.Stderr
+
+// SetHookPanicLog overrides the destination fireFailureHook writes to
+// when an app-level LineageFailureFn panics. Default is os.Stderr.
+// Pass io.Discard to silence (production deployments that pipe panics
+// through their own observability stack may prefer that). Pass a
+// *bytes.Buffer in tests to capture and assert on the log line.
+//
+// Returns the previous writer so callers can restore it.
+//
+// NOT goroutine-safe — call during process init, before sessions are
+// started. The runner doesn't take a lock to read it.
+func SetHookPanicLog(w io.Writer) io.Writer {
+	prev := hookPanicLog
+	hookPanicLog = w
+	return prev
+}
 
 // HandleLineageMessage routes an inbound message through SC-10
 // verification before dispatching it to the phase's OnMessage. The
@@ -83,17 +106,28 @@ func (r *SessionRunner) HandleLineageMessage(
 }
 
 // fireFailureHook invokes the registered LineageFailureFn (if any)
-// with a structured event. Defensive against nil hooks and against
-// hook panics (hook is wrapped in a recover() so a buggy hook
-// can't take down the runner).
+// with a structured event.
+//
+// Defensive against:
+//   - nil hooks (no-op if WithLineageFailureHook was not set);
+//   - hook panics (recover() catches; the runner does not crash).
+//
+// When the hook panics the recovered value is logged to the
+// hook-panic writer (default os.Stderr; override via
+// SetHookPanicLog) with the session/phase/role/kind context so the
+// misbehavior is observable at runtime instead of being silently
+// swallowed. The hook is app code; a panic indicates a bug in the
+// consuming application, not in the framework.
 func (r *SessionRunner) fireFailureHook(ev LineageFailureEvent) {
 	if r.lineageFailureHook == nil {
 		return
 	}
 	defer func() {
-		// Swallow hook panics; the hook is app code and the runner
-		// must not crash if it misbehaves.
-		_ = recover()
+		if rec := recover(); rec != nil {
+			fmt.Fprintf(hookPanicLog,
+				"phase: LineageFailureHook panic; session=%q phase=%q role=%q kind=%q: %v\n",
+				ev.SessionID, ev.PhaseID, ev.Role, ev.Kind, rec)
+		}
 	}()
 	r.lineageFailureHook(ev)
 }
