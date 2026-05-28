@@ -3,7 +3,6 @@
 package phase
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
@@ -33,7 +32,7 @@ func ComposeWith(phases []Phase, opts ...ComposeOption) (*SessionRunner, error) 
 
 	// Required: signer.
 	if o.signer == nil {
-		return nil, errors.New("phase: ComposeWith requires WithSigner")
+		return nil, fmt.Errorf("%w: ComposeWith requires WithSigner(...)", ErrPermanent)
 	}
 
 	// Required for multi-party: peer verifiers. A pipeline is
@@ -41,10 +40,9 @@ func ComposeWith(phases []Phase, opts ...ComposeOption) (*SessionRunner, error) 
 	// other than the local party — detect by ConsumedMessageTypes
 	// != nil on any phase.
 	if needsPeers(phases) && len(o.peerVerifiers) == 0 {
-		return nil, errors.New(
-			"phase: ComposeWith requires WithPeerVerifiers for multi-party pipelines " +
-				"(pipeline contains phases that consume WS messages)",
-		)
+		return nil, fmt.Errorf(
+			"%w: ComposeWith requires WithPeerVerifiers(...) for multi-party pipelines "+
+				"(pipeline contains phases that consume WS messages)", ErrPermanent)
 	}
 
 	// Default store.
@@ -64,10 +62,12 @@ func ComposeWith(phases []Phase, opts ...ComposeOption) (*SessionRunner, error) 
 	}
 
 	// Delegate to the existing Compose for phase-chain validation;
-	// then attach lineage state.
+	// then attach lineage state. Compose returns ErrPermanent-wrapped
+	// errors for invalid pipelines; preserve the sentinel through
+	// our prefix.
 	runner, err := Compose(phases...)
 	if err != nil {
-		return nil, fmt.Errorf("phase: ComposeWith: %w", err)
+		return nil, fmt.Errorf("ComposeWith: %w", err)
 	}
 	runner.attachLineage(o.store, o.signer, verifiers, o.failureHook)
 	return runner, nil

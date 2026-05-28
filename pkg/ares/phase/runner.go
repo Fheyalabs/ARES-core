@@ -5,7 +5,6 @@ package phase
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"sync"
 
@@ -98,7 +97,7 @@ type sessionTracker struct {
 //     phase may have ExitState = StateNone.
 func Compose(phases ...Phase) (*SessionRunner, error) {
 	if len(phases) == 0 {
-		return nil, errors.New("phase: SessionRunner needs at least one phase")
+		return nil, fmt.Errorf("%w: Compose needs at least one phase", ErrPermanent)
 	}
 
 	r := &SessionRunner{
@@ -115,15 +114,15 @@ func Compose(phases ...Phase) (*SessionRunner, error) {
 	for _, p := range phases {
 		name := p.Name()
 		if name == "" {
-			return nil, errors.New("phase: unnamed phase")
+			return nil, fmt.Errorf("%w: Compose: phase has empty Name() (index %d in pipeline)", ErrPermanent, len(r.byName))
 		}
 		if _, dup := r.byName[name]; dup {
-			return nil, fmt.Errorf("phase: duplicate phase name %q", name)
+			return nil, fmt.Errorf("%w: Compose: duplicate phase name %q", ErrPermanent, name)
 		}
 		r.byName[name] = p
 
 		if err := validateRequires(name, p.Requires(), provided); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrPermanent, err)
 		}
 		for k, t := range p.Provides() {
 			provided[k] = t
@@ -132,25 +131,25 @@ func Compose(phases ...Phase) (*SessionRunner, error) {
 		if p.RunsAt() == RunsAtInline {
 			entry := p.EntryState()
 			if entry == StateNone {
-				return nil, fmt.Errorf("phase %q: inline phase needs an EntryState", name)
+				return nil, fmt.Errorf("%w: phase %q: inline phase needs an EntryState", ErrPermanent, name)
 			}
 			if existing, ok := r.byEntryState[entry]; ok {
-				return nil, fmt.Errorf("phase: entry state %q claimed by both %q and %q", entry, existing.Name(), name)
+				return nil, fmt.Errorf("%w: phase: entry state %q claimed by both %q and %q", ErrPermanent, entry, existing.Name(), name)
 			}
 			r.byEntryState[entry] = p
 
 			for _, sub := range p.InternalStates() {
 				if sub == StateNone {
-					return nil, fmt.Errorf("phase %q: InternalStates contains StateNone", name)
+					return nil, fmt.Errorf("%w: phase %q: InternalStates contains StateNone", ErrPermanent, name)
 				}
 				if sub == entry {
-					return nil, fmt.Errorf("phase %q: InternalStates duplicates EntryState %q", name, sub)
+					return nil, fmt.Errorf("%w: phase %q: InternalStates duplicates EntryState %q", ErrPermanent, name, sub)
 				}
 				if existing, ok := r.byEntryState[sub]; ok {
-					return nil, fmt.Errorf("phase %q: internal state %q is also EntryState of %q", name, sub, existing.Name())
+					return nil, fmt.Errorf("%w: phase %q: internal state %q is also EntryState of %q", ErrPermanent, name, sub, existing.Name())
 				}
 				if existing, ok := r.byInternalState[sub]; ok {
-					return nil, fmt.Errorf("phase %q: internal state %q is also an internal state of %q", name, sub, existing.Name())
+					return nil, fmt.Errorf("%w: phase %q: internal state %q is also an internal state of %q", ErrPermanent, name, sub, existing.Name())
 				}
 				r.byInternalState[sub] = p
 			}
@@ -158,15 +157,15 @@ func Compose(phases ...Phase) (*SessionRunner, error) {
 			if prevInline == nil {
 				r.initialState = entry
 			} else if prevInline.ExitState() != entry {
-				return nil, fmt.Errorf("phase: %q.ExitState=%q but %q.EntryState=%q — pipeline is not connected",
-					prevInline.Name(), prevInline.ExitState(), name, entry)
+				return nil, fmt.Errorf("%w: phase: %q.ExitState=%q but %q.EntryState=%q — pipeline is not connected",
+					ErrPermanent, prevInline.Name(), prevInline.ExitState(), name, entry)
 			}
 			prevInline = p
 		} else {
 			// Non-inline phases must not declare states. They run
 			// out of band; their outputs flow through context.
 			if p.EntryState() != StateNone || p.ExitState() != StateNone {
-				return nil, fmt.Errorf("phase %q: non-inline phases must have StateNone for entry and exit", name)
+				return nil, fmt.Errorf("%w: phase %q: non-inline phases must have StateNone for entry and exit", ErrPermanent, name)
 			}
 		}
 	}
@@ -298,12 +297,12 @@ func (r *SessionRunner) PhaseForState(s SessionState) (Phase, bool) {
 // values before any messages arrive.
 func (r *SessionRunner) BeginSession(sessionID, cohortID string) (*SessionContext, error) {
 	if sessionID == "" {
-		return nil, errors.New("phase: BeginSession requires non-empty sessionID")
+		return nil, fmt.Errorf("%w: BeginSession requires non-empty sessionID", ErrPermanent)
 	}
 	r.mu.Lock()
 	if _, exists := r.sessions[sessionID]; exists {
 		r.mu.Unlock()
-		return nil, fmt.Errorf("phase: session %q is already active", sessionID)
+		return nil, fmt.Errorf("%w: BeginSession: session %q is already active", ErrPermanent, sessionID)
 	}
 	ctx := NewSessionContext(sessionID)
 	ctx.CohortID = cohortID
@@ -311,7 +310,7 @@ func (r *SessionRunner) BeginSession(sessionID, cohortID string) (*SessionContex
 	first, ok := r.byEntryState[r.initialState]
 	if !ok {
 		r.mu.Unlock()
-		return nil, fmt.Errorf("phase: no phase claims initial state %q", r.initialState)
+		return nil, fmt.Errorf("%w: BeginSession: no phase claims initial state %q", ErrFrameworkBug, r.initialState)
 	}
 	tracker := &sessionTracker{
 		ctx:     ctx,
@@ -350,12 +349,12 @@ func (r *SessionRunner) HandleMessage(sessionID, msgType, from string, payload [
 	tracker, ok := r.sessions[sessionID]
 	r.mu.RUnlock()
 	if !ok {
-		return false, fmt.Errorf("phase: session %q is not active", sessionID)
+		return false, fmt.Errorf("%w: HandleMessage: session %q is not active", ErrPermanent, sessionID)
 	}
 	current := tracker.current
 	if !phaseConsumes(current, msgType) {
-		return false, fmt.Errorf("phase %q: does not consume message type %q in state %q",
-			current.Name(), msgType, tracker.state)
+		return false, fmt.Errorf("%w: phase %q: does not consume message type %q in state %q",
+			ErrPermanent, current.Name(), msgType, tracker.state)
 	}
 	if err := current.OnMessage(tracker.ctx, msgType, from, payload); err != nil {
 		return false, fmt.Errorf("phase %q: OnMessage: %w", current.Name(), err)
@@ -396,7 +395,7 @@ func (r *SessionRunner) advance(tracker *sessionTracker) (bool, error) {
 		nextPhase, ok := r.byEntryState[next]
 		r.mu.RUnlock()
 		if !ok {
-			return false, fmt.Errorf("phase: no phase claims state %q (ExitState of %q)", next, current.Name())
+			return false, fmt.Errorf("%w: no phase claims state %q (ExitState of %q)", ErrFrameworkBug, next, current.Name())
 		}
 		r.mu.Lock()
 		tracker.state = next
@@ -420,7 +419,7 @@ func (r *SessionRunner) advance(tracker *sessionTracker) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, fmt.Errorf("phase: cascade hop limit exceeded")
+	return false, fmt.Errorf("%w: cascade hop limit exceeded (>%d hops); pipeline likely has a cycle", ErrFrameworkBug, hopCap)
 }
 
 // AdvanceToState walks the runner's tracked session forward until
@@ -440,7 +439,7 @@ func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) er
 	tracker, ok := r.sessions[sessionID]
 	r.mu.RUnlock()
 	if !ok {
-		return fmt.Errorf("phase: AdvanceToState: session %q is not active", sessionID)
+		return fmt.Errorf("%w: AdvanceToState: session %q is not active", ErrPermanent, sessionID)
 	}
 	if tracker.state == target {
 		return nil
@@ -465,7 +464,7 @@ func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) er
 		}
 		current := tracker.current
 		if current == nil {
-			return fmt.Errorf("phase: AdvanceToState: session %q has no current phase but target %q not reached", sessionID, target)
+			return fmt.Errorf("%w: AdvanceToState: session %q has no current phase but target %q not reached", ErrFrameworkBug, sessionID, target)
 		}
 		// Exit current and step to next.
 		if err := current.Exit(tracker.ctx); err != nil {
@@ -477,14 +476,14 @@ func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) er
 		next := current.ExitState()
 		if next == StateNone {
 			// Reached the terminal phase but never saw target.
-			return fmt.Errorf("phase: AdvanceToState: session %q reached terminal phase %q without entering target %q",
-				sessionID, current.Name(), target)
+			return fmt.Errorf("%w: AdvanceToState: session %q reached terminal phase %q without entering target %q",
+				ErrPermanent, sessionID, current.Name(), target)
 		}
 		r.mu.RLock()
 		nextPhase, ok := r.byEntryState[next]
 		r.mu.RUnlock()
 		if !ok {
-			return fmt.Errorf("phase: AdvanceToState: no phase claims state %q", next)
+			return fmt.Errorf("%w: AdvanceToState: no phase claims state %q", ErrFrameworkBug, next)
 		}
 		r.mu.Lock()
 		tracker.state = next
@@ -498,7 +497,8 @@ func (r *SessionRunner) AdvanceToState(sessionID string, target SessionState) er
 		tracker.entered = true
 		r.mu.Unlock()
 	}
-	return fmt.Errorf("phase: AdvanceToState: hop limit exceeded for session %q (target %q)", sessionID, target)
+	return fmt.Errorf("%w: AdvanceToState: hop limit exceeded for session %q (target %q); pipeline likely has a cycle",
+		ErrFrameworkBug, sessionID, target)
 }
 
 // EndSession releases the runner's tracking for the given session.

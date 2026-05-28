@@ -61,7 +61,7 @@ func (r *SessionRunner) HandleLineageMessage(
 		return r.HandleMessage(sessionID, msgType, from, payload)
 	}
 	if lineageNode == nil {
-		return false, errors.New("phase: HandleLineageMessage requires non-nil lineage node (v2 frame)")
+		return false, fmt.Errorf("%w: HandleLineageMessage requires non-nil lineage node (v2 frame)", ErrPermanent)
 	}
 
 	// Verify the node against the payload.
@@ -93,12 +93,14 @@ func (r *SessionRunner) HandleLineageMessage(
 			Attributee: string(lineageNode.Producer),
 			DAGNodes:   []lineage.DAGNode{*lineageNode},
 		})
-		return false, fmt.Errorf("phase: lineage verify: %w", verifyErr)
+		return false, fmt.Errorf("%w: HandleLineageMessage: session %q phase %q role %q: %w",
+			ErrAppAttributable, sessionID, lineageNode.PhaseID, lineageNode.Role, verifyErr)
 	}
 
 	// Verified; persist (idempotent on ErrNodeExists).
 	if err := r.lineageStore.Append(context.Background(), *lineageNode); err != nil && !errors.Is(err, lineage.ErrNodeExists) {
-		return false, fmt.Errorf("phase: lineage store append: %w", err)
+		return false, fmt.Errorf("%w: HandleLineageMessage: store.Append for phase %q role %q: %w",
+			ErrFrameworkBug, lineageNode.PhaseID, lineageNode.Role, err)
 	}
 
 	// Dispatch to phase code.
@@ -144,7 +146,9 @@ func (r *SessionRunner) fireFailureHook(ev LineageFailureEvent) {
 // participants for re-verification.
 func (r *SessionRunner) BuildMismatchClaim(sessionID, phaseID, role string, mismatchErr error) (lineage.DAGNode, error) {
 	if r.lineageSigner == nil {
-		return lineage.DAGNode{}, errors.New("phase: BuildMismatchClaim requires lineage-enabled runner")
+		return lineage.DAGNode{}, fmt.Errorf(
+			"%w: BuildMismatchClaim requires lineage-enabled runner (build via ComposeWith, not Compose)",
+			ErrPermanent)
 	}
 	payload := []byte(mismatchErr.Error())
 	return lineage.Commit(sessionID, phaseID, "mismatch-claim", payload, nil, r.lineageSigner)
@@ -214,10 +218,10 @@ func (r *SessionRunner) commitPhaseOutputsIfEnabled(p Phase, ctx *SessionContext
 			r.lineageSigner,
 		)
 		if err != nil {
-			return fmt.Errorf("Commit %s.%s: %w", p.Name(), key, err)
+			return fmt.Errorf("%w: lineage.Commit for phase %q output %q: %w", ErrFrameworkBug, p.Name(), key, err)
 		}
 		if err := r.lineageStore.Append(context.Background(), node); err != nil && !errors.Is(err, lineage.ErrNodeExists) {
-			return fmt.Errorf("Append %s.%s: %w", p.Name(), key, err)
+			return fmt.Errorf("%w: lineage.Store.Append for phase %q output %q: %w", ErrFrameworkBug, p.Name(), key, err)
 		}
 	}
 	return nil
