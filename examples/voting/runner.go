@@ -3,8 +3,10 @@
 package voting
 
 import (
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/keygen"
+	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 )
 
 // Pipeline builds the voting SessionRunner:
@@ -22,5 +24,28 @@ func Pipeline() (*phase.SessionRunner, error) {
 		NewPhaseSubmitVote(),
 		NewPhaseTally(),
 		NewPhaseSettle(),
+	)
+}
+
+// PipelineWithLineage builds the voting pipeline with SC-10
+// ciphertext lineage enabled. Ballots are not FHE-encrypted in
+// this example (PlaintextKeygen topology) but lineage still binds
+// each ballot's bytes to its submitter — preventing the election
+// authority from swapping ballots between collection and tally.
+// Demonstrates SC-10 is useful for non-FHE ARES apps too: the
+// binding is over byte payloads, not over cryptographic objects
+// specifically.
+func PipelineWithLineage(signer sign.Signer, peerVerifiers map[string]sign.Signer) (*phase.SessionRunner, error) {
+	return phase.ComposeWith(
+		[]phase.Phase{
+			NewPhaseInvite(),
+			keygen.NewPlaintextKeygen(),
+			NewPhaseSubmitVote(),
+			NewPhaseTally(),
+			NewPhaseSettle(),
+		},
+		phase.WithSigner(signer),
+		phase.WithPeerVerifiers(peerVerifiers),
+		phase.WithStore(lineage.NewInMemoryStore()),
 	)
 }
