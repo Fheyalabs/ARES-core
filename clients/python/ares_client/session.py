@@ -41,6 +41,8 @@ class WSMessage:
     seq: int = 0
     payload: Any = None
     timestamp: str = ""
+    version: str = ""
+    lineage: dict | None = None
     raw: dict = field(default_factory=dict)
 
     @classmethod
@@ -51,6 +53,8 @@ class WSMessage:
             seq=data.get("seq", 0),
             payload=data.get("payload"),
             timestamp=data.get("timestamp", ""),
+            version=data.get("version", ""),
+            lineage=data.get("lineage"),
             raw=data,
         )
 
@@ -149,17 +153,27 @@ class ARESSession:
 
     # Sending --------------------------------------------------------
 
-    async def send(self, msg_type: str, payload: Any = None, seq: int = 0) -> None:
-        """Send a WS frame. ``payload`` is JSON-serialized if non-None."""
+    async def send(
+        self,
+        msg_type: str,
+        payload: Any = None,
+        seq: int = 0,
+        *,
+        lineage: dict | None = None,
+    ) -> None:
+        """Send a WS frame. Pass lineage= to emit a v2 frame."""
         if self._closed:
             raise ARESClientError(f"{self.pseudonym}: session closed")
-        frame = {
+        frame: dict[str, Any] = {
             "type": msg_type,
             "session_id": self.session_id,
             "seq": seq,
         }
         if payload is not None:
             frame["payload"] = payload
+        if lineage is not None:
+            frame["version"] = "2"
+            frame["lineage"] = lineage
         body = json.dumps(frame)
         log.debug("[%s] → %s (%d bytes)", self.pseudonym, msg_type, len(body))
         await self._ws.send(body)

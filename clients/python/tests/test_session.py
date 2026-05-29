@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from ares_client.session import WSMessage, _derive_ws_token, _ws_url
+from ares_client.session import ARESSession, WSMessage, _derive_ws_token, _ws_url
 
 
 def test_token_matches_go_authmiddleware_format():
@@ -61,3 +61,56 @@ def test_wsmessage_from_json_full():
     assert m.session_id == "S1"
     assert m.seq == 7
     assert m.payload == {"price": 99}
+
+
+def test_wsmessage_parses_lineage_field():
+    """v2 frames carry a lineage dict."""
+    data = {
+        "type": "slot.submit",
+        "session_id": "s1",
+        "version": "2",
+        "lineage": {
+            "hash": "ab" * 32,
+            "session_id": "s1",
+            "phase_id": "anon-g-verify",
+            "role": "slot-submission",
+            "parents": [],
+            "parent_roles": [],
+            "payload_hash": "cd" * 32,
+            "created_at": "2026-01-01T00:00:00Z",
+            "producer": "ef" * 32,
+            "signature": "aa" * 64,
+            "algorithm": "ed25519",
+        },
+    }
+    msg = WSMessage.from_json(data)
+    assert msg.version == "2"
+    assert msg.lineage is not None
+    assert msg.lineage["hash"] == "ab" * 32
+
+
+@pytest.mark.asyncio
+async def test_send_with_lineage_adds_version():
+    """ARESSession.send with lineage= adds version:2 to the outgoing frame."""
+    import json
+    from unittest.mock import AsyncMock, MagicMock
+
+    ws = MagicMock()
+    ws.send = AsyncMock()
+    session = ARESSession.__new__(ARESSession)
+    session.pseudonym = "p1"
+    session.session_id = "s1"
+    session._ws = ws
+    session._inbox = MagicMock()
+    session._default_timeout = 5.0
+    session._closed = False
+    session._server_url = ""
+    session._recv_task = MagicMock()
+
+    node = {"hash": "ab" * 32, "algorithm": "ed25519"}
+    await session.send("slot.submit", payload={"slot_index": 0}, lineage=node)
+
+    ws.send.assert_called_once()
+    sent = json.loads(ws.send.call_args[0][0])
+    assert sent["version"] == "2"
+    assert sent["lineage"]["hash"] == "ab" * 32
