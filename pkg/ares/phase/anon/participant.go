@@ -75,7 +75,7 @@ func (p *Participant) SlotSubmission(sessionID string) (payload []byte, node lin
 	if err != nil {
 		return nil, lineage.DAGNode{}, fmt.Errorf("anon: marshal submission: %w", err)
 	}
-	node, err = lineage.Commit(sessionID, "anon-g-verify", "slot-submission", payload, nil, p.sigSigner)
+	node, err = lineage.Commit(sessionID, "anon-g-verify", RoleSlotSubmission, payload, nil, p.sigSigner)
 	if err != nil {
 		return nil, lineage.DAGNode{}, fmt.Errorf("anon: sign submission: %w", err)
 	}

@@ -138,14 +138,37 @@ func TestIntegration_ShuffleThenVerifiedSubmissions(t *testing.T) {
 	}
 
 	// The assembled slot list is committed to the session lineage DAG.
-	var found bool
+	var assembledNode *lineage.DAGNode
+	submissionHashes := make(map[lineage.NodeRef]bool)
 	for node := range ctx.LineageDAG() {
 		if node.Role == anon.CtxAssembledSlotList {
-			found = true
+			n := node
+			assembledNode = &n
+		}
+		if node.Role == anon.RoleSlotSubmission {
+			submissionHashes[node.Hash] = true
 		}
 	}
-	if !found {
+	if assembledNode == nil {
 		t.Fatal("assembled slot list not committed to lineage")
+	}
+
+	// The assembled-list node must have exactly n parent edges, one per
+	// slot-submission node.
+	if len(assembledNode.Parents) != n {
+		t.Fatalf("assembled-list node has %d parent(s), want %d (one per submission)", len(assembledNode.Parents), n)
+	}
+	if len(submissionHashes) != n {
+		t.Fatalf("found %d slot-submission node(s) in lineage DAG, want %d", len(submissionHashes), n)
+	}
+	parentSet := make(map[lineage.NodeRef]bool, len(assembledNode.Parents))
+	for _, ref := range assembledNode.Parents {
+		parentSet[ref] = true
+	}
+	for ref := range submissionHashes {
+		if !parentSet[ref] {
+			t.Errorf("slot-submission node %x is not a parent of the assembled-list node", ref)
+		}
 	}
 }
 

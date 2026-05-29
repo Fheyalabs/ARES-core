@@ -4,9 +4,11 @@ package anon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
@@ -45,8 +47,11 @@ func (PhaseGVerify) Requires() phase.ContextSchema {
 	return phase.ContextSchema{CtxParticipants: {TypeName: "[]string", Required: true}}
 }
 func (PhaseGVerify) Provides() phase.ContextSchema {
-	// []byte -> auto-committed to lineage (parents = slot submissions).
-	return phase.ContextSchema{CtxAssembledSlotList: {TypeName: "[]byte"}}
+	// NoLineage: true — Exit calls CommitArtifact with explicit parent
+	// edges to the slot-submission nodes, so the framework's
+	// Requires-based auto-commit (which would produce a parent-less
+	// node) is suppressed.
+	return phase.ContextSchema{CtxAssembledSlotList: {TypeName: "[]byte", NoLineage: true}}
 }
 func (PhaseGVerify) Enter(*phase.SessionContext) error { return nil }
 
@@ -84,5 +89,22 @@ func (PhaseGVerify) Exit(ctx *phase.SessionContext) error {
 		return fmt.Errorf("anon: encode assembled slot list: %w", err)
 	}
 	ctx.Set(CtxAssembledSlotList, encoded)
+
+	// Bind the assembled list to the exact slot-submission nodes that
+	// produced it (explicit lineage parent edges).
+	var parents []lineage.DAGNode
+	for node := range ctx.LineageDAG() {
+		if node.Role == RoleSlotSubmission {
+			parents = append(parents, node)
+		}
+	}
+	if _, err := ctx.CommitArtifact("anon-g-verify", CtxAssembledSlotList, encoded, parents); err != nil {
+		// ErrPermanent means lineage is disabled (Compose-built runner or
+		// bare context in unit tests); degrade gracefully — the slot list
+		// is still set in context, just without parent edges in the DAG.
+		if !errors.Is(err, phase.ErrPermanent) {
+			return fmt.Errorf("anon: commit assembled slot list: %w", err)
+		}
+	}
 	return nil
 }

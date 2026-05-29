@@ -19,6 +19,12 @@ const (
 	CtxAssembledSlotList = "anon.assembled_slot_list"
 )
 
+// RoleSlotSubmission is the lineage role assigned to each participant's
+// ephemeral-key-signed slot-submission DAG node. Used by both
+// Participant.SlotSubmission (sender side) and PhaseGVerify (receiver
+// side) to identify submission nodes when building parent edges.
+const RoleSlotSubmission = "slot-submission"
+
 // WebSocket message types the shuffle phases consume.
 const (
 	// MsgOnionBatch carries a participant's initial onion (built for
