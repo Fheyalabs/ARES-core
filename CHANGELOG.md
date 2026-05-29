@@ -49,6 +49,29 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.5.1] — Unreleased
+
+### Added
+
+- **`SessionContext.CommitArtifact`** (`pkg/ares/phase`) — new method that
+  commits a phase output as a lineage DAG node with **explicit parent edges**
+  supplied by the caller, signed by the runner's signer, and appended to the
+  session store. Intended for phases whose output's lineage parents are not
+  derivable from `Phase.Requires` keys (e.g. a node assembled from accumulated
+  WS messages). Returns `ErrPermanent` on `Compose`-built (non-lineage)
+  runners; degrades to a no-op when called from a bare context (unit-test
+  compatibility). The runner injects the signer into `SessionContext` during
+  `BeginSession` so phases can call `CommitArtifact` without importing the
+  runner package.
+- **`pkg/ares/phase/anon` — `PhaseGVerify` explicit parent edges** —
+  `PhaseGVerify.Exit` now calls `CommitArtifact` to bind the assembled slot
+  list node to the exact slot-submission nodes that produced it. The
+  `CtxAssembledSlotList` output is marked `NoLineage: true` in `Provides()` to
+  suppress the runner's parent-less auto-commit. `RoleSlotSubmission` is
+  exported as a package constant (replacing the prior inline string literal
+  `"slot-submission"`) so both the sender (`Participant.SlotSubmission`) and
+  the receiver (`PhaseGVerify`) reference the same value.
+
 ## [0.5.0] — 2026-05-29
 
 ### Added
