@@ -4,11 +4,13 @@ package phase
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"iter"
 	"sync"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
+	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 )
 
 // SessionContext is the typed bag of state shared across phases of one
@@ -43,6 +45,12 @@ type SessionContext struct {
 	// injects this so LineageDAG() can return per-session nodes
 	// without phases needing to import the runner package.
 	lineageStore lineage.Store
+
+	// lineageSigner is injected by the runner alongside lineageStore
+	// for ComposeWith-built runners; nil for Compose-built runners.
+	// Used by CommitArtifact to sign phase outputs with explicit
+	// parent edges.
+	lineageSigner sign.Signer
 }
 
 // NewSessionContext returns a SessionContext for the given session.
@@ -74,6 +82,27 @@ func (c *SessionContext) LineageDAG() iter.Seq[lineage.DAGNode] {
 			}
 		}
 	}
+}
+
+// CommitArtifact commits payload as a lineage DAG node with the given
+// explicit parents, signed by the runner's signer, and appends it to
+// the session store. Use it for a phase output whose lineage parents
+// are not its Requires keys — e.g. a node assembled from accumulated
+// messages, where the framework's Requires-based auto-commit cannot
+// infer the parents. Returns ErrPermanent on a non-lineage (Compose)
+// runner.
+func (c *SessionContext) CommitArtifact(phaseID, role string, payload []byte, parents []lineage.DAGNode) (lineage.DAGNode, error) {
+	if c.lineageStore == nil || c.lineageSigner == nil {
+		return lineage.DAGNode{}, fmt.Errorf("%w: CommitArtifact requires a lineage-enabled runner (build via ComposeWith)", ErrPermanent)
+	}
+	node, err := lineage.Commit(c.SessionID, phaseID, role, payload, parents, c.lineageSigner)
+	if err != nil {
+		return lineage.DAGNode{}, fmt.Errorf("%w: CommitArtifact: %w", ErrFrameworkBug, err)
+	}
+	if err := c.lineageStore.Append(context.Background(), node); err != nil && !errors.Is(err, lineage.ErrNodeExists) {
+		return lineage.DAGNode{}, fmt.Errorf("%w: CommitArtifact store.Append: %w", ErrFrameworkBug, err)
+	}
+	return node, nil
 }
 
 // Get returns the value stored under key and a boolean indicating
