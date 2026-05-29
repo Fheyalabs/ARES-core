@@ -61,6 +61,15 @@ moving toward.
   `SlotPermutation`. Package godoc documents the SC-7 collusion bound
   (certain deanonymization requires `k >= N-2` colluders; 50% floor at
   `k = N-3`). Foundation for the canonical onion-shuffle phases (next).
+- **`pkg/ares/phase/anon`** — composable onion-shuffle phases for
+  inter-participant slot anonymity: `PhaseGShuffle` (sequences the
+  peel rounds, GOSSIP→VERIFYING) and `PhaseGVerify` (accumulates
+  ephemeral-key-signed slot submissions and assembles + lineage-commits
+  the ordered slot list, VERIFYING→caller's next state), plus a
+  `Participant` client driver. Verification is lineage-native — slot
+  submissions are SC-10 DAG nodes signed by ephemeral per-slot keys, so
+  the relay/other participants cannot tamper without an attributable
+  mismatch, and no participant learns another's slot→identity mapping.
 
 ## [0.4.1] — 2026-05-28
 
