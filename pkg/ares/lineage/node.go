@@ -6,6 +6,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"io"
 	"sort"
 	"time"
@@ -13,6 +16,28 @@ import (
 
 // NodeRef is a 32-byte SHA-256 content hash identifying a DAGNode.
 type NodeRef [32]byte
+
+// MarshalJSON encodes the ref as a lowercase 64-char hex string.
+func (r NodeRef) MarshalJSON() ([]byte, error) {
+	return json.Marshal(hex.EncodeToString(r[:]))
+}
+
+// UnmarshalJSON decodes a 64-char hex string into the ref.
+func (r *NodeRef) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if len(s) != 64 {
+		return fmt.Errorf("lineage: NodeRef must be 64 hex chars, got %d", len(s))
+	}
+	raw, err := hex.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("lineage: NodeRef hex decode: %w", err)
+	}
+	copy(r[:], raw)
+	return nil
+}
 
 // DAGNode is one entry in the session-rooted Merkle DAG. Each node
 // commits a byte payload to the triple (SessionID, PhaseID, Role)
@@ -67,6 +92,80 @@ type DAGNode struct {
 	// Algorithm names the signature scheme (matches the
 	// producer's Signer.Algorithm()).
 	Algorithm string
+}
+
+// dagNodeJSON is the v2 wire DTO for DAGNode. All binary fields use
+// lowercase hex strings; keys are snake_case. The in-memory DAGNode
+// field types are unchanged — only the JSON form differs.
+type dagNodeJSON struct {
+	Hash        NodeRef   `json:"hash"`
+	SessionID   string    `json:"session_id"`
+	PhaseID     string    `json:"phase_id"`
+	Role        string    `json:"role"`
+	Parents     []NodeRef `json:"parents"`
+	ParentRoles []string  `json:"parent_roles"`
+	PayloadHash NodeRef   `json:"payload_hash"`
+	CreatedAt   time.Time `json:"created_at"`
+	Producer    string    `json:"producer"`  // lowercase hex
+	Signature   string    `json:"signature"` // lowercase hex
+	Algorithm   string    `json:"algorithm"`
+}
+
+// MarshalJSON encodes the node using snake_case keys and hex-encoded
+// binary fields (hash, payload_hash, parents, producer, signature).
+// Empty parent slices marshal as [] rather than null.
+func (n DAGNode) MarshalJSON() ([]byte, error) {
+	parents := n.Parents
+	if parents == nil {
+		parents = []NodeRef{}
+	}
+	roles := n.ParentRoles
+	if roles == nil {
+		roles = []string{}
+	}
+	return json.Marshal(dagNodeJSON{
+		Hash:        n.Hash,
+		SessionID:   n.SessionID,
+		PhaseID:     n.PhaseID,
+		Role:        n.Role,
+		Parents:     parents,
+		ParentRoles: roles,
+		PayloadHash: n.PayloadHash,
+		CreatedAt:   n.CreatedAt,
+		Producer:    hex.EncodeToString(n.Producer),
+		Signature:   hex.EncodeToString(n.Signature),
+		Algorithm:   n.Algorithm,
+	})
+}
+
+// UnmarshalJSON decodes a node from the v2 snake_case hex wire form.
+func (n *DAGNode) UnmarshalJSON(b []byte) error {
+	var d dagNodeJSON
+	if err := json.Unmarshal(b, &d); err != nil {
+		return err
+	}
+	prod, err := hex.DecodeString(d.Producer)
+	if err != nil {
+		return fmt.Errorf("lineage: producer hex decode: %w", err)
+	}
+	sig, err := hex.DecodeString(d.Signature)
+	if err != nil {
+		return fmt.Errorf("lineage: signature hex decode: %w", err)
+	}
+	*n = DAGNode{
+		Hash:        d.Hash,
+		SessionID:   d.SessionID,
+		PhaseID:     d.PhaseID,
+		Role:        d.Role,
+		Parents:     d.Parents,
+		ParentRoles: d.ParentRoles,
+		PayloadHash: d.PayloadHash,
+		CreatedAt:   d.CreatedAt,
+		Producer:    prod,
+		Signature:   sig,
+		Algorithm:   d.Algorithm,
+	}
+	return nil
 }
 
 // NewDAGNode constructs a DAGNode with Hash + PayloadHash derived
