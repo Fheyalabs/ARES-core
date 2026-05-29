@@ -1,13 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
-"""SC-2-correct ECIES onion build / peel.
+"""SC-2-correct ECIES onion build / peel — N layers, one per participant.
 
-SC-2 fix: the builder always includes its own layer in the onion so it can
-identify and peel its own submission by exact ciphertext match (self_memo).
-Older code used N-2 layers and relied on "can't decrypt" as a proxy for
-self-ownership — that proxy is unsound.  Here every party wraps its payload
-under its own key; peel_batch passes through any item whose outer layer does
-not belong to the caller (decrypt fails silently), so mixed-key batches work
-without coordination.
+SC-2 fix: build_onion applies N ECIES layers in reverse peel order (innermost
+layer = last peeler, outermost layer = first peeler).  The builder records
+self_memo as the ciphertext blob immediately after its own layer is applied;
+peel_batch identifies the caller's own item by exact ciphertext match against
+self_memo BEFORE decryption — never by "can't decrypt", which is the SC-2 fix.
+
+Previous (incorrect) code encrypted under only the builder's own key (1 layer).
 """
 from __future__ import annotations
 
@@ -58,13 +58,14 @@ def build_onion(
     peel_order_pubs: list[bytes],
     self_index: int,
 ) -> tuple[bytes, bytes]:
-    """Wrap *payload* under the caller's own ECIES layer (SC-2 correct).
+    """Wrap *payload* in N ECIES layers — one per participant — in REVERSE peel order (SC-2 correct).
 
-    The caller encrypts *payload* exclusively under
-    ``peel_order_pubs[self_index]`` — their own public key.  The returned
-    ``self_memo`` is the raw *payload* bytes; :func:`peel_batch` matches the
-    decrypted inner value against ``self_memo`` to identify the caller's own
-    item without relying on decryption failure as a proxy.
+    Layers are applied innermost-first: the last peeler's key is applied first
+    (innermost), and the first peeler's key is applied last (outermost).
+    ``self_memo`` is the ciphertext blob immediately after the builder's own
+    layer was applied, before any outer layers are added.  It is used by
+    :func:`peel_batch` to identify the builder's own item by exact byte match
+    — never by decryption failure, which is the SC-2 fix.
 
     Args:
         payload: The plaintext to protect.
@@ -73,14 +74,21 @@ def build_onion(
         self_index: The caller's position in *peel_order_pubs*.
 
     Returns:
-        ``(onion, self_memo)`` where *onion* is the ECIES ciphertext and
-        *self_memo* is the original *payload* used to identify this item
-        in :func:`peel_batch`.
+        ``(onion, self_memo)`` where *onion* is the fully-wrapped N-layer
+        ciphertext and *self_memo* is the intermediate ciphertext after the
+        builder's own layer (used for self-identification in
+        :func:`peel_batch`).
     """
     if not (0 <= self_index < len(peel_order_pubs)):
         raise ValueError(f"self_index {self_index} out of range [0, {len(peel_order_pubs)})")
-    onion = _ecies_encrypt(peel_order_pubs[self_index], payload)
-    return onion, payload
+    data = payload
+    self_memo: bytes | None = None
+    for i in range(len(peel_order_pubs) - 1, -1, -1):
+        data = _ecies_encrypt(peel_order_pubs[i], data)
+        if i == self_index:
+            self_memo = data
+    assert self_memo is not None
+    return data, self_memo
 
 
 def peel_batch(
@@ -88,40 +96,36 @@ def peel_batch(
     self_memo: bytes | None,
     onions: list[bytes],
 ) -> tuple[list[bytes], int]:
-    """Peel the caller's ECIES layer from every item in *onions*.
+    """Peel one ECIES layer from every item in *onions* (SC-2 correct).
 
-    Items whose outermost layer does not belong to the caller (decrypt raises
-    :class:`~cryptography.exceptions.InvalidTag`) are passed through
-    unchanged.  The caller's own submission is identified by comparing the
-    decrypted plaintext against *self_memo*.
+    All items in a well-formed batch at round k are addressed to the same
+    peeler; every item must decrypt successfully.  The caller's own item is
+    identified by exact byte match against *self_memo* BEFORE decryption (the
+    ciphertext memory match), so self-identification never relies on decryption
+    failure.
 
     Args:
         my_sk_bytes: Raw 32-byte X25519 private key.
-        self_memo: Expected plaintext after peeling (the ``self_memo`` value
-            returned by :func:`build_onion`).  Pass ``None`` to skip
-            self-identification.
-        onions: Current batch of onion blobs.
+        self_memo: The ``self_memo`` value returned by :func:`build_onion` for
+            the caller's own item — the ciphertext blob the caller expects to
+            see as the outermost layer of its own onion at this round.  Pass
+            ``None`` to skip self-identification.
+        onions: Current batch of onion blobs for this peel round.
 
     Returns:
-        ``(peeled, own_index)`` where *peeled[i]* is the decrypted inner
-        blob (or the original blob if decryption failed), and *own_index* is
-        the index of the caller's own item (-1 if *self_memo* is ``None``).
+        ``(peeled, own_index)`` where *peeled[i]* is the decrypted inner blob
+        and *own_index* is the batch index of the caller's own item (-1 if
+        *self_memo* is ``None`` or no match found).
 
     Raises:
-        ValueError: If *self_memo* is given but no item in the batch matches
-            after attempting decryption.
+        ValueError: If *self_memo* is given but no item in the batch matches.
     """
     peeled: list[bytes] = []
     own_index = -1
     for i, onion in enumerate(onions):
-        try:
-            inner = _ecies_decrypt(my_sk_bytes, onion)
-        except (InvalidTag, ValueError):
-            # This layer is not ours; pass the blob through unchanged.
-            inner = onion
-        if self_memo is not None and inner == self_memo:
+        if self_memo is not None and onion == self_memo:
             own_index = i
-        peeled.append(inner)
+        peeled.append(_ecies_decrypt(my_sk_bytes, onion))
     if self_memo is not None and own_index < 0:
         raise ValueError("self_memo did not match any item in batch")
     return peeled, own_index

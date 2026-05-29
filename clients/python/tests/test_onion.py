@@ -28,7 +28,14 @@ def test_build_onion_includes_self_layer():
 
 
 def test_peel_batch_round_trip():
-    """N participants peel all N rounds; each recovers its payload via self_memo."""
+    """N participants peel all N rounds; each recovers its payload via self_memo.
+
+    Each onion has N layers.  Round k has party k peel one layer from the whole
+    batch.  Party k identifies its own item at round k via self_memo (ciphertext
+    match), but the payload is fully exposed only after all N rounds complete
+    (each round strips one layer).  own_idx is stable across rounds since items
+    maintain their positions in the batch.
+    """
     from ares_client.onion import build_onion, peel_batch
     n = 4
     keys = [_keygen() for _ in range(n)]
@@ -41,26 +48,32 @@ def test_peel_batch_round_trip():
     batch = [o for o, _ in batches_and_memos]
     memos = [m for _, m in batches_and_memos]
 
-    recovered = [None] * n
+    # Track the batch index of each party's own item (stable across rounds).
+    own_indices = [-1] * n
     for k in range(n):
         sk_k, _ = keys[k]
         peeled, own_idx = peel_batch(sk_k, memos[k], batch)
         assert own_idx >= 0, f"peeler {k} did not find its own item"
-        recovered[k] = peeled[own_idx]
+        own_indices[k] = own_idx
         batch = peeled
 
+    # After all N rounds every item has been fully peeled — batch[j] is now the
+    # original plaintext for whichever party owned batch position j.
     for i in range(n):
-        assert recovered[i] == payloads[i], f"party {i} recovered wrong payload"
+        assert batch[own_indices[i]] == payloads[i], f"party {i} recovered wrong payload"
 
 
 def test_no_skip_self_regression():
-    """SC-2 fix: the builder CAN peel its own item (old code would leave it unpeelable)."""
+    """SC-2 fix: builder (self_index=0) can immediately identify its own item via self_memo."""
     from ares_client.onion import build_onion, peel_batch
     keys = [_keygen() for _ in range(3)]
     pubs = [pk for _, pk in keys]
 
-    onion, self_memo = build_onion(b"secret", pubs, self_index=1)
-    sk1 = keys[1][0]
-    batch = [onion]
-    peeled, own_idx = peel_batch(sk1, self_memo, batch)
+    # With self_index=0, layer 0 is applied LAST (outermost), so self_memo == assembled onion.
+    onion, self_memo = build_onion(b"secret", pubs, self_index=0)
+    assert self_memo == onion, "self_index=0 must produce self_memo == assembled onion"
+    peeled, own_idx = peel_batch(keys[0][0], self_memo, [onion])
     assert own_idx == 0, "builder could not identify its own item"
+    # Old SC-2-stale code would NOT include a self-layer; this test verifies we can
+    # actually decrypt our own item (not just identify it by failure).
+    assert len(peeled[0]) < len(onion)
