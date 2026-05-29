@@ -1,34 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Generic gossip-arc participant, mirroring Go's anon.Participant.
-
-GossipParticipant owns one non-initiator's per-session shuffle state:
-its X25519 slot delivery keypair, its position in the peel order
-(self_index, which also serves as slot_index), and the session ID for
-lineage signing.
-
-Protocol note — variable-depth onions
---------------------------------------
-Each participant builds an onion with exactly ``self_index + 1`` layers
-(not a flat N-layer onion).  Layer 0 is outermost; layer ``self_index``
-is innermost and encrypts the final plaintext.  This means:
-
-- After peel rounds 0 .. self_index-1 strip the outer layers, the item
-  arrives at round ``self_index`` as a single ECIES blob (self_memo).
-- Participant ``self_index`` decrypts that single layer to recover the
-  plaintext directly — no further rounds needed.
-- Items from earlier participants (lower self_index) are already plaintext
-  by the time later participants peel; the fault-tolerant peel pass-through
-  leaves them unchanged.
-"""
+"""Generic gossip-arc participant, mirroring Go's anon.Participant."""
 from __future__ import annotations
 
 import base64
 import json
 
-from cryptography.exceptions import InvalidTag
-
 from .lineage import build_slot_node
-from .onion import build_onion, _ecies_decrypt
+from .onion import build_onion, peel_batch
 
 
 class GossipParticipant:
@@ -36,7 +14,7 @@ class GossipParticipant:
 
     Args:
         session_id: ARES session identifier (used in lineage node).
-        self_index: this participant's position in the peel order (0-based).
+        self_index: participant's position in the peel order (0-based).
                     Also used as slot_index in the slot submission payload.
         slot_dk_sk: raw 32-byte X25519 private key (slot delivery key).
         slot_dk_pub: raw 32-byte X25519 public key.
@@ -57,30 +35,22 @@ class GossipParticipant:
     def build_batch(self, peer_pubs: list[bytes]) -> tuple[dict, bytes]:
         """Build the initial onion batch payload for onion.batch submission.
 
-        Each participant wraps their slot entry in exactly ``self_index + 1``
-        ECIES layers — one per peeler up to and including themselves.  This
-        ensures the item is fully decrypted when it reaches the participant's
-        own peel round (no residual layers remain after their peel).
+        Wraps the slot entry in len(peer_pubs) ECIES layers (SC-2: self-layer
+        included). All participants use the same full peel order.
 
         Args:
-            peer_pubs: raw X25519 pubkeys of ALL participants in peel order
-                       (including self at self_index).
+            peer_pubs: raw X25519 pubkeys of ALL participants in peel order.
 
         Returns:
-            (batch_payload_dict, self_memo) — batch_payload_dict has key
-            "onions" with a list of base64-encoded onion bytes (one entry,
-            this participant's onion). self_memo is passed to peel_round
-            for self-identification via ciphertext match.
+            (batch_payload_dict, self_memo) — dict has "onions" key with
+            a list containing one base64-encoded onion.
         """
         slot_entry = json.dumps(
             {"slot_index": self._self_index, "slot_dk_pub": self._slot_dk_pub.hex()},
             separators=(",", ":"),
             sort_keys=True,
         ).encode()
-        # Build with only the first (self_index + 1) pubkeys so that the onion
-        # is fully unwrapped at round self_index.
-        depth_pubs = peer_pubs[: self._self_index + 1]
-        onion, self_memo = build_onion(slot_entry, depth_pubs, self._self_index)
+        onion, self_memo = build_onion(slot_entry, peer_pubs, self._self_index)
         return {"onions": [base64.b64encode(onion).decode()]}, self_memo
 
     def peel_round(
@@ -88,41 +58,19 @@ class GossipParticipant:
         self_memo: bytes,
         onions: list[bytes],
     ) -> tuple[list[bytes], bytes | None]:
-        """Peel one ECIES layer from each onion; return forwarded batch and own payload.
-
-        Items that have already been fully decrypted by a prior round (they are
-        raw plaintext, not valid ECIES blobs) are passed through unchanged so
-        that later peelers do not trip on them.  The caller's own item is
-        identified by exact ciphertext match against ``self_memo`` BEFORE
-        decryption (SC-2-correct; no decryption-failure side-channel).
+        """Peel one ECIES layer from each onion; identify own item by self_memo.
 
         Args:
-            self_memo: returned by build_batch; used for ciphertext-match
-                       self-identification.
-            onions: raw blobs from the server broadcast — may include already-
-                    decrypted items from earlier peel rounds.
+            self_memo: returned by build_batch for this participant.
+            onions: raw onion bytes from the server broadcast.
 
         Returns:
-            (peeled_onions, own_payload) — own_payload is the decrypted
-            innermost bytes for this participant's own item (valid plaintext
-            JSON), None if not found.
+            (peeled_onions, own_payload) — own_payload is the decrypted inner
+            bytes for the own item (still has remaining inner layers unless this
+            is the last peel round); None if not found.
         """
-        peeled: list[bytes] = []
-        own_payload: bytes | None = None
-
-        for item in onions:
-            is_own = item == self_memo
-            try:
-                inner = _ecies_decrypt(self._slot_dk_sk, item)
-            except (InvalidTag, Exception):
-                # Item has already been fully decrypted in a prior round;
-                # pass it through unchanged.
-                inner = item
-            if is_own:
-                own_payload = inner
-            peeled.append(inner)
-
-        return peeled, own_payload
+        peeled, own_idx = peel_batch(self._slot_dk_sk, self_memo, onions)
+        return peeled, peeled[own_idx] if own_idx >= 0 else None
 
     def slot_submission(self) -> tuple[bytes, dict]:
         """Build the slot.submit payload bytes and signed lineage node.

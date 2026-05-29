@@ -34,39 +34,49 @@ def test_gossip_participant_full_cycle():
         for i in range(n)
     ]
 
-    # Each builds their onion batch
-    batches = []
-    memos = []
-    for i, p in enumerate(participants):
-        batch_payload, self_memo = p.build_batch(pubs)
-        # batch_payload is a dict {"onions": [<base64>]}
-        onions_raw = [
-            __import__("base64").b64decode(o) for o in batch_payload["onions"]
-        ]
-        batches.append(onions_raw)
-        memos.append(self_memo)
+    # Each builds their onion batch (N-layer, wrapping their slot entry).
+    batches_and_memos = [p.build_batch(pubs) for p in participants]
+    memos = [m for _, m in batches_and_memos]
 
-    # Combine into one shared batch (one onion per sender)
-    shared_batch = [batches[i][0] for i in range(n)]
+    # shared_batch: one onion per participant (batch[i] = participant i's onion).
+    shared_batch = [
+        __import__("base64").b64decode(batch_dict["onions"][0])
+        for batch_dict, _ in batches_and_memos
+    ]
 
-    # Each participant peels the shared batch
+    # N sequential peel rounds. After all N rounds, all layers are peeled.
+    # own_payload at round k has n-k-1 remaining inner layers (not plaintext yet,
+    # except at the last round k=n-1).
     for k in range(n):
         peeled, own_payload = participants[k].peel_round(memos[k], shared_batch)
-        assert own_payload is not None, f"participant {k} did not find its own payload"
-        slot_data = json.loads(own_payload)
-        assert slot_data["slot_index"] == k
-        assert slot_data["slot_dk_pub"] == keys[k][1].hex()
+        assert own_payload is not None, f"participant {k} did not find its own item"
         shared_batch = peeled
 
-    # Each builds their slot submission
-    for p in participants:
-        payload_bytes, node_dict = p.slot_submission()
-        assert isinstance(payload_bytes, bytes)
-        slot = json.loads(payload_bytes)
-        assert "slot_index" in slot
-        assert "slot_dk_pub" in slot
-        assert node_dict["phase_id"] == "anon-g-verify"
-        assert node_dict["role"] == "slot-submission"
-        assert node_dict["algorithm"] == "ed25519"
-        assert len(node_dict["hash"]) == 64
-        assert len(node_dict["signature"]) == 128
+    # After all N rounds, shared_batch[i] is the plaintext for participant i
+    # (batch order is preserved; all onions used the same peel order).
+    for i in range(n):
+        slot_data = json.loads(shared_batch[i])
+        assert slot_data["slot_index"] == i, f"participant {i}: wrong slot_index"
+        assert slot_data["slot_dk_pub"] == keys[i][1].hex(), f"participant {i}: wrong slot_dk_pub"
+
+
+def test_slot_submission_produces_valid_lineage_node():
+    """slot_submission returns valid payload bytes and lineage node."""
+    from ares_client.gossip import GossipParticipant
+    keys = [_x25519_keygen() for _ in range(2)]
+    p = GossipParticipant(
+        session_id="test-session",
+        self_index=0,
+        slot_dk_sk=keys[0][0],
+        slot_dk_pub=keys[0][1],
+    )
+    payload_bytes, node_dict = p.slot_submission()
+    assert isinstance(payload_bytes, bytes)
+    slot = json.loads(payload_bytes)
+    assert slot["slot_index"] == 0
+    assert slot["slot_dk_pub"] == keys[0][1].hex()
+    assert node_dict["phase_id"] == "anon-g-verify"
+    assert node_dict["role"] == "slot-submission"
+    assert node_dict["algorithm"] == "ed25519"
+    assert len(node_dict["hash"]) == 64
+    assert len(node_dict["signature"]) == 128
