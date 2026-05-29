@@ -21,7 +21,14 @@ between submission and tally.
   collection and tally. Demonstrates SC-10 is a binding-over-
   bytes primitive, not a binding-over-ciphertexts primitive.
 
-## Pipeline
+## Pipelines
+
+- `Pipeline()` — plaintext, no anonymity (trusted orchestrator).
+- `PipelineWithLineage(...)` — adds SC-10 ballot binding.
+- `PipelineWithShuffle(...)` — adds inter-participant **slot anonymity**
+  via `pkg/ares/phase/anon` so the authority cannot link an anonymized
+  ballot slot to the voter. See that package's godoc for the SC-7
+  collusion bound (certain deanonymization needs `k >= N-2` colluders).
 
 ```text
 Invite → PlaintextKeygen → SubmitVote → Tally → Settle

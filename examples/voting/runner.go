@@ -5,6 +5,8 @@ package voting
 import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/anon"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/keygen"
 	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 )
@@ -41,6 +43,33 @@ func PipelineWithLineage(signer sign.Signer, peerVerifiers map[string]sign.Signe
 			NewPhaseInvite(),
 			keygen.NewPlaintextKeygen(),
 			NewPhaseSubmitVote(),
+			NewPhaseTally(),
+			NewPhaseSettle(),
+		},
+		phase.WithSigner(signer),
+		phase.WithPeerVerifiers(peerVerifiers),
+		phase.WithStore(lineage.NewInMemoryStore()),
+	)
+}
+
+// PipelineWithShuffle builds the voting pipeline with inter-participant
+// slot anonymity: an onion-shuffle gossip round runs between keygen and
+// ballot submission so the election authority cannot link an
+// anonymized slot to the voter who produced it. Demonstrates the
+// generic pkg/ares/phase/anon primitive on a non-FHE app.
+//
+// Arc: Invite -> PlaintextKeygen -> Shuffle(GOSSIP->VERIFYING)
+//
+//	-> Verify(VERIFYING->SUBMITTING) -> SubmitVote(SUBMITTING->SCORING)
+//	-> Tally -> Settle.
+func PipelineWithShuffle(signer sign.Signer, peerVerifiers map[string]sign.Signer) (*phase.SessionRunner, error) {
+	return phase.ComposeWith(
+		[]phase.Phase{
+			NewPhaseInvite(),
+			keygen.NewPlaintextKeygen(),
+			anon.NewPhaseGShuffle(),
+			anon.NewPhaseGVerify(defaults.StateSubmitting),
+			NewPhaseSubmitVoteAt(defaults.StateSubmitting),
 			NewPhaseTally(),
 			NewPhaseSettle(),
 		},
