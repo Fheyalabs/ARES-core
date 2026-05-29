@@ -10,6 +10,7 @@ import (
 	"sort"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase/anon"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 )
 
@@ -32,8 +33,9 @@ func (PhaseInvite) InternalStates() []phase.SessionState                      { 
 func (PhaseInvite) Requires() phase.ContextSchema                             { return nil }
 func (PhaseInvite) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
-		CtxVoteParticipants:        {TypeName: "[]string"},
-		defaults.CtxParticipants:   {TypeName: "[]string"},
+		CtxVoteParticipants:      {TypeName: "[]string"},
+		defaults.CtxParticipants: {TypeName: "[]string"},
+		anon.CtxParticipants:     {TypeName: "[]string"},
 	}
 }
 func (PhaseInvite) Enter(*phase.SessionContext) error                               { return nil }
@@ -41,22 +43,37 @@ func (PhaseInvite) OnMessage(*phase.SessionContext, string, string, []byte) erro
 func (PhaseInvite) CheckComplete(*phase.SessionContext) bool                        { return true }
 func (PhaseInvite) Exit(*phase.SessionContext) error                                { return nil }
 
-// PhaseSubmitVote accumulates one `vote.ballot` from each participant
-// in the GOSSIP arc. Wire shape:
+// PhaseSubmitVote accumulates one `vote.ballot` from each participant.
+// Wire shape:
 //
 //	{"choice": 1, "weight": 1.5}
 //
 // The voter's identity is taken from the WS pseudonym, not the
 // payload (preventing cross-voter ballot stuffing under the same
 // account).
-type PhaseSubmitVote struct{}
+//
+// entryState defaults to GOSSIP; when the shuffle phases are composed
+// ahead of it, the pipeline re-points it to SUBMITTING.
+type PhaseSubmitVote struct {
+	entryState phase.SessionState
+}
 
-func NewPhaseSubmitVote() *PhaseSubmitVote { return &PhaseSubmitVote{} }
+// NewPhaseSubmitVote returns a submit phase entering at GOSSIP (the
+// no-shuffle pipeline). Use NewPhaseSubmitVoteAt to re-point it.
+func NewPhaseSubmitVote() *PhaseSubmitVote {
+	return &PhaseSubmitVote{entryState: defaults.StateGossip}
+}
+
+// NewPhaseSubmitVoteAt returns a submit phase entering at the given
+// state (used when the onion-shuffle arc precedes it).
+func NewPhaseSubmitVoteAt(entry phase.SessionState) *PhaseSubmitVote {
+	return &PhaseSubmitVote{entryState: entry}
+}
 
 func (PhaseSubmitVote) Name() string                         { return "vote-submit" }
 func (PhaseSubmitVote) Lifetime() phase.Lifetime             { return phase.LifetimePerSession }
 func (PhaseSubmitVote) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
-func (PhaseSubmitVote) EntryState() phase.SessionState       { return defaults.StateGossip }
+func (p PhaseSubmitVote) EntryState() phase.SessionState     { return p.entryState }
 func (PhaseSubmitVote) ExitState() phase.SessionState        { return defaults.StateScoring }
 func (PhaseSubmitVote) ConsumedMessageTypes() []string       { return []string{"vote.ballot"} }
 func (PhaseSubmitVote) InternalStates() []phase.SessionState { return nil }
