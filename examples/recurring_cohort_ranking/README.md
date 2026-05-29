@@ -83,9 +83,33 @@ admin endpoint chooses formation vs weekly per request. The
 service binary currently uses the legacy `FormationPipeline()` /
 `WeeklyPipeline()` constructors.
 
+## Slot anonymity
+
+**Available but not adopted here.** The recurring cohort ranking
+pipeline uses a custom state arc (`COHORT_FORMING` / `COHORT_KEYGEN` /
+`COHORT_SEALED` for formation; `RANKING_INVITING` → `RANKING_LOCKED` →
+`RANKING_BIDDING` → `RANKING_SCORING` → `RANKING_DECRYPT` →
+`RANKING_SETTLED` for weekly sessions). The generic `PhaseGShuffle` /
+`PhaseGVerify` phases from `pkg/ares/phase/anon` occupy the
+GOSSIP→VERIFYING arc; this pipeline does not pass through that arc.
+
+The result shape also makes anonymity less compelling here: the
+high-water argmax output is a single winner identity + rating, so the
+winning cohort member is revealed to the group as a protocol output.
+Hiding the submission-slot→member mapping before argmax would add
+onion-shuffle overhead without changing what the group ultimately
+learns.
+
+An app that needs pre-result slot anonymity in a cohort-ranking setting
+can compose `PhaseGShuffle` + `PhaseGVerify` over a GOSSIP→VERIFYING→
+submit arc, then wire the custom RANKING_* states after. See
+`examples/voting`'s `PipelineWithShuffle` for the composition pattern.
+
 ## References
 
 - ARES Spec v2.5 §SC-10.
 - [`pkg/ares/lineage/`](../../pkg/ares/lineage/),
   [`pkg/ares/sign/`](../../pkg/ares/sign/).
+- [`pkg/ares/phase/anon/`](../../pkg/ares/phase/anon/) — opt-in
+  onion-shuffle phases (not used here).
 - [CHANGELOG `[0.4.0]`](../../CHANGELOG.md).

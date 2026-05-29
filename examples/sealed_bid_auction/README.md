@@ -86,6 +86,26 @@ Environment:
 | `AUCTION_RING_DIM` | CKKS ring dimension (default `2048`) |
 | `ARES_HELPER_BINARY` | path to `openfhe-contract-helper` (empty → stub argmax) |
 
+## Slot anonymity
+
+**Not adopted — intentional opt-out.** The winning bid amount and the
+winner's pseudonym are the public outputs of this protocol; they are
+broadcast in the signed settlement transcript by design. There is no
+slot→identity mapping to hide: every bidder knows who won and for how
+much. Adding an onion-shuffle round would protect nothing and would
+add unnecessary latency.
+
+This is the canonical "you don't always need slot anonymity" pipeline.
+The same conclusion is stated in the package-level godoc (`states.go`):
+"Auction skips onion-shuffle (PhaseG) and verification (PhaseG.2)
+because slot anonymity is not required — the winning bidder's identity
+is intentionally revealed in the settlement transcript."
+
+Applications that do need inter-participant slot anonymity compose
+`pkg/ares/phase/anon` (`PhaseGShuffle` + `PhaseGVerify`) over a
+GOSSIP→VERIFYING→submit arc, as `examples/voting`'s
+`PipelineWithShuffle` shows.
+
 ## References
 
 - ARES Spec v2.5 §SC-10 — ciphertext lineage protocol-level
@@ -94,4 +114,6 @@ Environment:
   `Commit`, `Verify`, `Store`.
 - [`pkg/ares/sign/`](../../pkg/ares/sign/) — `Signer` interface
   + Ed25519 default.
+- [`pkg/ares/phase/anon/`](../../pkg/ares/phase/anon/) — opt-in
+  onion-shuffle phases (not used here).
 - [CHANGELOG `[0.4.0]`](../../CHANGELOG.md) — full v0.4.0 surface.

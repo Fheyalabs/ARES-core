@@ -77,9 +77,34 @@ Environment:
 | `RIDESHARE_RING_DIM` | CKKS ring dimension |
 | `ARES_HELPER_BINARY` | helper path (empty → stub scorer) |
 
+## Slot anonymity
+
+**Available but not adopted here.** The ride-share pipeline uses a
+custom state arc (`RIDE_INVITE` → `RIDE_KEYGEN` → `RIDE_SUBMIT` →
+`RIDE_SCORE` → `RIDE_DECRYPT` → `RIDE_SETTLE`). The generic
+`PhaseGShuffle` / `PhaseGVerify` phases from `pkg/ares/phase/anon`
+occupy the GOSSIP→VERIFYING arc; this pipeline does not pass through
+that arc.
+
+Beyond the arc mismatch, anonymizing submission slots would conflict
+with the protocol's design goal: the winning driver's identity and the
+agreed price are the explicit outputs of threshold decryption. Both are
+revealed to the rider and driver pair by `PhaseSettle`. Hiding the
+driver's slot→identity link before scoring would add onion-shuffle
+overhead without changing what the matched pair ultimately learns about
+each other.
+
+An app that wants to anonymize which driver submitted which encrypted
+bid until after scoring can compose `PhaseGShuffle` + `PhaseGVerify`
+over a GOSSIP→VERIFYING→submit arc, then wire the RIDE_SCORE /
+RIDE_DECRYPT / RIDE_SETTLE phases after. See `examples/voting`'s
+`PipelineWithShuffle` for the composition pattern.
+
 ## References
 
 - ARES Spec v2.5 §SC-10.
 - [`pkg/ares/lineage/`](../../pkg/ares/lineage/),
   [`pkg/ares/sign/`](../../pkg/ares/sign/).
+- [`pkg/ares/phase/anon/`](../../pkg/ares/phase/anon/) — opt-in
+  onion-shuffle phases (not used here).
 - [CHANGELOG `[0.4.0]`](../../CHANGELOG.md).
