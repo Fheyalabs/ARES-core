@@ -70,6 +70,10 @@ moving toward.
   submissions are SC-10 DAG nodes signed by ephemeral per-slot keys, so
   the relay/other participants cannot tamper without an attributable
   mismatch, and no participant learns another's slot→identity mapping.
+- **`examples/voting` `PipelineWithShuffle`** — worked adopter of the
+  onion-shuffle primitive; demonstrates `PhaseGShuffle` + `PhaseGVerify`
+  composed over the GOSSIP→VERIFYING arc on a non-FHE pipeline so the
+  election authority cannot link an anonymized ballot slot to its voter.
 
 ## [0.4.1] — 2026-05-28
 

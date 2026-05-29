@@ -61,6 +61,36 @@ Threat-model nuance for the framework's target audience
 -encrypted-profile-removes-the-incentive) is documented in
 ARES Spec v2.5 §SC-10.
 
+## Slot anonymization
+
+New in v0.5.0: opt-in inter-participant slot anonymity via
+[`pkg/ares/onion`](pkg/ares/onion/) (crypto) and
+[`pkg/ares/phase/anon`](pkg/ares/phase/anon/) (phases).
+
+**Property:** the relay and all other participants cannot link an
+anonymized submission slot to the identity that created it. Each
+participant learns the ordered slot list — and nothing more about who
+submitted which slot. This is inter-participant anonymity; the
+application's own result phase (e.g. argmax, tally) sees the slots in
+permuted order and decides what, if anything, to reveal from there.
+
+**SC-7 collusion bound:** certain deanonymization requires `k >= N-2`
+colluders. The floor drops to a 50% probability at `k = N-3`. See
+[`pkg/ares/onion`](pkg/ares/onion/) godoc for the full derivation.
+
+**Worked example:** [`examples/voting`](examples/voting/)'s
+`PipelineWithShuffle` composes `PhaseGShuffle` + `PhaseGVerify` from
+`pkg/ares/phase/anon` over a GOSSIP→VERIFYING arc between `PlaintextKeygen`
+and ballot submission. The authority cannot link an anonymized ballot
+slot to the voter who produced it.
+
+Applications that don't need slot anonymity — for example, protocols
+whose intended output is the winner's public identity — continue to
+call `phase.Compose(...)` without the `anon` phases.
+[`examples/sealed_bid_auction`](examples/sealed_bid_auction/) is the
+canonical opt-out: the winning bidder is an explicit public output, so
+there is no slot→identity mapping to hide.
+
 ## Quickstart
 
 Legacy path (v1 wire frames, lineage off — fully backward-compatible
