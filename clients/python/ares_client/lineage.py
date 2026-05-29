@@ -41,19 +41,32 @@ def build_slot_node(
     # 1. payload_hash = SHA-256(payload_bytes)
     payload_hash = hashlib.sha256(payload_bytes).digest()
 
-    # 2. node_hash — parents sorted lexicographically (raw bytes), then written
+    # 2. Validate and decode parents
+    decoded_parents = []
+    for ph in parents_hex:
+        try:
+            pb = bytes.fromhex(ph)
+        except ValueError:
+            raise ValueError(f"parent hash is not valid hex: {ph!r}") from None
+        if len(pb) != 32:
+            raise ValueError(
+                f"parent hash must be 32 bytes, got {len(pb)}: {ph!r}"
+            )
+        decoded_parents.append(pb)
+
+    # 3. node_hash — parents sorted lexicographically (raw bytes), then written
     # without a per-parent length prefix (matches Go's DeriveNodeHash).
-    sorted_parents = sorted(bytes.fromhex(ph) for ph in parents_hex)
+    sorted_parents = sorted(decoded_parents)
     node_hash_input = _lp(sid_b) + _lp(phase_b) + _lp(role_b) + _lp(payload_hash)
     node_hash_input += struct.pack(">I", len(sorted_parents))
     for pb in sorted_parents:
         node_hash_input += pb  # raw 32 bytes, no length prefix
     node_hash = hashlib.sha256(node_hash_input).digest()
 
-    # 3. signing_msg = node_hash || lp(session_id) || lp(phase_id) || lp(role)
+    # 4. signing_msg = node_hash || lp(session_id) || lp(phase_id) || lp(role)
     signing_msg = node_hash + _lp(sid_b) + _lp(phase_b) + _lp(role_b)
 
-    # 4. Ephemeral Ed25519 keypair
+    # 5. Ephemeral Ed25519 keypair
     if ed25519_seed is not None:
         sk = Ed25519PrivateKey.from_private_bytes(ed25519_seed)
     else:
