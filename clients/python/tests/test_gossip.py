@@ -84,5 +84,6 @@ def test_slot_submission_produces_valid_lineage_node():
     assert node_dict["algorithm"] == "ed25519"
     assert len(node_dict["hash"]) == 64
     assert len(node_dict["signature"]) == 128
+    assert node_dict["parents"] == [], "slot submissions must have no lineage parents"
     assert node_dict["payload_hash"] == hashlib.sha256(payload_bytes).hexdigest(), \
         "lineage payload_hash must be SHA-256 of the exact payload bytes returned"
