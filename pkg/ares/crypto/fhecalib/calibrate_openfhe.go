@@ -16,19 +16,28 @@ import (
 // cgo bridge's CreateCKKSContext / make_ckks_context.
 const ckksFirstModSize = 60
 
-// exceedsModulusBudget reports whether the combination of ringDim, depth and
-// scalingModSize would exceed the CKKS ciphertext-modulus budget. With the cgo
-// bridge using HEStd_NotSet, OpenFHE silently enlarges the ring rather than
-// returning an error, so we enforce the budget ourselves before entering CGo.
-//
-// CKKS budget rule: firstModSize + depth*scalingModSize < ringDim.
-// (The product of RNS primes has fewer bits than the ring dimension.)
+// maxLog2Q returns the maximum CKKS ciphertext-modulus bit budget (log2 Q) for
+// a ring dimension at 128-bit classic security (HEStd_128_classic). Anchored to
+// the ARES spec's authoritative N=2^16 -> 1761-bit cap (ARES v2.6 SC-3); the
+// bound is linear in N, matching OpenFHE's HEStd_128_classic table within ~2
+// bits across N = 2^10..2^16.
+func maxLog2Q(ringDim uint32) uint64 {
+	return uint64(ringDim) * 1761 / 65536
+}
+
+// exceedsModulusBudget reports whether a CKKS context at (ringDim, depth,
+// scalingModSize) would need more ciphertext-modulus bits than 128-bit classic
+// security permits for that ring. The cgo bridge uses HEStd_NotSet and silently
+// enlarges the ring rather than erroring, so the calibrator enforces the secure
+// budget itself: a circuit that exceeds it should run at a LARGER ring, not be
+// silently accepted at an insecure parameter set. Total modulus bits are the
+// first-level prime plus one scalingModSize prime per multiplicative level.
 func exceedsModulusBudget(ringDim, depth uint32, scalingModSize int) bool {
 	if ringDim == 0 || scalingModSize == 0 {
 		return false
 	}
 	totalBits := uint64(ckksFirstModSize) + uint64(depth)*uint64(scalingModSize)
-	return totalBits >= uint64(ringDim)
+	return totalBits > maxLog2Q(ringDim)
 }
 
 // cgoHandle implements ContextHandle against the in-process OpenFHE bridge for

@@ -42,21 +42,19 @@ func TestCalibrate_ModulusCapSurfaces(t *testing.T) {
 		t.Skipf("OpenFHE unavailable: %v", err)
 	}
 	cut := squareCircuit{in: []float64{0.5, 0.5}}
-	// RingDim=2048, ScalingModSize=50, firstMod=60 ⟹ budget exhausted at depth≥40
-	// (60 + 40*50 = 2060 ≥ 2048). Start the sweep at depth=40 to guarantee the
-	// pre-flight budget check fires immediately on the first candidate.
+	// RingDim 1024 has a ~27-bit modulus budget at 128-bit security; even a
+	// depth-1 CKKS circuit (60 + 50 bits) exceeds it, so the calibrator must
+	// refuse with ErrModulusCap rather than silently running at an insecure ring.
 	_, err := Calibrate(cut, CalibrationParams{
-		Base:       helperclient.ContractParams{RingDim: 1 << 11, ScalingModSize: 50},
-		StartDepth: 40,
-		MaxDepth:   60,
+		Base:       helperclient.ContractParams{RingDim: 1 << 10, ScalingModSize: 50},
+		StartDepth: 1,
+		MaxDepth:   4,
 		Tolerance:  0.01,
 	}, 2)
 	if err == nil {
-		t.Fatal("expected an error (modulus cap) at tiny RingDim with high depth")
+		t.Fatal("expected ErrModulusCap at RingDim 1024")
 	}
 	if !errors.Is(err, ErrModulusCap) {
-		t.Logf("got non-ErrModulusCap error: %v", err)
-		t.Log("ACTION: capture this exact error string and add a matching substring to modulusCapMarkers in calibrate_openfhe.go, then re-run")
-		t.Fatal("modulus-cap not classified as ErrModulusCap; update modulusCapMarkers")
+		t.Fatalf("want ErrModulusCap, got %v", err)
 	}
 }
