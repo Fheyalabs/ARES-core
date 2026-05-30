@@ -1,15 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package fhecalib is a generic, application-agnostic tool for finding the
-// minimum CKKS multiplicative depth a homomorphic circuit needs. Describe a
-// circuit and representative use-case inputs; Calibrate runs the real FHE
-// computation at increasing depth until the decrypted result matches the
-// plaintext ground truth within a tolerance, and reports the minimum viable
-// depth plus the achieved numerical error.
-//
-// It is a development / CI calibration tool, not a per-session runtime path:
-// run it once for a use case and bake the resulting depth into the context
-// configuration. The real provisioning lives behind the `openfhe` build tag.
 package fhecalib
 
 import (
