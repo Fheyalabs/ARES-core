@@ -12,6 +12,25 @@ import (
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/helperclient"
 )
 
+// ckksFirstModSize is the hardcoded first-level modulus bit width used by the
+// cgo bridge's CreateCKKSContext / make_ckks_context.
+const ckksFirstModSize = 60
+
+// exceedsModulusBudget reports whether the combination of ringDim, depth and
+// scalingModSize would exceed the CKKS ciphertext-modulus budget. With the cgo
+// bridge using HEStd_NotSet, OpenFHE silently enlarges the ring rather than
+// returning an error, so we enforce the budget ourselves before entering CGo.
+//
+// CKKS budget rule: firstModSize + depth*scalingModSize < ringDim.
+// (The product of RNS primes has fewer bits than the ring dimension.)
+func exceedsModulusBudget(ringDim, depth uint32, scalingModSize int) bool {
+	if ringDim == 0 || scalingModSize == 0 {
+		return false
+	}
+	totalBits := uint64(ckksFirstModSize) + uint64(depth)*uint64(scalingModSize)
+	return totalBits >= uint64(ringDim)
+}
+
 // cgoHandle implements ContextHandle against the in-process OpenFHE bridge for
 // one provisioned (depth-specific) context.
 type cgoHandle struct {
@@ -80,8 +99,27 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 	inputs := cut.Inputs()
 	want := cut.Expected(inputs)
 
+	// Resolve the effective ScalingModSize: prefer p.Base value; fall back to 50
+	// (the bridge default inferred from ScalingFactor = 2^50).
+	scalingModSize := p.Base.ScalingModSize
+	if scalingModSize == 0 {
+		scalingModSize = 50
+	}
+
 	runAtDepth := func(depth uint32) (float64, bool, error) {
 		cgoParams := cgo.DefaultContractParams(profileDim, depth)
+		// Honour explicit RingDim from CalibrationParams (e.g. to exercise
+		// modulus-cap behaviour at small ring dimensions in tests).
+		if p.Base.RingDim != 0 {
+			cgoParams.RingDim = p.Base.RingDim
+		}
+
+		// Pre-flight: check the CKKS modulus budget before entering CGo.
+		// The cgo bridge uses HEStd_NotSet and auto-enlarges the ring, so this
+		// is the only place the constraint is enforced.
+		if exceedsModulusBudget(cgoParams.RingDim, depth, scalingModSize) {
+			return 0, true, nil
+		}
 
 		first, err := cgo.DistributedKeyGenFirst(cgoParams)
 		if err != nil {
@@ -168,10 +206,16 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 	return res, err
 }
 
-// isModulusCap reports whether an OpenFHE provisioning error indicates the
-// requested depth needs a ciphertext modulus larger than RingDim permits.
-// The exact matching substrings are finalized in Task 3 against the real
-// OpenFHE error string.
+// isModulusCap reports whether an OpenFHE provisioning error (returned by the
+// cgo bridge) indicates the requested depth needs a ciphertext modulus larger
+// than RingDim permits.
+//
+// Note: the cgo bridge uses HEStd_NotSet so OpenFHE itself does not emit
+// modulus-cap errors — it silently widens the ring instead. The primary cap
+// detection is the pre-flight exceedsModulusBudget check in Calibrate.
+// isModulusCap is retained as a secondary guard for any bridge changes that
+// restore security-level enforcement; the markers below reflect the error
+// substrings emitted by OpenFHE when HEStd_128_classic (or similar) is active.
 func isModulusCap(err error) bool {
 	if err == nil {
 		return false
@@ -185,6 +229,17 @@ func isModulusCap(err error) bool {
 	return false
 }
 
+// modulusCapMarkers are lowercased substrings of OpenFHE error messages emitted
+// when a depth+scalingModSize combination exceeds the ring-dimension-bound
+// ciphertext modulus. Pinned against OpenFHE 1.5.1 with HEStd_128_classic:
+//
+//	"the number of bits in the ciphertext modulus is too large for the ring dimension"
+//
+// The bridge currently uses HEStd_NotSet so these are not exercised by
+// live context creation; exceedsModulusBudget() is the active enforcement path.
 var modulusCapMarkers = []string{
-	"modulus", "exceeds", "ring dimension", "security", "hestd",
+	"ciphertext modulus is too large",
+	"not enough to support",
+	"ring dimension",
+	"hestd",
 }
