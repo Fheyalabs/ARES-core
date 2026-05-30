@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for GossipParticipant — full onion build/peel/submit cycle."""
+import base64
+import hashlib
 import json
-import pytest
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 from cryptography.hazmat.primitives.serialization import (
     Encoding, PublicFormat, PrivateFormat, NoEncryption,
@@ -40,7 +41,7 @@ def test_gossip_participant_full_cycle():
 
     # shared_batch: one onion per participant (batch[i] = participant i's onion).
     shared_batch = [
-        __import__("base64").b64decode(batch_dict["onions"][0])
+        base64.b64decode(batch_dict["onions"][0])
         for batch_dict, _ in batches_and_memos
     ]
 
@@ -50,6 +51,9 @@ def test_gossip_participant_full_cycle():
     for k in range(n):
         peeled, own_payload = participants[k].peel_round(memos[k], shared_batch)
         assert own_payload is not None, f"participant {k} did not find its own item"
+        if k == n - 1:
+            last_slot = json.loads(own_payload)
+            assert last_slot["slot_index"] == n - 1
         shared_batch = peeled
 
     # After all N rounds, shared_batch[i] is the plaintext for participant i
@@ -80,3 +84,5 @@ def test_slot_submission_produces_valid_lineage_node():
     assert node_dict["algorithm"] == "ed25519"
     assert len(node_dict["hash"]) == 64
     assert len(node_dict["signature"]) == 128
+    assert node_dict["payload_hash"] == hashlib.sha256(payload_bytes).hexdigest(), \
+        "lineage payload_hash must be SHA-256 of the exact payload bytes returned"

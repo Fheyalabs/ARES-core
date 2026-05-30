@@ -32,6 +32,18 @@ class GossipParticipant:
         self._slot_dk_sk = slot_dk_sk
         self._slot_dk_pub = slot_dk_pub
 
+    def _slot_entry_bytes(self) -> bytes:
+        """Canonical JSON bytes for this participant's slot entry.
+
+        Used both as the onion payload (build_batch) and the slot.submit
+        payload (slot_submission), so the bytes are identical in both paths.
+        """
+        return json.dumps(
+            {"slot_index": self._self_index, "slot_dk_pub": self._slot_dk_pub.hex()},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode()
+
     def build_batch(self, peer_pubs: list[bytes]) -> tuple[dict, bytes]:
         """Build the initial onion batch payload for onion.batch submission.
 
@@ -45,11 +57,7 @@ class GossipParticipant:
             (batch_payload_dict, self_memo) — dict has "onions" key with
             a list containing one base64-encoded onion.
         """
-        slot_entry = json.dumps(
-            {"slot_index": self._self_index, "slot_dk_pub": self._slot_dk_pub.hex()},
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
+        slot_entry = self._slot_entry_bytes()
         onion, self_memo = build_onion(slot_entry, peer_pubs, self._self_index)
         return {"onions": [base64.b64encode(onion).decode()]}, self_memo
 
@@ -57,7 +65,7 @@ class GossipParticipant:
         self,
         self_memo: bytes,
         onions: list[bytes],
-    ) -> tuple[list[bytes], bytes | None]:
+    ) -> tuple[list[bytes], bytes]:
         """Peel one ECIES layer from each onion; identify own item by self_memo.
 
         Args:
@@ -67,10 +75,15 @@ class GossipParticipant:
         Returns:
             (peeled_onions, own_payload) — own_payload is the decrypted inner
             bytes for the own item (still has remaining inner layers unless this
-            is the last peel round); None if not found.
+            is the last peel round).
+
+        Raises:
+            ValueError: if self_memo does not match any item in onions
+                (propagated from peel_batch).
         """
         peeled, own_idx = peel_batch(self._slot_dk_sk, self_memo, onions)
-        return peeled, peeled[own_idx] if own_idx >= 0 else None
+        assert own_idx >= 0, "peel_batch must locate own item or raise"
+        return peeled, peeled[own_idx]
 
     def slot_submission(self) -> tuple[bytes, dict]:
         """Build the slot.submit payload bytes and signed lineage node.
@@ -80,11 +93,7 @@ class GossipParticipant:
             to send as WSMessage.payload; node_dict is the SC-10 lineage
             DAGNode to attach as WSMessage.lineage.
         """
-        payload_bytes = json.dumps(
-            {"slot_index": self._self_index, "slot_dk_pub": self._slot_dk_pub.hex()},
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode()
+        payload_bytes = self._slot_entry_bytes()
         node_dict, _sk, _pk = build_slot_node(
             session_id=self._session_id,
             payload_bytes=payload_bytes,
