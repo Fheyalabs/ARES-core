@@ -35,6 +35,9 @@ func TestCalibrate_SquareCircuitFindsDepth1(t *testing.T) {
 	if res.Circuit != "elementwise-square" {
 		t.Fatalf("circuit name not propagated: %q", res.Circuit)
 	}
+	if res.RingDim != 1<<14 {
+		t.Fatalf("expected resolved RingDim=16384, got %d", res.RingDim)
+	}
 }
 
 func TestCalibrate_ModulusCapSurfaces(t *testing.T) {

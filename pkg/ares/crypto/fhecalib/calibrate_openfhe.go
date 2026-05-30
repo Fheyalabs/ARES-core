@@ -100,10 +100,17 @@ func buildJointEvalMultN2(params cgo.ContractParams, shares []cgo.DistributedKey
 // Calibrate finds the minimum depth for cut over a minimal n=2 threshold
 // context. Depth/precision are party-count-independent, so n=2 (the keygen
 // floor) yields the same answer as a single key for far less work.
-// profileDim is the slot count the use-case vectors occupy.
+//
+// profileDim sets the CKKS batch slot count for the provisioned context. The
+// caller must pass profileDim >= len(cut.Inputs()[i]) for every input vector i;
+// values beyond profileDim are silently dropped at encryption, producing
+// incorrect results without an error.
 func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (CalibrationResult, error) {
 	if err := cgo.SmokeCKKS(); err != nil {
 		return CalibrationResult{}, fmt.Errorf("fhecalib: OpenFHE unavailable: %w", err)
+	}
+	if p.StartDepth == 0 {
+		return CalibrationResult{}, fmt.Errorf("fhecalib: StartDepth must be >= 1 (0 is not a valid CKKS multiplicative depth)")
 	}
 	inputs := cut.Inputs()
 	want := cut.Expected(inputs)
@@ -115,6 +122,7 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 		scalingModSize = 50
 	}
 
+	var resolvedRingDim uint32
 	runAtDepth := func(depth uint32) (float64, bool, error) {
 		cgoParams := cgo.DefaultContractParams(profileDim, depth)
 		// Honour explicit RingDim from CalibrationParams (e.g. to exercise
@@ -122,6 +130,9 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 		if p.Base.RingDim != 0 {
 			cgoParams.RingDim = p.Base.RingDim
 		}
+		// Capture the resolved ring dimension so the result can report it
+		// even when p.Base.RingDim was 0 (auto-sized by DefaultContractParams).
+		resolvedRingDim = cgoParams.RingDim
 
 		// Pre-flight: check the CKKS modulus budget before entering CGo.
 		// The cgo bridge uses HEStd_NotSet and auto-enlarges the ring, so this
@@ -170,7 +181,7 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 			params: helperclient.ContractParams{
 				RingDim:        cgoParams.RingDim,
 				Depth:          depth,
-				ScalingModSize: p.Base.ScalingModSize,
+				ScalingModSize: scalingModSize,
 			},
 			cgoParams:   cgoParams,
 			evalMultKey: evalMultKey,
@@ -212,6 +223,9 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 
 	res, err := sweep(p, runAtDepth)
 	res.Circuit = cut.Name()
+	if resolvedRingDim != 0 {
+		res.RingDim = resolvedRingDim
+	}
 	return res, err
 }
 
@@ -249,6 +263,5 @@ func isModulusCap(err error) bool {
 var modulusCapMarkers = []string{
 	"ciphertext modulus is too large",
 	"not enough to support",
-	"ring dimension",
 	"hestd",
 }
