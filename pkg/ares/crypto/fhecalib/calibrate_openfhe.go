@@ -85,16 +85,25 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 
 		first, err := cgo.DistributedKeyGenFirst(cgoParams)
 		if err != nil {
-			return 0, isModulusCap(err), fmt.Errorf("keygen first: %w", err)
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, fmt.Errorf("keygen first: %w", err)
 		}
 		second, err := cgo.DistributedKeyGenNext(cgoParams, first.PublicKey)
 		if err != nil {
-			return 0, isModulusCap(err), fmt.Errorf("keygen next: %w", err)
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, fmt.Errorf("keygen next: %w", err)
 		}
 		shares := []cgo.DistributedKeyShare{first, second}
 		evalMultKey, err := buildJointEvalMultN2(cgoParams, shares)
 		if err != nil {
-			return 0, isModulusCap(err), err
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, err
 		}
 		jointPK := second.PublicKey
 
@@ -102,7 +111,10 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 		for i, vec := range inputs {
 			ct, err := cgo.EncryptCKKSForContract(cgoParams, jointPK, vec)
 			if err != nil {
-				return 0, isModulusCap(err), fmt.Errorf("encrypt input %d: %w", i, err)
+				if isModulusCap(err) {
+					return 0, true, nil
+				}
+				return 0, false, fmt.Errorf("encrypt input %d: %w", i, err)
 			}
 			encIn[i] = ct
 		}
@@ -118,22 +130,34 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 		}
 		encOut, err := cut.Eval(h, encIn)
 		if err != nil {
-			return 0, isModulusCap(err), fmt.Errorf("circuit eval: %w", err)
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, fmt.Errorf("circuit eval: %w", err)
 		}
 
 		// Threshold-decrypt (n=2): lead = first share, follower = second.
 		// Mirrors cgo.ThresholdSmokeCKKS's partial-decrypt + fuse sequence.
 		p0, err := cgo.PartialDecryptCKKSForContract(cgoParams, encOut, first.SecretKeyShare, true)
 		if err != nil {
-			return 0, isModulusCap(err), fmt.Errorf("partial decrypt lead: %w", err)
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, fmt.Errorf("partial decrypt lead: %w", err)
 		}
 		p1, err := cgo.PartialDecryptCKKSForContract(cgoParams, encOut, second.SecretKeyShare, false)
 		if err != nil {
-			return 0, isModulusCap(err), fmt.Errorf("partial decrypt follower: %w", err)
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, fmt.Errorf("partial decrypt follower: %w", err)
 		}
 		got, err := cgo.FuseCKKSPartialsForContract(cgoParams, [][]byte{p0, p1}, len(want))
 		if err != nil {
-			return 0, isModulusCap(err), fmt.Errorf("fuse partials: %w", err)
+			if isModulusCap(err) {
+				return 0, true, nil
+			}
+			return 0, false, fmt.Errorf("fuse partials: %w", err)
 		}
 
 		return maxSlotAbsError(got, want), false, nil
