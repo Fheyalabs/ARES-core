@@ -49,6 +49,32 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.6.0] — 2026-05-31
+
+### Added
+
+- **Python client primitives (`clients/python/ares_client`).** Generic,
+  application-agnostic building blocks for ARES clients: an SC-2-correct
+  ECIES onion (`onion.py` — N-layer build/peel with ciphertext-memory-match
+  self-identification, no skip-self), an SC-10 lineage `DAGNode` builder
+  (`lineage.py`, hex/snake_case wire form that reproduces the Go golden
+  vectors byte-for-byte), a `GossipParticipant` driving the onion-shuffle →
+  slot-submission arc (`gossip.py`), and `WSMessage.lineage` /
+  `ARESSession.send(lineage=)` v2-frame support (`session.py`).
+  Cross-language parity is locked by `tests/test_lineage_vectors.py`
+  against `pkg/ares/lineage/testdata/node_vectors.json`. Python package
+  version bumped 0.4.1 → 0.5.0.
+- **FHE circuit depth calibrator (`pkg/ares/crypto/fhecalib`).** A generic,
+  application-agnostic tool that finds the minimum CKKS multiplicative depth
+  a homomorphic circuit needs, by running the real computation at increasing
+  depth until the decrypted result matches a plaintext ground truth within
+  tolerance. Implement `CircuitUnderTest` for your circuit and call
+  `Calibrate` (requires the `openfhe` build tag) to get the minimum viable
+  depth plus achieved precision; `ErrModulusCap` signals when a depth would
+  exceed the 128-bit-classic ciphertext-modulus budget for the ring
+  dimension (so the caller raises the ring). A development/CI tool — run it
+  once per use case and bake the resulting depth into context config.
+
 ## [0.5.2] — 2026-05-29
 
 ### Changed
@@ -445,7 +471,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.4.1...v0.5.0
