@@ -67,6 +67,39 @@ func (h *cgoHandle) EvalProductSum(ctLeft, ctRight []byte, nSlots int) ([]byte, 
 	return cgo.EvalProductSumForContract(h.cgoParams, h.evalKeys, ctLeft, ctRight, nSlots)
 }
 
+// NewContextHandle returns a ContextHandle backed by the in-process OpenFHE
+// bridge. This is the real-mode constructor for Phase-1c (bound-check) and
+// any other phase that drives homomorphic ops via a ContextHandle.
+//
+// params pins the CKKS scheme parameters for the session (ring_dim, depth,
+// scaling_mod_size). evalKeys is the combined eval-mult + eval-sum key bundle
+// produced by the threshold keygen rounds (cgo.EvalKeyFinal). jointPK is the
+// final joint public key; it is used by EvalSubConst to encrypt the public
+// center vector before performing the subtraction ciphertext.
+//
+// The returned handle is safe for concurrent use within one phase: each
+// method re-enters the cgo bridge (which manages its own C context) without
+// shared mutable Go state.
+func NewContextHandle(params helperclient.ContractParams, evalKeys cgo.EvalKeyFinal, jointPK []byte) ContextHandle {
+	cgoParams := cgo.ContractParams{
+		RingDim:       params.RingDim,
+		ScalingFactor: params.ScalingFactor,
+		Depth:         params.Depth,
+	}
+	if cgoParams.ScalingFactor == 0 {
+		// Mirror the bridge default (2^50) when the caller omits ScalingFactor
+		// but provides ScalingModSize instead. The cgo bridge derives the
+		// factor internally from ScalingModSize; pass it through unchanged.
+		cgoParams.ScalingFactor = float64(uint64(1) << 50)
+	}
+	return &cgoHandle{
+		params:    params,
+		cgoParams: cgoParams,
+		evalKeys:  evalKeys,
+		jointPK:   jointPK,
+	}
+}
+
 // buildJointEvalMultN2 mirrors buildJointEvalMult in
 // helperclient/argmax_e2e_test.go: the two-round eval-mult-key chain for the
 // given key shares. Returns the full EvalKeyFinal bundle (EvalMultFinal +
