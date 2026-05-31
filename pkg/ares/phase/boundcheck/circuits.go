@@ -9,20 +9,20 @@ import (
 )
 
 // NormCircuit is the SC-5 embedding norm check: center 0, check value ‖x‖²,
-// bound [1-Eps, 1+Eps]. Dim is the embedding dimension (the number of CKKS
-// slots summed); it must match the input vector length at runtime.
+// bound [1-Eps, 1+Eps]. NDim is the embedding dimension (the number of CKKS
+// slots summed); it must match the input vector length at runtime (CtxInputDim).
 type NormCircuit struct {
-	Eps float64
-	Dim int
+	Eps  float64
+	NDim int
 }
 
 func (NormCircuit) Name() string { return "norm" }
 
-// Inputs returns a representative unit-norm vector of length Dim (for depth calibration).
+// Inputs returns a representative unit-norm vector of length NDim (for depth calibration).
 func (c NormCircuit) Inputs() [][]float64 {
-	v := make([]float64, c.Dim)
+	v := make([]float64, c.NDim)
 	for i := range v {
-		v[i] = 1.0 / math.Sqrt(float64(c.Dim)) // ‖v‖² = 1
+		v[i] = 1.0 / math.Sqrt(float64(c.NDim)) // ‖v‖² = 1
 	}
 	return [][]float64{v}
 }
@@ -32,10 +32,13 @@ func (NormCircuit) Expected(in [][]float64) []float64 {
 }
 
 func (c NormCircuit) Eval(h fhecalib.ContextHandle, enc [][]byte) ([]byte, error) {
-	return h.EvalProductSum(enc[0], enc[0], c.Dim)
+	return h.EvalProductSum(enc[0], enc[0], c.NDim)
 }
 
 func (c NormCircuit) Bound() Bound { return Bound{Lo: 1 - c.Eps, Hi: 1 + c.Eps} }
+
+// Dim returns the expected input-vector dimension for this circuit.
+func (c NormCircuit) Dim() int { return c.NDim }
 
 // DistanceBoundCircuit checks ‖x - Center‖² ∈ [Lo, Hi] (public Center). Covers
 // geographic-radius and multi-dimensional resource budgets.
@@ -69,6 +72,9 @@ func (c DistanceBoundCircuit) Eval(h fhecalib.ContextHandle, enc [][]byte) ([]by
 }
 
 func (c DistanceBoundCircuit) Bound() Bound { return Bound{Lo: c.Lo, Hi: c.Hi} }
+
+// Dim returns the expected input-vector dimension for this circuit.
+func (c DistanceBoundCircuit) Dim() int { return len(c.Center) }
 
 func sumOfSquares(v []float64) float64 {
 	s := 0.0

@@ -172,7 +172,7 @@ func TestPhaseRound_RealFHE_P0OK_P1Violates(t *testing.T) {
 	}
 
 	const dim = 8
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: dim}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: dim}
 	handler := &captureHandler{}
 
 	phaseParams := boundcheck.DefaultParams()
@@ -278,7 +278,7 @@ func TestPhaseRound_RealFHE_BothOK(t *testing.T) {
 	}
 
 	const dim = 8
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: dim}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: dim}
 	handler := &captureHandler{}
 	phaseParams := boundcheck.DefaultParams()
 

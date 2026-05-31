@@ -37,12 +37,20 @@ func DefaultParams() Params { return Params{EpsNorm: 0.01, NuHard: 1.25} }
 type BoundCircuit interface {
 	fhecalib.CircuitUnderTest
 	Bound() Bound
+	// Dim returns the expected input-vector dimension (slot count) for this
+	// circuit. Enter rejects sessions where CtxInputDim != Dim() to prevent
+	// silently summing the wrong number of slots and producing a wrong norm.
+	Dim() int
 }
 
 // ViolationHandler is the application boundary: invoked once per violating
 // party before the session aborts. nu is the distance outside the bound; the
 // app maps it to a domain penalty.
 type ViolationHandler interface {
+	// OnViolation is called synchronously before the jitter sleep and the
+	// session abort. The returned error is advisory (for application-layer
+	// logging or side effects); the framework discards it and aborts the
+	// session regardless of what OnViolation returns.
 	OnViolation(ctx *phase.SessionContext, party string, nu float64, sev Severity) error
 }
 

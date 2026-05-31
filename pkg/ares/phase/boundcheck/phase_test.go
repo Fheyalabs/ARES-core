@@ -118,7 +118,7 @@ func TestPhase_Enter_PopulatesBoundCheckCiphers(t *testing.T) {
 		return []float64{1.0}, nil // irrelevant for Enter test
 	}
 
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	p := newRealPhase(circuit, nil, boundcheck.DefaultParams(), handle, fakeFuse)
 
 	parties := []string{"alice", "bob", "carol"}
@@ -152,7 +152,7 @@ func TestPhase_Enter_PopulatesBoundCheckCiphers(t *testing.T) {
 // TestPhase_CheckComplete_QuorumGating verifies that CheckComplete is false
 // until all N participants have submitted MsgBoundPartial (N-of-N quorum).
 func TestPhase_CheckComplete_QuorumGating(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	p := newStubPhase(circuit, nil, boundcheck.DefaultParams())
 
 	parties := []string{"a", "b"}
@@ -189,7 +189,7 @@ func TestPhase_Exit_ViolationCallsHandlerAndAborts(t *testing.T) {
 	inBoundValue := 1.0  // norm 1.0 is within [0.99, 1.01]
 	outBoundValue := 5.0 // far outside [0.99, 1.01] -> hard violation
 
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	params := boundcheck.DefaultParams()
 	handler := &captureHandler{}
 
@@ -269,7 +269,7 @@ func TestPhase_Exit_ViolationCallsHandlerAndAborts(t *testing.T) {
 // submit in-bound values, Exit returns nil and the ViolationHandler is never
 // invoked.
 func TestPhase_Exit_AllInBound_NoHandlerNoError(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	params := boundcheck.DefaultParams()
 	handler := &captureHandler{}
 
@@ -300,7 +300,7 @@ func TestPhase_Exit_AllInBound_NoHandlerNoError(t *testing.T) {
 // TestPhase_Invariant5_DimRefusal checks that Enter returns a non-nil error
 // for CtxInputDim == 0 and CtxInputDim == 1 (invariant #5).
 func TestPhase_Invariant5_DimRefusal(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 2}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 2}
 	p := newStubPhase(circuit, nil, boundcheck.DefaultParams())
 
 	for _, dim := range []int{0, 1} {
@@ -320,7 +320,7 @@ func TestPhase_Invariant5_DimRefusal(t *testing.T) {
 // TestPhase_Invariant5_Dim2_OK confirms that dim >= 2 passes Enter without
 // error in stub mode.
 func TestPhase_Invariant5_Dim2_OK(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 2}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 2}
 	p := newStubPhase(circuit, nil, boundcheck.DefaultParams())
 
 	ctx := phase.NewSessionContext("dim-ok")
@@ -335,11 +335,13 @@ func TestPhase_Invariant5_Dim2_OK(t *testing.T) {
 	}
 }
 
-// TestPhase_Invariant2_OneCircuit is a structural (compile-time) test that
-// the Phase constructor takes exactly one BoundCircuit. If the constructor
-// signature changed to accept multiple circuits, this would fail to compile.
+// TestPhase_Invariant2_OneCircuit documents the structural single-circuit
+// invariant: Phase has exactly one circuit field, enforced by the constructor
+// signature. This is a runtime constructor test — the real enforcement is the
+// single `circuit` field on Phase; a constructor change to accept multiple
+// circuits would fail here at compile time.
 func TestPhase_Invariant2_OneCircuit(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	p := boundcheck.NewPhase(circuit, nil, boundcheck.DefaultParams(), defaults.StateScoring, defaults.StateDecrypting)
 	if p == nil {
 		t.Fatal("NewPhase with one BoundCircuit must return non-nil Phase")
@@ -351,7 +353,7 @@ func TestPhase_Invariant2_OneCircuit(t *testing.T) {
 
 // TestPhase_Metadata confirms the phase metadata contract.
 func TestPhase_Metadata(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	p := boundcheck.NewPhase(circuit, nil, boundcheck.DefaultParams(), defaults.StateScoring, defaults.StateDecrypting)
 
 	if p.Lifetime() != phase.LifetimePerSession {
@@ -375,11 +377,125 @@ func TestPhase_Metadata(t *testing.T) {
 	}
 }
 
+// TestPhase_Exit_MissingPartial_BlamesWithholdingSender verifies that when a
+// sender's MsgBoundPartial map omits another party's entry, Exit:
+//   - calls ViolationHandler with the WITHHOLDING SENDER's identity (not the
+//     checked party whose ciphertext could not be assembled), with SeverityHard;
+//   - returns an error that errors.Is(err, phase.ErrAppAttributable) == true.
+func TestPhase_Exit_MissingPartial_BlamesWithholdingSender(t *testing.T) {
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
+	params := boundcheck.DefaultParams()
+	handler := &captureHandler{}
+
+	// Fuse always succeeds — it should not be called for the incomplete quorum.
+	fuseCallCount := 0
+	fakeFuse := func(partials [][]byte, nSlots int) ([]float64, error) {
+		fuseCallCount++
+		return []float64{1.0}, nil
+	}
+
+	handle := &fakeContextHandle{cannedCT: []byte("ct")}
+	p := newRealPhase(circuit, handler, params, handle, fakeFuse)
+
+	parties := []string{"alice", "bob", "carol"}
+	ctx := newCtx(parties, map[string][]byte{
+		"alice": []byte("enc-alice"),
+		"bob":   []byte("enc-bob"),
+		"carol": []byte("enc-carol"),
+	}, 4)
+
+	_ = p.Enter(ctx)
+
+	// alice sends a complete map covering all three checked parties.
+	aliceMap := map[string][]byte{
+		"alice": []byte("alice-partial-of-alice"),
+		"bob":   []byte("alice-partial-of-bob"),
+		"carol": []byte("alice-partial-of-carol"),
+	}
+	alicePayload, _ := json.Marshal(aliceMap)
+
+	// bob sends a map that OMITS "carol" — bob is the withholding sender.
+	bobMap := map[string][]byte{
+		"alice": []byte("bob-partial-of-alice"),
+		"bob":   []byte("bob-partial-of-bob"),
+		// "carol" intentionally absent
+	}
+	bobPayload, _ := json.Marshal(bobMap)
+
+	// carol sends a complete map.
+	carolMap := map[string][]byte{
+		"alice": []byte("carol-partial-of-alice"),
+		"bob":   []byte("carol-partial-of-bob"),
+		"carol": []byte("carol-partial-of-carol"),
+	}
+	carolPayload, _ := json.Marshal(carolMap)
+
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "alice", alicePayload)
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "bob", bobPayload)
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "carol", carolPayload)
+
+	err := p.Exit(ctx)
+	if err == nil {
+		t.Fatal("Exit must return error when a sender withholds a partial")
+	}
+	if !errors.Is(err, phase.ErrAppAttributable) {
+		t.Errorf("Exit error must wrap ErrAppAttributable; got %v", err)
+	}
+
+	// Handler must have been called for the WITHHOLDING SENDER ("bob"),
+	// not for "carol" (the checked party whose quorum was incomplete).
+	if len(handler.calls) == 0 {
+		t.Fatal("ViolationHandler.OnViolation was not called")
+	}
+	foundBob := false
+	foundCarol := false
+	for _, c := range handler.calls {
+		if c.party == "bob" {
+			foundBob = true
+			if c.sev != boundcheck.SeverityHard {
+				t.Errorf("withholding sender bob: want SeverityHard, got %v", c.sev)
+			}
+		}
+		if c.party == "carol" {
+			foundCarol = true
+		}
+	}
+	if !foundBob {
+		t.Errorf("handler not called for withholding sender %q; calls = %v", "bob", handler.calls)
+	}
+	if foundCarol {
+		t.Errorf("handler must NOT be called for checked party %q (victim, not violator); calls = %v", "carol", handler.calls)
+	}
+}
+
+// TestPhase_Enter_DimMismatch asserts that Enter returns a permanent error
+// when CtxInputDim does not match the circuit's Dim().
+func TestPhase_Enter_DimMismatch(t *testing.T) {
+	// Circuit expects dim=4; session provides dim=8 — mismatch must be rejected.
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
+	p := newStubPhase(circuit, nil, boundcheck.DefaultParams())
+
+	ctx := phase.NewSessionContext("dim-mismatch-test")
+	ctx.Set(defaults.CtxParticipants, []string{"a"})
+	ctx.Set(boundcheck.CtxEncryptedInputs, map[string][]byte{"a": []byte("x")})
+	ctx.Set(boundcheck.CtxInputDim, 8) // 8 != circuit.Dim()=4
+	ctx.Set(boundcheck.CtxEvalKeyBundle, []byte("key"))
+	ctx.Set(boundcheck.CtxJointPublicKey, []byte("pk"))
+
+	err := p.Enter(ctx)
+	if err == nil {
+		t.Fatal("Enter must return error when CtxInputDim != circuit.Dim()")
+	}
+	if !errors.Is(err, phase.ErrPermanent) {
+		t.Errorf("dim-mismatch error must wrap ErrPermanent; got %v", err)
+	}
+}
+
 // TestPhase_StubMode_EnterExitNoop confirms that stub mode (nil handle and
 // fuse) leaves CtxBoundCheckCiphers absent and Exit returns nil regardless
 // of accumulated partials. This is the compose-time structural test mode.
 func TestPhase_StubMode_EnterExitNoop(t *testing.T) {
-	circuit := boundcheck.NormCircuit{Eps: 0.01, Dim: 4}
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
 	p := newStubPhase(circuit, nil, boundcheck.DefaultParams())
 
 	parties := []string{"a", "b"}

@@ -159,7 +159,10 @@ func (p *Phase) Enter(ctx *phase.SessionContext) error {
 		return fmt.Errorf("%w: boundcheck: context key %q not set", phase.ErrPermanent, CtxInputDim)
 	}
 	if dim < 2 {
-		return fmt.Errorf("boundcheck: input dim %d < 2; scalar bounds need a Class-2 comparison circuit", dim)
+		return fmt.Errorf("%w: boundcheck: input dim %d < 2; scalar bounds need a Class-2 comparison circuit", phase.ErrPermanent, dim)
+	}
+	if dim != p.circuit.Dim() {
+		return fmt.Errorf("%w: boundcheck: CtxInputDim %d != circuit dim %d", phase.ErrPermanent, dim, p.circuit.Dim())
 	}
 
 	// Stub mode: skip FHE compute. CtxBoundCheckCiphers is not populated;
@@ -259,27 +262,41 @@ func (p *Phase) Exit(ctx *phase.SessionContext) error {
 	}
 	var violators []violation
 
+	// withholdingSenders accumulates the set of senders who omitted at least
+	// one entry from their MsgBoundPartial map. These senders are protocol
+	// violators (withholding a partial decrypt is distinct from a numeric bound
+	// violation). We collect them across all checked parties and deduplicate so
+	// each withholding sender is flagged exactly once.
+	withholdingSenders := make(map[string]struct{})
+
 	for _, checkedParty := range participants {
 		// Collect one partial per sender for this checked party's ciphertext,
 		// in participants order so the lead partial (participants[0]) is first.
 		partialsForI := make([][]byte, 0, len(participants))
-		missingQuorum := false
+		quorumComplete := true
 		for _, sender := range participants {
 			senderMap, senderPresent := senderMaps[sender]
 			if !senderPresent {
-				missingQuorum = true
-				break
+				// The sender sent no map at all — still flagged as withholding.
+				withholdingSenders[sender] = struct{}{}
+				quorumComplete = false
+				continue
 			}
 			blob, partialPresent := senderMap[checkedParty]
 			if !partialPresent {
-				missingQuorum = true
-				break
+				// This sender's map is missing the entry for checkedParty.
+				// The violator is the SENDER who withheld the partial, not
+				// the checked party whose ciphertext could not be assembled.
+				withholdingSenders[sender] = struct{}{}
+				quorumComplete = false
+				continue
 			}
 			partialsForI = append(partialsForI, blob)
 		}
-		if missingQuorum {
-			// Missing partial from at least one party is a protocol violation.
-			violators = append(violators, violation{party: checkedParty, nu: p.params.NuHard + 1, sev: SeverityHard})
+		if !quorumComplete {
+			// Cannot fuse without all N partials; skip numeric classification
+			// for this checked party. The withholding senders are recorded
+			// above and will be flagged after the loop.
 			continue
 		}
 
@@ -294,6 +311,15 @@ func (p *Phase) Exit(ctx *phase.SessionContext) error {
 		if sev != SeverityOK {
 			violators = append(violators, violation{party: checkedParty, nu: nu, sev: sev})
 		}
+	}
+
+	// Flag each withholding sender as a hard protocol violator. nuMissing is
+	// set to NuHard+1 as a sentinel meaning "missing/withheld partial decrypt":
+	// a protocol violation distinct from a numeric bound violation (where nu is
+	// a measured distance outside [Lo, Hi]).
+	nuMissing := p.params.NuHard + 1
+	for sender := range withholdingSenders {
+		violators = append(violators, violation{party: sender, nu: nuMissing, sev: SeverityHard})
 	}
 
 	if len(violators) == 0 {
