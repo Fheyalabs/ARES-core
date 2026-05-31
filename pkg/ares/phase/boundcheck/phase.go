@@ -1,53 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
 
-// Package boundcheck implements Phase-1c of the ARES v2.6 session protocol:
-// the per-party uniform homomorphic bound-check round (SC-5).
-//
-// # Role
-//
-// After input submission, the server holds every party's lineage-committed
-// ciphertext. Phase.Enter computes enc_check_i for each party using the
-// configured BoundCircuit, then stores the results in CtxBoundCheckCiphers.
-// The consuming application must read that map and unicast each enc_check_i
-// to the corresponding participant (via hub.SendTo or equivalent). Each party
-// replies with a MsgBoundPartial message carrying its partial decrypt of EACH
-// check ciphertext. Once all parties have replied, Phase.Exit assembles the
-// N-party quorum of partials per check ciphertext, fuses them, classifies each
-// fused value against the circuit's Bound, and invokes the ViolationHandler for
-// any violating party before aborting.
-//
-// # Security invariants enforced
-//
-//   - #1 Center-only: the BoundCircuit interface exposes only a center; the
-//     circuit implementation is responsible for this structural guarantee.
-//   - #2 One bound per input: the Phase holds exactly one BoundCircuit.
-//   - #3 Committed params: thresholds are read from the fixed circuit and
-//     Params set at construction, never from context or inbound messages.
-//   - #4 Opaque jittered abort: on violation, Exit returns a generic
-//     ErrAppAttributable (no party or value details on the wire) after a
-//     configurable jitter sleep to prevent timing oracles.
-//   - #5 Dim refusal: Enter returns a config error when CtxInputDim < 2.
-//
-// # Broadcast contract
-//
-// Enter does NOT broadcast enc_check_i to participants; the framework has no
-// auto-broadcast hook for phase context keys. The application bridge must read
-// CtxBoundCheckCiphers (map[string][]byte) after Enter and unicast each value
-// to the corresponding participant. Parties reply with MsgBoundPartial; the
-// phase accumulates via OnMessage.
-//
-// # Partial-decrypt and fuse mapping
-//
-// Check ciphertexts are encrypted under the joint threshold public key. To
-// recover the plaintext of enc_check_i, a full N-of-N quorum of partial
-// decrypts is required. Each party therefore partial-decrypts EVERY check
-// ciphertext and replies with a JSON-serialised map[string][]byte keyed by
-// checkedParty → that sender's partial of that check ciphertext. Exit gathers,
-// for each checked party i, all N senders' partials for i into a [][]byte of
-// length N and calls fuse(partialsForI, 1). Lead designation (required by
-// PartialDecryptCKKSForContract) is deterministic: participants[0] is always
-// the lead (lead=true); all others pass lead=false. Parties must apply this
-// convention when constructing their partial maps.
 package boundcheck
 
 import (
