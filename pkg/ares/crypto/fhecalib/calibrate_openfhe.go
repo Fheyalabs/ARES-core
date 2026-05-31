@@ -43,25 +43,39 @@ func exceedsModulusBudget(ringDim, depth uint32, scalingModSize int) bool {
 // cgoHandle implements ContextHandle against the in-process OpenFHE bridge for
 // one provisioned (depth-specific) context.
 type cgoHandle struct {
-	params      helperclient.ContractParams
-	cgoParams   cgo.ContractParams
-	evalMultKey []byte
+	params    helperclient.ContractParams
+	cgoParams cgo.ContractParams
+	evalKeys  cgo.EvalKeyFinal
+	jointPK   []byte
 }
 
 func (h *cgoHandle) Params() helperclient.ContractParams { return h.params }
 
 func (h *cgoHandle) EvalMult(ctA, ctB []byte) ([]byte, error) {
-	return cgo.EvalMultCKKSForContract(h.cgoParams, h.evalMultKey, ctA, ctB)
+	return cgo.EvalMultCKKSForContract(h.cgoParams, h.evalKeys.EvalMultFinal, ctA, ctB)
+}
+
+func (h *cgoHandle) EvalSubConst(ct []byte, vals []float64) ([]byte, error) {
+	encCenter, err := cgo.EncryptCKKSForContract(h.cgoParams, h.jointPK, vals)
+	if err != nil {
+		return nil, fmt.Errorf("fhecalib: encrypt center: %w", err)
+	}
+	return cgo.EvalSubCKKSForContract(h.cgoParams, ct, encCenter)
+}
+
+func (h *cgoHandle) EvalProductSum(ctLeft, ctRight []byte, nSlots int) ([]byte, error) {
+	return cgo.EvalProductSumForContract(h.cgoParams, h.evalKeys, ctLeft, ctRight, nSlots)
 }
 
 // buildJointEvalMultN2 mirrors buildJointEvalMult in
 // helperclient/argmax_e2e_test.go: the two-round eval-mult-key chain for the
-// given key shares. Returns the joint eval-mult key.
-func buildJointEvalMultN2(params cgo.ContractParams, shares []cgo.DistributedKeyShare) ([]byte, error) {
+// given key shares. Returns the full EvalKeyFinal bundle (EvalMultFinal +
+// EvalSumFinal) so callers can use both keys without re-running the protocol.
+func buildJointEvalMultN2(params cgo.ContractParams, shares []cgo.DistributedKeyShare) (cgo.EvalKeyFinal, error) {
 	finalPK := shares[len(shares)-1].PublicKey
 	lead, err := cgo.EvalKeyRound1Lead(params, shares[0].SecretKeyShare)
 	if err != nil {
-		return nil, fmt.Errorf("evalkey round1 lead: %w", err)
+		return cgo.EvalKeyFinal{}, fmt.Errorf("evalkey round1 lead: %w", err)
 	}
 	pks := make([][]byte, len(shares))
 	mr1 := make([][]byte, len(shares))
@@ -71,7 +85,7 @@ func buildJointEvalMultN2(params cgo.ContractParams, shares []cgo.DistributedKey
 		r1, err := cgo.EvalKeyRound1Participant(params, shares[i].SecretKeyShare,
 			lead.EvalMultBase, lead.EvalSumBase, shares[i].PublicKey)
 		if err != nil {
-			return nil, fmt.Errorf("evalkey round1 participant %d: %w", i, err)
+			return cgo.EvalKeyFinal{}, fmt.Errorf("evalkey round1 participant %d: %w", i, err)
 		}
 		pks[i] = shares[i].PublicKey
 		mr1[i] = r1.EvalMultSwitchShare
@@ -79,22 +93,22 @@ func buildJointEvalMultN2(params cgo.ContractParams, shares []cgo.DistributedKey
 	}
 	combined, err := cgo.CombineEvalKeyRound1(params, pks, mr1, sr1)
 	if err != nil {
-		return nil, fmt.Errorf("combine round1: %w", err)
+		return cgo.EvalKeyFinal{}, fmt.Errorf("combine round1: %w", err)
 	}
 	fs := make([][]byte, len(shares))
 	for i := range shares {
 		r2, err := cgo.EvalKeyRound2Participant(params, shares[i].SecretKeyShare,
 			combined.EvalMultJoined, finalPK, shares[i].Lead)
 		if err != nil {
-			return nil, fmt.Errorf("evalkey round2 participant %d: %w", i, err)
+			return cgo.EvalKeyFinal{}, fmt.Errorf("evalkey round2 participant %d: %w", i, err)
 		}
 		fs[i] = r2.EvalMultFinalShare
 	}
 	final, err := cgo.CombineEvalKeyRound2(params, finalPK, fs, combined.EvalSumFinal)
 	if err != nil {
-		return nil, fmt.Errorf("combine round2: %w", err)
+		return cgo.EvalKeyFinal{}, fmt.Errorf("combine round2: %w", err)
 	}
-	return final.EvalMultFinal, nil
+	return final, nil
 }
 
 // Calibrate finds the minimum depth for cut over a minimal n=2 threshold
@@ -156,7 +170,7 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 			return 0, false, fmt.Errorf("keygen next: %w", err)
 		}
 		shares := []cgo.DistributedKeyShare{first, second}
-		evalMultKey, err := buildJointEvalMultN2(cgoParams, shares)
+		evalKeys, err := buildJointEvalMultN2(cgoParams, shares)
 		if err != nil {
 			if isModulusCap(err) {
 				return 0, true, nil
@@ -183,8 +197,9 @@ func Calibrate(cut CircuitUnderTest, p CalibrationParams, profileDim int) (Calib
 				Depth:          depth,
 				ScalingModSize: scalingModSize,
 			},
-			cgoParams:   cgoParams,
-			evalMultKey: evalMultKey,
+			cgoParams: cgoParams,
+			evalKeys:  evalKeys,
+			jointPK:   jointPK,
 		}
 		encOut, err := cut.Eval(h, encIn)
 		if err != nil {

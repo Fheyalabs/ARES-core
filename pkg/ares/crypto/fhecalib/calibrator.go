@@ -23,6 +23,11 @@ type ContextHandle interface {
 	Params() helperclient.ContractParams
 	// EvalMult multiplies two ciphertexts under the joint eval-mult key.
 	EvalMult(ctA, ctB []byte) ([]byte, error)
+	// EvalSubConst subtracts a public plaintext vector (the bound center) from ct.
+	EvalSubConst(ct []byte, vals []float64) ([]byte, error)
+	// EvalProductSum computes EvalSum(EvalMult(left,right)) over nSlots (the
+	// squared magnitude when left == right).
+	EvalProductSum(ctLeft, ctRight []byte, nSlots int) ([]byte, error)
 }
 
 // CircuitUnderTest describes one homomorphic computation to calibrate.
