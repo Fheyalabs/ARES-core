@@ -3,6 +3,7 @@
 package boundcheck
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
@@ -136,9 +137,20 @@ func (Phase) Requires() phase.ContextSchema {
 // application MUST read CtxBoundCheckCiphers after Enter returns and unicast
 // enc_check_i to each participant before their MsgBoundPartial reply is
 // expected.
+//
+// CtxBoundCheckCommitments is also written by Enter (in real mode) alongside
+// CtxBoundCheckCiphers. Each commitment binds the server-computed enc_check_i
+// to the lineage-committed enc_x_i via
+//
+//	H(enc_check_i ‖ H(enc_x_i) ‖ session_id)
+//
+// Client-side verification of the commitment is the consuming app's
+// responsibility: the framework produces and stores the binding but does not
+// enforce it on the protocol path.
 func (Phase) Provides() phase.ContextSchema {
 	return phase.ContextSchema{
-		CtxBoundCheckCiphers: {TypeName: "map[string][]byte"},
+		CtxBoundCheckCiphers:     {TypeName: "map[string][]byte"},
+		CtxBoundCheckCommitments: {TypeName: "map[string][]byte"},
 	}
 }
 
@@ -176,18 +188,29 @@ func (p *Phase) Enter(ctx *phase.SessionContext) error {
 		return fmt.Errorf("%w: boundcheck: context key %q not set", phase.ErrPermanent, CtxEncryptedInputs)
 	}
 
+	sessionID := ctx.SessionID
 	checks := make(map[string][]byte, len(encInputs))
+	commitments := make(map[string][]byte, len(encInputs))
 	for party, encInput := range encInputs {
 		encCheck, err := p.circuit.Eval(p.handle, [][]byte{encInput})
 		if err != nil {
 			return fmt.Errorf("%w: boundcheck: eval circuit for party %s: %w", phase.ErrTransient, party, err)
 		}
-		// TODO(SP-D-NC-B): emit check_commitment_i = H(serialize(enc_check_i) ‖ H(serialize(enc_x_i)) ‖ session_id)
-		// for the app to bind the check ciphertext to the input lineage. This is an app-layer/bridge follow-up
-		// and is not a T5 done-criterion; it does not affect the phase-round correctness proven here.
 		checks[party] = encCheck
+
+		// Compute check_commitment_i = H(enc_check_i ‖ H(enc_x_i) ‖ session_id).
+		// The inner hash of enc_x_i is the same digest present in the lineage DAG
+		// node for the submitted input, so the commitment binds enc_check to the
+		// lineage-committed ciphertext without re-embedding the full ciphertext.
+		inner := sha256.Sum256(encInput)
+		h := sha256.New()
+		h.Write(encCheck)
+		h.Write(inner[:])
+		h.Write([]byte(sessionID))
+		commitments[party] = h.Sum(nil)
 	}
 	ctx.Set(CtxBoundCheckCiphers, checks)
+	ctx.Set(CtxBoundCheckCommitments, commitments)
 	return nil
 }
 

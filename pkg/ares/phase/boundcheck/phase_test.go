@@ -3,6 +3,8 @@
 package boundcheck_test
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"testing"
@@ -465,6 +467,74 @@ func TestPhase_Exit_MissingPartial_BlamesWithholdingSender(t *testing.T) {
 	}
 	if foundCarol {
 		t.Errorf("handler must NOT be called for checked party %q (victim, not violator); calls = %v", "carol", handler.calls)
+	}
+}
+
+// TestPhase_Enter_EmitsCheckCommitments verifies that Enter (real mode)
+// populates CtxBoundCheckCommitments with the correct binding digest for
+// every party. The expected digest is computed independently as:
+//
+//	inner = SHA256(enc_x_i)
+//	commitment_i = SHA256(enc_check_i ‖ inner ‖ session_id)
+//
+// The test uses a fakeContextHandle whose cannedCT is the enc_check value
+// returned for every party, and asserts exact equality for two parties.
+func TestPhase_Enter_EmitsCheckCommitments(t *testing.T) {
+	const sessionID = "test-session-commit-001"
+	cannedCT := []byte("canned-enc-check-bytes")
+	handle := &fakeContextHandle{cannedCT: cannedCT}
+	fakeFuse := func(partials [][]byte, nSlots int) ([]float64, error) {
+		return []float64{1.0}, nil
+	}
+
+	circuit := boundcheck.NormCircuit{Eps: 0.01, NDim: 4}
+	p := newRealPhase(circuit, nil, boundcheck.DefaultParams(), handle, fakeFuse)
+
+	parties := []string{"alice", "bob"}
+	encInputs := map[string][]byte{
+		"alice": []byte("enc-input-alice"),
+		"bob":   []byte("enc-input-bob"),
+	}
+
+	ctx := phase.NewSessionContext(sessionID)
+	ctx.Set(defaults.CtxParticipants, parties)
+	ctx.Set(boundcheck.CtxEncryptedInputs, encInputs)
+	ctx.Set(boundcheck.CtxInputDim, 4)
+	ctx.Set(boundcheck.CtxEvalKeyBundle, []byte("fake-eval-key"))
+	ctx.Set(boundcheck.CtxJointPublicKey, []byte("fake-joint-pk"))
+
+	if err := p.Enter(ctx); err != nil {
+		t.Fatalf("Enter: %v", err)
+	}
+
+	commitments, ok := phase.TryGet[map[string][]byte](ctx, boundcheck.CtxBoundCheckCommitments)
+	if !ok {
+		t.Fatal("CtxBoundCheckCommitments not set after Enter")
+	}
+	if len(commitments) != len(parties) {
+		t.Errorf("CtxBoundCheckCommitments has %d entries, want %d", len(commitments), len(parties))
+	}
+
+	// Independently recompute the expected commitment for each party and
+	// assert byte-for-byte equality. enc_check is cannedCT for all parties
+	// (fakeContextHandle returns the same bytes regardless of input).
+	for _, party := range parties {
+		encX := encInputs[party]
+		inner := sha256.Sum256(encX)
+		h := sha256.New()
+		h.Write(cannedCT)
+		h.Write(inner[:])
+		h.Write([]byte(sessionID))
+		want := h.Sum(nil)
+
+		got, found := commitments[party]
+		if !found {
+			t.Errorf("CtxBoundCheckCommitments missing entry for party %q", party)
+			continue
+		}
+		if !bytes.Equal(got, want) {
+			t.Errorf("party %q: commitment mismatch\n  got  %x\n  want %x", party, got, want)
+		}
 	}
 }
 

@@ -80,7 +80,8 @@ const (
 	CtxInputDim          = "boundcheck.input_dim"         // int: slot count of each input vector
 	CtxEvalKeyBundle     = "boundcheck.eval_key_bundle"   // serialized cgo.EvalKeyFinal
 	CtxJointPublicKey    = "boundcheck.joint_public_key"  // []byte: pk_joint
-	CtxBoundCheckCiphers = "boundcheck.check_ciphertexts" // map[string][]byte: party -> enc_check (phase Provides; app unicasts)
+	CtxBoundCheckCiphers      = "boundcheck.check_ciphertexts"  // map[string][]byte: party -> enc_check (phase Provides; app unicasts)
+	CtxBoundCheckCommitments  = "boundcheck.check_commitments"  // map[string][]byte: party -> H(enc_check ‖ H(enc_x) ‖ session_id)
 )
 
 // MsgBoundPartial is the message type each party replies with: its partial
