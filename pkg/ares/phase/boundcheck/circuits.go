@@ -29,7 +29,8 @@ func (NormCircuit) Expected(in [][]float64) []float64 {
 }
 
 func (NormCircuit) Eval(h fhecalib.ContextHandle, enc [][]byte) ([]byte, error) {
-	return h.EvalProductSum(enc[0], enc[0], len(enc[0]))
+	const n = 8 // must match Inputs() vector length
+	return h.EvalProductSum(enc[0], enc[0], n)
 }
 
 func (c NormCircuit) Bound() Bound { return Bound{Lo: 1 - c.Eps, Hi: 1 + c.Eps} }
@@ -62,7 +63,7 @@ func (c DistanceBoundCircuit) Eval(h fhecalib.ContextHandle, enc [][]byte) ([]by
 	if err != nil {
 		return nil, err
 	}
-	return h.EvalProductSum(shifted, shifted, len(enc[0]))
+	return h.EvalProductSum(shifted, shifted, len(c.Center))
 }
 
 func (c DistanceBoundCircuit) Bound() Bound { return Bound{Lo: c.Lo, Hi: c.Hi} }
