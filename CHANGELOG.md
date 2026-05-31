@@ -49,6 +49,42 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.7.0] — 2026-05-31
+
+### Added
+
+- **Homomorphic bound check (`pkg/ares/phase/boundcheck`) — ARES-BC.** A generic,
+  application-agnostic Phase-1c that, per party uniformly, homomorphically computes
+  a single safe-to-decrypt squared magnitude `‖x − c‖²` (public center `c`) over the
+  party's encrypted input, threshold-decrypts it across the participant quorum, and
+  aborts the session via an application-supplied `ViolationHandler` when the value
+  falls outside a committed `[lo, hi]`. Built-in circuits: `NormCircuit` (center 0 —
+  the unnormalized-embedding / score-inflation check) and `DistanceBoundCircuit`
+  (geographic-radius and multi-dimensional resource budgets). Reuses the existing
+  joint eval keys (`EvalProductSum` = 0 added levels to a scoring circuit); circuit
+  depth is determined offline with `pkg/ares/crypto/fhecalib`. Each `enc_check` is
+  bound to its lineage-committed input via `check_commitment = H(enc_check ‖ H(enc_x)
+  ‖ session_id)`. Five security invariants keep the attack surface flat: center-only
+  (no projection oracle), one bound per input (no stacking leak), public all-party-
+  agreed parameters, opaque jittered abort with a threshold-quorum fuse, and a hard
+  refusal of `dim < 2` inputs (a scalar's squared magnitude would leak its value;
+  scalar exact-range needs a future homomorphic-comparison circuit). Validated on
+  real OpenFHE with an end-to-end n-party keygen → encrypt → partial-decrypt → fuse
+  phase round. The server computes with public eval keys only — it never holds a
+  secret-key share.
+- **`pkg/ares/crypto/fhecalib` extension.** `ContextHandle` gains `EvalSubConst`
+  (subtract a public center vector) and `EvalProductSum` (squared magnitude); a new
+  `NewContextHandle` constructor lets consumers build a handle from session keys; the
+  internal eval-key provisioning now carries the full `EvalKeyFinal` bundle.
+
+### Fixed
+
+- **`cgo` OpenFHE wrapper: idempotent eval-key insertion.** `InsertEvalMultKey` /
+  `InsertEvalSumKey` now clear the per-context key slot before inserting, so two
+  same-parameter contexts within one operation (e.g. a multi-party bound-check round)
+  no longer collide on OpenFHE's process-global eval-key map. No behavioural change
+  to existing single-context operations.
+
 ## [0.6.0] — 2026-05-31
 
 ### Added
@@ -471,7 +507,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.0...v0.5.1
