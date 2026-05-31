@@ -9,17 +9,20 @@ import (
 )
 
 // NormCircuit is the SC-5 embedding norm check: center 0, check value ‖x‖²,
-// bound [1-Eps, 1+Eps].
-type NormCircuit struct{ Eps float64 }
+// bound [1-Eps, 1+Eps]. Dim is the embedding dimension (the number of CKKS
+// slots summed); it must match the input vector length at runtime.
+type NormCircuit struct {
+	Eps float64
+	Dim int
+}
 
 func (NormCircuit) Name() string { return "norm" }
 
-// Inputs returns a representative unit-norm vector (for depth calibration).
-func (NormCircuit) Inputs() [][]float64 {
-	const n = 8
-	v := make([]float64, n)
+// Inputs returns a representative unit-norm vector of length Dim (for depth calibration).
+func (c NormCircuit) Inputs() [][]float64 {
+	v := make([]float64, c.Dim)
 	for i := range v {
-		v[i] = 1.0 / math.Sqrt(float64(n)) // ‖v‖² = 1
+		v[i] = 1.0 / math.Sqrt(float64(c.Dim)) // ‖v‖² = 1
 	}
 	return [][]float64{v}
 }
@@ -28,9 +31,8 @@ func (NormCircuit) Expected(in [][]float64) []float64 {
 	return []float64{sumOfSquares(in[0])}
 }
 
-func (NormCircuit) Eval(h fhecalib.ContextHandle, enc [][]byte) ([]byte, error) {
-	const n = 8 // must match Inputs() vector length
-	return h.EvalProductSum(enc[0], enc[0], n)
+func (c NormCircuit) Eval(h fhecalib.ContextHandle, enc [][]byte) ([]byte, error) {
+	return h.EvalProductSum(enc[0], enc[0], c.Dim)
 }
 
 func (c NormCircuit) Bound() Bound { return Bound{Lo: 1 - c.Eps, Hi: 1 + c.Eps} }

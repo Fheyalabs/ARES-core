@@ -16,7 +16,7 @@ func TestNormCircuit_CalibratesOnRealFHE(t *testing.T) {
 	if err := cgo.SmokeCKKS(); err != nil {
 		t.Skipf("OpenFHE unavailable: %v", err)
 	}
-	res, err := fhecalib.Calibrate(NormCircuit{Eps: 0.01}, fhecalib.CalibrationParams{
+	res, err := fhecalib.Calibrate(NormCircuit{Eps: 0.01, Dim: 8}, fhecalib.CalibrationParams{
 		Base:       helperclient.ContractParams{RingDim: 1 << 14, ScalingModSize: 50},
 		StartDepth: 1, MaxDepth: 4, Tolerance: 0.01,
 	}, 8 /* profileDim = slot count of NormCircuit.Inputs() */)

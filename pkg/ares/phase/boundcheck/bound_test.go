@@ -47,7 +47,7 @@ func TestClassify_BelowLo_Violates(t *testing.T) {
 }
 
 func TestNormCircuit_ExpectedAndBound(t *testing.T) {
-	c := NormCircuit{Eps: 0.01}
+	c := NormCircuit{Eps: 0.01, Dim: 4}
 	got := c.Expected([][]float64{{0.5, 0.5, 0.5, 0.5}}) // sum of squares = 1.0
 	if len(got) != 1 || got[0] < 0.999 || got[0] > 1.001 {
 		t.Fatalf("want [~1.0], got %v", got)
