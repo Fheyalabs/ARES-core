@@ -10,10 +10,11 @@
 // configured BoundCircuit, then stores the results in CtxBoundCheckCiphers.
 // The consuming application must read that map and unicast each enc_check_i
 // to the corresponding participant (via hub.SendTo or equivalent). Each party
-// replies with a MsgBoundPartial message carrying its partial decrypt of the
-// challenge ciphertext. Once all parties have replied, Phase.Exit fuses the
-// partials, classifies each fused value against the circuit's Bound, and
-// invokes the ViolationHandler for any violating party before aborting.
+// replies with a MsgBoundPartial message carrying its partial decrypt of EACH
+// check ciphertext. Once all parties have replied, Phase.Exit assembles the
+// N-party quorum of partials per check ciphertext, fuses them, classifies each
+// fused value against the circuit's Bound, and invokes the ViolationHandler for
+// any violating party before aborting.
 //
 // # Security invariants enforced
 //
@@ -37,16 +38,20 @@
 //
 // # Partial-decrypt and fuse mapping
 //
-// Each party submits one partial-decrypt blob covering its own enc_check_i.
-// Exit fuses each party's single partial blob independently:
-//
-//	values, err := fuse([][]byte{partial}, 1)  // nSlots=1: enc_check is a scalar sum
-//	value := values[0]
-//
-// This matches the spike's validated path (spike §Q1, throwaway-proof result).
+// Check ciphertexts are encrypted under the joint threshold public key. To
+// recover the plaintext of enc_check_i, a full N-of-N quorum of partial
+// decrypts is required. Each party therefore partial-decrypts EVERY check
+// ciphertext and replies with a JSON-serialised map[string][]byte keyed by
+// checkedParty → that sender's partial of that check ciphertext. Exit gathers,
+// for each checked party i, all N senders' partials for i into a [][]byte of
+// length N and calls fuse(partialsForI, 1). Lead designation (required by
+// PartialDecryptCKKSForContract) is deterministic: participants[0] is always
+// the lead (lead=true); all others pass lead=false. Parties must apply this
+// convention when constructing their partial maps.
 package boundcheck
 
 import (
+	"encoding/json"
 	"fmt"
 	"math/rand/v2"
 	"time"
@@ -222,15 +227,20 @@ func (p *Phase) Enter(ctx *phase.SessionContext) error {
 		if err != nil {
 			return fmt.Errorf("%w: boundcheck: eval circuit for party %s: %w", phase.ErrTransient, party, err)
 		}
+		// TODO(SP-D-NC-B): emit check_commitment_i = H(serialize(enc_check_i) ‖ H(serialize(enc_x_i)) ‖ session_id)
+		// for the app to bind the check ciphertext to the input lineage. This is an app-layer/bridge follow-up
+		// and is not a T5 done-criterion; it does not affect the phase-round correctness proven here.
 		checks[party] = encCheck
 	}
 	ctx.Set(CtxBoundCheckCiphers, checks)
 	return nil
 }
 
-// OnMessage accumulates each party's partial-decrypt blob into the internal
-// bucket. Multiple submissions from the same party overwrite (only the most
-// recent partial is kept per party, which is the correct N-of-N pattern).
+// OnMessage accumulates each party's partial-decrypt map into the internal
+// bucket. Each MsgBoundPartial payload is a JSON-serialised map[string][]byte
+// keyed by checkedParty → that sender's partial of that check ciphertext.
+// Multiple submissions from the same sender overwrite (only the most recent
+// map is kept per sender, which is the correct N-of-N pattern).
 func (p *Phase) OnMessage(ctx *phase.SessionContext, _ string, from string, payload []byte) error {
 	phase.AccumulateMessage(ctx, bucketPartials, from, payload)
 	return nil
@@ -246,10 +256,18 @@ func (p *Phase) CheckComplete(ctx *phase.SessionContext) bool {
 	return phase.QuorumReached(ctx, bucketPartials, len(participants))
 }
 
-// Exit fuses each party's partial-decrypt, classifies the result against the
-// circuit's Bound, and invokes the ViolationHandler for violating parties
-// before aborting with ErrAppAttributable. In stub mode (fuse == nil), Exit
-// returns nil unconditionally.
+// Exit assembles the N-party quorum of partial decrypts for each check
+// ciphertext, fuses them, classifies the result against the circuit's Bound,
+// and invokes the ViolationHandler for violating parties before aborting with
+// ErrAppAttributable. In stub mode (fuse == nil), Exit returns nil
+// unconditionally.
+//
+// Each sender's MsgBoundPartial payload is a JSON-serialised map[string][]byte
+// keyed by checkedParty → that sender's partial of that check ciphertext.
+// Exit collects, for each checked party i, all N senders' partials for i into
+// a [][]byte slice of length N and calls fuse(partialsForI, 1). This is the
+// correct threshold-decrypt quorum: all N parties must contribute a partial
+// per ciphertext for the fusion to produce a valid plaintext.
 //
 // On violation:
 //  1. handler.OnViolation is called for every violating party (sequentially).
@@ -265,36 +283,64 @@ func (p *Phase) Exit(ctx *phase.SessionContext) error {
 		return nil
 	}
 
-	dim, _ := phase.TryGet[int](ctx, CtxInputDim)
 	participants, _ := phase.TryGet[[]string](ctx, defaults.CtxParticipants)
-	partials := phase.AccumulatedMessages(ctx, bucketPartials)
+	rawPartials := phase.AccumulatedMessages(ctx, bucketPartials)
 
-	// Fuse each party's single partial blob and classify the result.
-	// nSlots=1: enc_check is a scalar (EvalProductSum collapses dim slots to 1).
+	// Decode each sender's JSON map[string][]byte (checkedParty → partial blob).
+	// senderMaps[sender][checkedParty] = partial blob.
+	senderMaps := make(map[string]map[string][]byte, len(rawPartials))
+	for sender, raw := range rawPartials {
+		var m map[string][]byte
+		if err := json.Unmarshal(raw, &m); err != nil {
+			return fmt.Errorf("%w: boundcheck: decode partial map from %s: %w", phase.ErrTransient, sender, err)
+		}
+		senderMaps[sender] = m
+	}
+
+	// For each checked party, assemble all N senders' partials for that
+	// ciphertext and fuse them. nSlots=1: enc_check is a scalar (EvalProductSum
+	// collapses dim slots to 1 via EvalSum).
 	type violation struct {
 		party string
 		nu    float64
 		sev   Severity
 	}
-	_ = dim // captured for documentation; fuse operates on wire blobs directly
 	var violators []violation
-	for _, party := range participants {
-		blob, ok := partials[party]
-		if !ok {
-			// Missing partial is a protocol violation — treat as hard.
-			violators = append(violators, violation{party: party, nu: p.params.NuHard + 1, sev: SeverityHard})
+
+	for _, checkedParty := range participants {
+		// Collect one partial per sender for this checked party's ciphertext,
+		// in participants order so the lead partial (participants[0]) is first.
+		partialsForI := make([][]byte, 0, len(participants))
+		missingQuorum := false
+		for _, sender := range participants {
+			senderMap, senderPresent := senderMaps[sender]
+			if !senderPresent {
+				missingQuorum = true
+				break
+			}
+			blob, partialPresent := senderMap[checkedParty]
+			if !partialPresent {
+				missingQuorum = true
+				break
+			}
+			partialsForI = append(partialsForI, blob)
+		}
+		if missingQuorum {
+			// Missing partial from at least one party is a protocol violation.
+			violators = append(violators, violation{party: checkedParty, nu: p.params.NuHard + 1, sev: SeverityHard})
 			continue
 		}
-		values, err := p.fuse([][]byte{blob}, 1)
+
+		values, err := p.fuse(partialsForI, 1)
 		if err != nil {
-			return fmt.Errorf("%w: boundcheck: fuse partial for party %s: %w", phase.ErrTransient, party, err)
+			return fmt.Errorf("%w: boundcheck: fuse partials for checked party %s: %w", phase.ErrTransient, checkedParty, err)
 		}
 		if len(values) == 0 {
-			return fmt.Errorf("%w: boundcheck: fuse returned no values for party %s", phase.ErrTransient, party)
+			return fmt.Errorf("%w: boundcheck: fuse returned no values for checked party %s", phase.ErrTransient, checkedParty)
 		}
 		nu, sev := classify(values[0], p.circuit.Bound(), p.params)
 		if sev != SeverityOK {
-			violators = append(violators, violation{party: party, nu: nu, sev: sev})
+			violators = append(violators, violation{party: checkedParty, nu: nu, sev: sev})
 		}
 	}
 

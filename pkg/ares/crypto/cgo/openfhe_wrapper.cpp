@@ -676,6 +676,12 @@ int CombineEvalMultFinalShares(CryptoContextHandle ctx, PublicKeyHandle final_pk
 int InsertEvalMultKey(CryptoContextHandle ctx, EvalMultKeyHandle key) {
     try {
         auto* c = as_ctx(ctx);
+        // Clear any previously registered eval-mult keys for this context before
+        // inserting. OpenFHE stores keys in a global map keyed by context ID; when
+        // the same parameters produce the same context ID across multiple calls (e.g.
+        // per-party loops in Phase-1c bound-check), a second insert would throw.
+        // Clearing first makes InsertEvalMultKey idempotent for the same key material.
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalMultKeys(c->cc);
         c->cc->InsertEvalMultKey({as_eval_mult(key)->key});
         return 0;
     } catch (...) {
@@ -747,6 +753,9 @@ int CombineEvalSumKeys(CryptoContextHandle ctx,
 int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key) {
     try {
         auto* c = as_ctx(ctx);
+        // Clear any previously registered eval-sum keys for this context before
+        // inserting, mirroring the same idempotency fix applied to InsertEvalMultKey.
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalSumKeys(c->cc);
         c->cc->InsertEvalSumKey(as_rot(key)->keys);
         return 0;
     } catch (...) {

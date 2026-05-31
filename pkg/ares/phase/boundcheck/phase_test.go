@@ -3,6 +3,7 @@
 package boundcheck_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 
@@ -88,6 +89,21 @@ func newRealPhase(
 	)
 }
 
+// makePartialMap builds a JSON-encoded map[string][]byte for the given parties,
+// associating each party with the supplied partial blob. This reflects the
+// N-party quorum shape: each sender partial-decrypts EVERY check ciphertext
+// and replies with a map keyed by checkedParty.
+// discriminant is prepended to each blob so the fake fuse can route by it.
+func makePartialMap(parties []string, discriminant []byte) []byte {
+	m := make(map[string][]byte, len(parties))
+	for _, p := range parties {
+		blob := append(append([]byte(nil), discriminant...), []byte(p)...)
+		m[p] = blob
+	}
+	raw, _ := json.Marshal(m)
+	return raw
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -146,21 +162,28 @@ func TestPhase_CheckComplete_QuorumGating(t *testing.T) {
 		t.Fatal("CheckComplete must be false with 0/2 partials")
 	}
 
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "a", []byte("partial-a"))
+	// Each party sends a JSON partial map covering both check ciphertexts.
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "a", makePartialMap(parties, []byte("pa-")))
 	if p.CheckComplete(ctx) {
 		t.Fatal("CheckComplete must be false with 1/2 partials")
 	}
 
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "b", []byte("partial-b"))
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "b", makePartialMap(parties, []byte("pb-")))
 	if !p.CheckComplete(ctx) {
 		t.Fatal("CheckComplete must be true with 2/2 partials")
 	}
 }
 
 // TestPhase_Exit_ViolationCallsHandlerAndAborts checks that when the fake
-// fuse returns an out-of-bound value for one party, Exit:
+// fuse returns an out-of-bound value for one party's quorum of partials, Exit:
 //   - calls the ViolationHandler with that party's name, nu, and sev;
 //   - returns an error that errors.Is(err, phase.ErrAppAttributable) == true.
+//
+// The fake fuse discriminates by the first byte of the FIRST partial blob in
+// the quorum: 'v' prefix → out-of-bound; any other → in-bound. Since
+// participants order determines which sender's partial comes first, and the
+// partial for the violating party ("bob") includes discriminant bytes, the
+// fake signals the violation via the lead partial's content.
 func TestPhase_Exit_ViolationCallsHandlerAndAborts(t *testing.T) {
 	violatorParty := "bob"
 	inBoundValue := 1.0  // norm 1.0 is within [0.99, 1.01]
@@ -170,9 +193,8 @@ func TestPhase_Exit_ViolationCallsHandlerAndAborts(t *testing.T) {
 	params := boundcheck.DefaultParams()
 	handler := &captureHandler{}
 
-	// Fuse discriminates by the first byte of the blob:
-	//   'a' prefix -> alice -> in-bound
-	//   'v' prefix -> violating -> out-of-bound
+	// Fuse discriminates by the first byte of the first partial blob:
+	// 'v' prefix -> violating -> out-of-bound; else in-bound.
 	fakeFuse := func(partials [][]byte, nSlots int) ([]float64, error) {
 		if len(partials) > 0 && len(partials[0]) > 0 && partials[0][0] == 'v' {
 			return []float64{outBoundValue}, nil
@@ -183,12 +205,38 @@ func TestPhase_Exit_ViolationCallsHandlerAndAborts(t *testing.T) {
 	handle := &fakeContextHandle{cannedCT: []byte("ct")}
 	p := newRealPhase(circuit, handler, params, handle, fakeFuse)
 
-	parties := []string{"alice", violatorParty}
+	parties := []string{"alice", violatorParty} // alice is participants[0] (lead)
 	ctx := newCtx(parties, map[string][]byte{"alice": []byte("x"), violatorParty: []byte("y")}, 4)
 
 	_ = p.Enter(ctx)
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "alice", []byte("alice-partial"))     // 'a' -> in-bound
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, violatorParty, []byte("violating-partial")) // 'v' -> out-of-bound
+
+	// alice (lead, participants[0]) sends partial maps:
+	// - for "alice": discriminant 'a' -> in-bound
+	// - for "bob": discriminant 'a' -> in-bound (alice's partial of bob's ct is also 'a')
+	// bob sends partial maps:
+	// - for "alice": discriminant 'a' -> in-bound (bob's partial of alice's ct)
+	// - for "bob": discriminant 'v' -> out-of-bound (bob's partial of bob's ct)
+	//
+	// When Exit assembles partials for "bob":
+	//   partialsForBob = [alice's blob for "bob", bob's blob for "bob"]
+	//   alice's blob for "bob" = 'a' + "bob" -> first byte 'a' -> in-bound via fuse... BUT
+	//   we need the FIRST partial (from participants[0]=alice) to have 'v' for bob.
+	//
+	// To signal a violation for "bob", we make alice's partial for "bob" start with 'v':
+	aliceMap := map[string][]byte{
+		"alice": []byte("alice-partial-of-alice"), // 'a' -> in-bound
+		"bob":   []byte("violating-partial-of-bob"), // 'v' -> out-of-bound
+	}
+	alicePayload, _ := json.Marshal(aliceMap)
+
+	bobMap := map[string][]byte{
+		"alice": []byte("bob-partial-of-alice"), // 'b' -> in-bound
+		"bob":   []byte("bob-partial-of-bob"),   // 'b' -> in-bound (alice's partial drives the signal)
+	}
+	bobPayload, _ := json.Marshal(bobMap)
+
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "alice", alicePayload)
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, violatorParty, bobPayload)
 
 	err := p.Exit(ctx)
 	if err == nil {
@@ -237,8 +285,9 @@ func TestPhase_Exit_AllInBound_NoHandlerNoError(t *testing.T) {
 	ctx := newCtx(parties, map[string][]byte{"alice": []byte("x"), "bob": []byte("y")}, 4)
 
 	_ = p.Enter(ctx)
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "alice", []byte("partial-a"))
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "bob", []byte("partial-b"))
+	// Each party sends a JSON partial map covering both check ciphertexts.
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "alice", makePartialMap(parties, []byte("pa-")))
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "bob", makePartialMap(parties, []byte("pb-")))
 
 	if err := p.Exit(ctx); err != nil {
 		t.Fatalf("Exit must return nil for all-in-bound; got %v", err)
@@ -345,8 +394,8 @@ func TestPhase_StubMode_EnterExitNoop(t *testing.T) {
 	}
 
 	// Accumulate partials to reach quorum.
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "a", []byte("pa"))
-	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "b", []byte("pb"))
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "a", makePartialMap(parties, []byte("pa")))
+	_ = p.OnMessage(ctx, boundcheck.MsgBoundPartial, "b", makePartialMap(parties, []byte("pb")))
 	if !p.CheckComplete(ctx) {
 		t.Fatal("stub CheckComplete must be true after N-of-N partials")
 	}
