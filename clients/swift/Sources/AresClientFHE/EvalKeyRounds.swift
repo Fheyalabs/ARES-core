@@ -23,6 +23,7 @@ extension CryptoContext {
     }
 
     public func combineEvalMultSwitchShares(_ pks: [PublicKey], _ shares: [EvalMultKey]) throws -> EvalMultKey {
+        guard pks.count >= shares.count else { throw FHEError.evalKeyFailed }
         var pkPtrs: [UnsafeMutableRawPointer?] = pks.map { $0.raw }
         var shPtrs: [UnsafeMutableRawPointer?] = shares.map { $0.raw }
         var out: UnsafeMutableRawPointer?
@@ -81,6 +82,7 @@ extension CryptoContext {
     }
 
     public func combineEvalSumKeys(_ pks: [PublicKey], _ shares: [RotKey]) throws -> RotKey {
+        guard pks.count >= shares.count else { throw FHEError.evalKeyFailed }
         var pkPtrs: [UnsafeMutableRawPointer?] = pks.map { $0.raw }
         var shPtrs: [UnsafeMutableRawPointer?] = shares.map { $0.raw }
         var out: UnsafeMutableRawPointer?

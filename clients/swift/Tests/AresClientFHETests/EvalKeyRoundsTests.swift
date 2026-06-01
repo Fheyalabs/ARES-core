@@ -49,5 +49,15 @@ final class EvalKeyRoundsTests: XCTestCase {
         let data = try ctx.serialize(sumKey)
         XCTAssertFalse(data.isEmpty)
         _ = try ctx.deserializeRotKey(data)
+
+        // Prove the installed eval-sum key actually enables EvalSum end-to-end.
+        let jointPK = pks.last!
+        let input: [Double] = [1.0, 2.0, 3.0, 4.0]   // sum = 10.0
+        let ct = try ctx.encrypt(values: input, under: jointPK)
+        let summed = try ctx.evalSum(ct, batchSize: input.count)
+        var partials: [Ciphertext] = []
+        for sk in sks { partials.append(try ctx.partialDecrypt(summed, with: sk)) }
+        let out = try ctx.fuse(partials, slotCapacity: 8)
+        XCTAssertEqual(out[0], 10.0, accuracy: 0.05)
     }
 }

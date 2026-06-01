@@ -2,7 +2,9 @@
 
 import COpenFHEBridge
 
-/// Bridge call failure. `ARES_ERR_CTX_MISMATCH` (-200) maps to `.contextMismatch`.
+/// Bridge call failure. `.contextMismatch` is reserved for future programmatic
+/// signalling; deserialization failures (including context/version skew) surface
+/// as `.deserializeFailed` (the bridge logs the mismatch case).
 public enum FHEError: Error, Equatable {
     case contextCreationFailed
     case keygenFailed
@@ -14,8 +16,4 @@ public enum FHEError: Error, Equatable {
     case deserializeFailed
     case contextMismatch
     case versionUnavailable
-
-    static func fromReturnCode(_ rc: Int32, failure: FHEError) -> FHEError {
-        rc == Int32(ARES_ERR_CTX_MISMATCH) ? .contextMismatch : failure
-    }
 }

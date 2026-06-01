@@ -9,10 +9,10 @@ import Foundation
 // Kept internal (not private) so that Task-6 serializers in this same file
 // can reuse it without duplicating the pattern.
 func copyAndFree(_ ptr: UnsafeMutablePointer<UInt8>?, _ len: Int) -> Data {
-    guard let ptr, len > 0 else { return Data() }
-    let data = Data(bytes: ptr, count: len)
-    free(ptr)   // bridge buffers are libc-malloc'd (Go frees with C.free)
-    return data
+    guard let ptr else { return Data() }
+    defer { free(ptr) }   // bridge buffers are libc-malloc'd (Go frees with C.free)
+    guard len > 0 else { return Data() }
+    return Data(bytes: ptr, count: len)
 }
 
 extension CryptoContext {
@@ -28,16 +28,15 @@ extension CryptoContext {
         return copyAndFree(buf, len)
     }
 
-    /// Deserialize a ciphertext.  Returns `.contextMismatch` when the bridge
-    /// returns nullptr due to a context/version skew (ARES_ERR_CTX_MISMATCH).
+    /// Deserialize a ciphertext under this context. A nil bridge return is reported as
+    /// `.deserializeFailed`; a frequent cause is a context/OpenFHE-version mismatch
+    /// between the serializer and this context (the bridge logs that case).
     public func deserializeCiphertext(_ data: Data) throws -> Ciphertext {
-        var d = data   // mutable copy — DeserializeCiphertext takes non-const uint8_t*
+        var d = data
         let h: UnsafeMutableRawPointer? = d.withUnsafeMutableBytes { raw in
-            DeserializeCiphertext(self.raw,
-                                  raw.bindMemory(to: UInt8.self).baseAddress,
-                                  data.count)
+            DeserializeCiphertext(self.raw, raw.bindMemory(to: UInt8.self).baseAddress, data.count)
         }
-        guard let h else { throw FHEError.contextMismatch }
+        guard let h else { throw FHEError.deserializeFailed }
         return Ciphertext(h)
     }
 
