@@ -87,4 +87,48 @@ extension CryptoContext {
         guard let h else { throw FHEError.deserializeFailed }
         return SecretKeyShare(h)
     }
+
+    // MARK: – EvalMultKey
+
+    public func serialize(_ key: EvalMultKey) throws -> Data {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializeEvalMultKey(key.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return copyAndFree(buf, len)
+    }
+
+    public func deserializeEvalMultKey(_ data: Data) throws -> EvalMultKey {
+        var d = data
+        let h: UnsafeMutableRawPointer? = d.withUnsafeMutableBytes { raw in
+            DeserializeEvalMultKey(self.raw,
+                                   raw.bindMemory(to: UInt8.self).baseAddress,
+                                   data.count)
+        }
+        guard let h else { throw FHEError.deserializeFailed }
+        return EvalMultKey(h)
+    }
+
+    // MARK: – RotKey
+
+    public func serialize(_ key: RotKey) throws -> Data {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializeRotKey(key.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return copyAndFree(buf, len)
+    }
+
+    public func deserializeRotKey(_ data: Data) throws -> RotKey {
+        var d = data
+        let h: UnsafeMutableRawPointer? = d.withUnsafeMutableBytes { raw in
+            DeserializeRotKey(self.raw,
+                              raw.bindMemory(to: UInt8.self).baseAddress,
+                              data.count)
+        }
+        guard let h else { throw FHEError.deserializeFailed }
+        return RotKey(h)
+    }
 }
