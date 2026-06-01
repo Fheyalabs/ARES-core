@@ -112,6 +112,70 @@ signature bytes differ across runs. The signing tests therefore **verify** signa
 the signer's public key rather than byte-comparing them to the golden vectors. This does not
 affect interop: the ARES session service verifies signatures in the same way.
 
+## L2 — `AresClientFHE`: threshold CKKS via OpenFHE
+
+`AresClientFHE` provides safe Swift wrappers over ARES-core's canonical C bridge
+(`pkg/ares/crypto/cgo/openfhe_wrapper.{h,cpp}`, reused inside the package via
+repo-relative symlinks) for threshold CKKS homomorphic encryption. The layer covers:
+
+- **Context creation** — `CryptoContext(ringDim:scalingFactor:depth:)`
+- **N-party keygen chain** — `keyGenFirst()` / `keyGenNext(prev:)` / `multiAddPublicKeys(_:)`
+- **Eval-key round protocols** — `genEvalMultKeyShare` / `genRotKeyShare` / `evalKeyRounds`
+- **Encrypt / partial-decrypt / fuse** — `encrypt(values:under:)`, `partialDecrypt(_:with:)`, `fuse(_:slotCapacity:)`
+- **Serialization** — round-trip serialize/deserialize for `Ciphertext`, `PublicKey`,
+  `SecretKeyShare`, `EvalMultKey`, and `RotKey`
+- **Homomorphic ops** — add, sub, mult, multConst, sum, `evalChebyshevSign`,
+  `evalPolynomial`, `evalArgmax`
+- **Version probe** — `AresFHE.openFHEVersion()`
+
+### Requirements and build gating
+
+`AresClientFHE` requires **OpenFHE 1.5.1** installed at `/usr/local` (macOS brew: `/opt/homebrew`).
+The target is gated behind the `ARES_OPENFHE` environment variable so that plain `swift test`
+(e.g. Linux CI without OpenFHE) only builds the pure-Swift L1 `AresClient` target and stays
+green.
+
+```bash
+# FHE target + tests (requires OpenFHE installed)
+ARES_OPENFHE=1 swift build
+ARES_OPENFHE=1 swift test
+
+# L1 only — no OpenFHE needed
+swift test
+```
+
+### Usage — threshold round-trip
+
+```swift
+import AresClientFHE
+
+let ctx = try CryptoContext(ringDim: 1024, scalingFactor: Double(UInt64(1) << 50), depth: 4)
+var pks: [PublicKey] = []
+var sks: [SecretKeyShare] = []
+let first = try ctx.keyGenFirst()
+pks.append(first.publicKey); sks.append(first.secretKey)
+for _ in 1..<3 {
+    let next = try ctx.keyGenNext(prev: pks.last!)
+    pks.append(next.publicKey); sks.append(next.secretKey)
+}
+let jointPK = pks.last!                       // chained joint public key
+let ct = try ctx.encrypt(values: [1.25, -2.5, 3.0, 0.5], under: jointPK)
+let partials = try sks.map { try ctx.partialDecrypt(ct, with: $0) }
+let recovered = try ctx.fuse(partials, slotCapacity: 8)   // ≈ the input
+```
+
+### Testing notes
+
+FHE is randomized — L2 tests assert round-trip correctness within CKKS floating-point
+tolerance (no golden vectors, unlike L1). Cross-language ciphertext interop with the Go
+and Python stacks is verified at L3.
+
+### Deploy note
+
+At deploy the bridge links against the iOS/Android static OpenFHE build (static `.a` +
+C bridge header → xcframework) instead of the system libraries used during development;
+see the fork-reconciliation note in the project documentation.
+
 ## License
 
 Apache-2.0. See [LICENSE](../../LICENSE).

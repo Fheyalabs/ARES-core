@@ -2,6 +2,12 @@
 
 import COpenFHEBridge
 
+// SAFETY: Handle lifetime is safe even if the `CryptoContext` that produced a
+// handle is released first. OpenFHE key/ciphertext types are internally
+// shared_ptr-backed, so each `ARESPublicKey`/`ARESCiphertext`/etc. holds its own
+// reference to the underlying C++ key material; `FreeCryptoContext` does not free
+// material still referenced by a live handle. (If the bridge ever moves to raw
+// ownership, handles must hold a strong `CryptoContext` reference instead.)
 public final class PublicKey {
     let raw: UnsafeMutableRawPointer
     init(_ raw: UnsafeMutableRawPointer) { self.raw = raw }
