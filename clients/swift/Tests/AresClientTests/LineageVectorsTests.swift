@@ -35,4 +35,16 @@ final class LineageVectorsTests: XCTestCase {
             XCTAssertEqual(sig.count, 64, "\(v.name): Ed25519 signature is 64 bytes")
         }
     }
+
+    func testParentsEmittedInSortedWireOrder() throws {
+        // Pass parents OUT of sorted order; the node's wire parents must be sorted.
+        let ff = String(repeating: "ff", count: 32)
+        let zero = String(repeating: "00", count: 32)
+        let r = try Lineage.buildSlotNode(
+            sessionID: "s", payloadBytes: Data("p".utf8),
+            ed25519Seed: ByteUtil.fromHex(String(repeating: "11", count: 32)),
+            parentsHex: [ff, zero],   // reversed
+            phaseID: "anon-g-verify", role: "assembled")
+        XCTAssertEqual(r.node.parents, [zero, ff], "wire parents must be lexicographically sorted")
+    }
 }

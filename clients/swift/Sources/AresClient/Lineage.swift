@@ -97,7 +97,7 @@ public enum Lineage {
             sessionID: sessionID,
             phaseID: phaseID,
             role: role,
-            parents: parentsHex,
+            parents: parents.map { ByteUtil.hex($0) },   // sorted lowercase hex, matching Go's wire order
             parentRoles: [],
             payloadHash: ByteUtil.hex(payloadHash),
             createdAt: iso.string(from: Date()),
