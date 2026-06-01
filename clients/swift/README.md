@@ -21,7 +21,7 @@ at this layer and are planned for later work:
 
 ```
 Sources/AresClient/
-  ByteUtil.swift      — hex encoding, constant-time bytes helpers
+  ByteUtil.swift      — hex encoding, big-endian u32, length-prefix helpers
   Lineage.swift       — SC-10 DAGNode: build slot nodes, serialize v2 wire JSON
   Onion.swift         — SC-2 onion-encrypt and batch-peel
   Signing.swift       — canonical-JSON serialisation + Ed25519 device-key signing
@@ -63,9 +63,10 @@ let (node, sk, pk) = try Lineage.buildSlotNode(
     phaseID: "anon-g-verify",
     role: "slot-submission"
 )
-// node.toWireJSON() produces the canonical v2 hex+snake_case JSON blob
-print(node.id)              // hex node ID
-print(pk.hexString)         // Ed25519 public key
+// DAGNode is Codable — encode to v2 wire JSON with the standard encoder
+let wireJSON = try JSONEncoder().encode(node)
+print(node.hash)            // hex node hash (field is `hash`, not `id`)
+print(ByteUtil.hex(pk))     // Ed25519 public key as lowercase hex
 ```
 
 ### Build and peel an onion

@@ -3,6 +3,11 @@ import Crypto
 
 public enum Signing {
     /// Compact, sorted-keys JSON — matches the server's canonicalPayloadFromRawMap.
+    ///
+    /// WARNING (L3 gotcha): `.sortedKeys` sorts ALL nesting levels recursively in
+    /// Swift's `JSONSerialization`, whereas the Go server's `canonicalPayloadFromRawMap`
+    /// sorts only top-level keys. Payloads containing nested maps MUST be audited for
+    /// sort-order parity before L3 server round-trip testing.
     public static func canonicalJSON(_ object: [String: Any]) throws -> Data {
         try JSONSerialization.data(withJSONObject: object,
                                    options: [.sortedKeys, .withoutEscapingSlashes])

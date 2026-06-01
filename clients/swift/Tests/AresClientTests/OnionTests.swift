@@ -40,4 +40,13 @@ final class OnionTests: XCTestCase {
         let keys = (0..<2).map { _ in keypair() }
         XCTAssertThrowsError(try Onion.build(payload: Data("x".utf8), peerPubs: keys.map { $0.pk }, selfIndex: 5))
     }
+
+    func testPeelBatchRejectsMalformedShortLayer() throws {
+        let mySk = Curve25519.KeyAgreement.PrivateKey().rawRepresentation
+        XCTAssertThrowsError(
+            try Onion.peelBatch(mySk: mySk, selfMemo: nil, onions: [Data([0, 1, 2])])
+        ) { error in
+            XCTAssertEqual(error as? OnionError, OnionError.malformedLayer)
+        }
+    }
 }

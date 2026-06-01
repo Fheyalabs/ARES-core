@@ -3,6 +3,10 @@ import Foundation
 /// Raw JSON value carried so the parsed payload round-trips. (Byte-exact on-wire
 /// payload assembly is an L3 transport concern — the send path there reuses the exact
 /// Data used for the lineage payload_hash. L1 preserves the JSON value semantically.)
+///
+/// WARNING (L3 gotcha): decoded data is re-serialised through ``JSONValue`` and is NOT
+/// guaranteed to be byte-identical to the original input bytes. This is a semantic
+/// round-trip only; byte-exact wire reproduction is deferred to the L3 transport layer.
 public struct RawJSON: Codable, Equatable {
     public let data: Data
     public init(_ data: Data) { self.data = data }
