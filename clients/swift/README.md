@@ -176,6 +176,59 @@ At deploy the bridge links against the iOS/Android static OpenFHE build (static 
 C bridge header → xcframework) instead of the system libraries used during development;
 see the fork-reconciliation note in the project documentation.
 
+## L3 — `AresTransport` + cross-language e2e
+
+L3 connects the client to a live ARES session-service over WebSocket and proves
+cross-language interoperability with the Go server.
+
+### `AresTransport` (Foundation-only — builds without OpenFHE)
+
+A pure-Foundation target (no FHE), so it compiles in CI alongside L1:
+
+- **`Session`** — one WebSocket connection (`URLSessionWebSocketTask`). `connect` derives the
+  auth token as `HMAC-SHA256(secret, pseudonym)` hex and dials `ws(s)://host/v2/ws?pseudonym=&auth=`;
+  `send` / `expect(type)` / `receiveAny` / `awaitPhase(state)` / `close`, with a background
+  receive pump.
+- **`AdminClient`** — the HTTP admin surface: `health` / `waitForHealth`, `startSession` (POST
+  `/admin/sessions`, with optional `attrs`), `getState`, `pollUntilTerminal`.
+- **`Orchestrator`** — connect N participants, then close them all.
+- **`GossipParticipant`** — composes the L1 SC-2 onion + SC-10 lineage for the anon gossip arc
+  (`buildBatch` / `peelRound` / `slotSubmission`).
+
+### `AresSmoke` CLI (gated behind `ARES_OPENFHE`)
+
+An executable driving two end-to-end flows; exit 0 on success:
+
+```bash
+ARES_OPENFHE=1 swift run AresSmoke auction --server http://localhost:8741 --participants 3
+ARES_OPENFHE=1 swift run AresSmoke voting  --server http://localhost:8742 --participants 3
+```
+
+### Client-agnostic e2e harness (`clients/swift/e2e/`)
+
+Each script starts a local ARES-core example session-service and asserts the client's exit code:
+
+```bash
+ARES_OPENFHE=1 ./clients/swift/e2e/auction.sh
+ARES_OPENFHE=1 ./clients/swift/e2e/voting.sh
+```
+
+The client command is **parameterized** via `ARES_CLIENT_CMD` (default
+`swift run --package-path clients/swift AresSmoke`) — the seam a future Kotlin/Android client
+plugs into so the *same* harness validates every client against the identical protocol contract.
+Knobs: `AUCTION_CRYPTO_DEPTH` (default 12 — the argmax floor, keeps CKKS keys Mac-safe),
+`PARTICIPANTS`, `PORT`.
+
+**What each proves:**
+- **auction** → cross-language **FHE-ciphertext interop**: client-generated, serialized CKKS keys
+  + bid ciphertexts + decrypt partials are accepted and evaluated by the Go helper-backed server
+  through to `AUCTION_SETTLED`.
+- **voting** → **onion-shuffle + SC-10 lineage interop**: the client's onion peels through the
+  server shuffle arc and the ballot `DAGNode`s verify server-side, driving the session to tally.
+
+**Requirements (local only — never CI):** the auction e2e needs Go + system OpenFHE 1.5.1 + a
+built `openfhe-contract-helper`; the voting e2e needs only Go.
+
 ## License
 
 Apache-2.0. See [LICENSE](../../LICENSE).

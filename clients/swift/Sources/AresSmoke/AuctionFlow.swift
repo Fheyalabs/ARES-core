@@ -70,6 +70,7 @@ enum AuctionFlow {
         let sessions = try await Orchestrator.connectAll(
             serverURL: serverURL, pseudonyms: bidders,
             sessionID: sessionID, authSecret: authSecret)
+        defer { Task { await Orchestrator.closeAll(sessions) } }   // close even if the flow throws
         try await admin.startSession(sessionID: sessionID, participants: bidders, attrs: attrs)
 
         // Concurrent WS flow — only pre-computed strings are captured.
@@ -94,7 +95,6 @@ enum AuctionFlow {
         }
 
         let terminal = try await admin.pollUntilTerminal(sessionID: sessionID, terminal: "AUCTION_SETTLED")
-        await Orchestrator.closeAll(sessions)
         if terminal == "AUCTION_SETTLED" || terminal.isEmpty {
             FileHandle.standardError.write(Data("auction: reached \(terminal.isEmpty ? "terminal" : terminal)\n".utf8))
             return 0

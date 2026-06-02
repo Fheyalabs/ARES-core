@@ -81,6 +81,7 @@ enum VotingFlow {
         let sessions = try await Orchestrator.connectAll(
             serverURL: serverURL, pseudonyms: voterNames,
             sessionID: sessionID, authSecret: authSecret, timeout: 60)
+        defer { Task { await Orchestrator.closeAll(sessions) } }   // close even if the flow throws
 
         // Brief pause to let all WS upgrade handshakes complete in the hub
         // before the admin POST triggers the invitation broadcast.
@@ -198,7 +199,6 @@ enum VotingFlow {
         // --- Poll for terminal state ---
         let terminal = try await admin.pollUntilTerminal(
             sessionID: sessionID, terminal: "BROADCASTING", tries: 40, interval: 0.5)
-        await Orchestrator.closeAll(sessions)
 
         if let err = flowError {
             fputs("voting: FAILED (flow error): \(err)\n", stderr)
