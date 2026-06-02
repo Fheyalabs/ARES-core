@@ -2,6 +2,8 @@
 
 package anon
 
+import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
+
 // Context keys produced/consumed by the shuffle phases.
 const (
 	// CtxParticipants is the []string of non-initiator participant
@@ -47,3 +49,18 @@ const (
 	bucketPeels  = "anon.bucket.peels"
 	bucketSlots  = "anon.bucket.slots"
 )
+
+// AccumulatedOnions returns a shallow copy of the per-participant onion
+// payloads accumulated under the onion.batch bucket for the session.
+// The map key is the participant pseudonym; the value is the raw JSON
+// payload bytes of their onion.batch submission.
+//
+// External packages (e.g. a transport relay) should call this instead of
+// reading the bucket key directly — the bucket name is an internal
+// implementation detail of this package.
+//
+// Returns an empty (non-nil) map if no onion.batch messages have been
+// received yet.
+func AccumulatedOnions(ctx *phase.SessionContext) map[string][]byte {
+	return phase.AccumulatedMessages(ctx, bucketOnions)
+}

@@ -121,12 +121,8 @@ func peelRelayIfNeeded(runner *phase.SessionRunner, hub *transport.Hub,
 	switch msgType {
 	case anon.MsgOnionBatch:
 		// Check if all N batches have been collected.
-		onionBucketRaw, ok := sctx.Get("anon.bucket.onions")
-		if !ok {
-			return
-		}
-		bucket, ok := onionBucketRaw.(map[string][]byte)
-		if !ok || len(bucket) < n {
+		bucket := anon.AccumulatedOnions(sctx)
+		if len(bucket) < n {
 			return
 		}
 		// All N batches collected.  Assemble in participant order and

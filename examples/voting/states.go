@@ -19,8 +19,7 @@
 //	keygen.Plaintext LOCKED       -> GOSSIP         (no-crypto keygen)
 //	PhaseSubmitVote  GOSSIP       -> SCORING        (accumulate ballots)
 //	PhaseTally       SCORING      -> DECRYPTING     (compute weighted sum)
-//	PhaseSettle      DECRYPTING   -> BROADCASTING   (emit signed transcript)
-//	(terminal — no post-result phase)
+//	PhaseSettle      DECRYPTING   -> (terminal / StateNone)   (emit signed transcript)
 package voting
 
 // SessionContext keys produced and consumed by the voting pipeline.
