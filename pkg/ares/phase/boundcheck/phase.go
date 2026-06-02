@@ -177,9 +177,14 @@ func (p *Phase) Enter(ctx *phase.SessionContext) error {
 		return fmt.Errorf("%w: boundcheck: CtxInputDim %d != circuit dim %d", phase.ErrPermanent, dim, p.circuit.Dim())
 	}
 
-	// Stub mode: skip FHE compute. CtxBoundCheckCiphers is not populated;
-	// the app bridge will find an absent key and skip the unicast step.
-	if p.handle == nil {
+	// Resolve the effective handle: construction-time wins; fall back to
+	// per-session handle from context (set by the trigger in shared-runner mode).
+	// When both are nil, we're in stub mode and skip FHE compute.
+	handle := p.handle
+	if handle == nil {
+		handle, _ = phase.TryGet[fhecalib.ContextHandle](ctx, CtxBoundCheckHandle)
+	}
+	if handle == nil {
 		return nil
 	}
 
@@ -192,7 +197,7 @@ func (p *Phase) Enter(ctx *phase.SessionContext) error {
 	checks := make(map[string][]byte, len(encInputs))
 	commitments := make(map[string][]byte, len(encInputs))
 	for party, encInput := range encInputs {
-		encCheck, err := p.circuit.Eval(p.handle, [][]byte{encInput})
+		encCheck, err := p.circuit.Eval(handle, [][]byte{encInput})
 		if err != nil {
 			return fmt.Errorf("%w: boundcheck: eval circuit for party %s: %w", phase.ErrTransient, party, err)
 		}
@@ -256,8 +261,14 @@ func (p *Phase) CheckComplete(ctx *phase.SessionContext) bool {
 //
 // On all-OK: returns nil; the runner advances the session to ExitState.
 func (p *Phase) Exit(ctx *phase.SessionContext) error {
-	// Stub mode: no partials to fuse, no check to run.
-	if p.fuse == nil {
+	// Resolve the effective fuse: construction-time wins; fall back to
+	// per-session fuse from context (set by the trigger in shared-runner mode).
+	// When both are nil, we're in stub mode — no partials to fuse.
+	fuse := p.fuse
+	if fuse == nil {
+		fuse, _ = phase.TryGet[func(partials [][]byte, nSlots int) ([]float64, error)](ctx, CtxBoundCheckFuse)
+	}
+	if fuse == nil {
 		return nil
 	}
 
@@ -323,7 +334,7 @@ func (p *Phase) Exit(ctx *phase.SessionContext) error {
 			continue
 		}
 
-		values, err := p.fuse(partialsForI, 1)
+		values, err := fuse(partialsForI, 1)
 		if err != nil {
 			return fmt.Errorf("%w: boundcheck: fuse partials for checked party %s: %w", phase.ErrTransient, checkedParty, err)
 		}
