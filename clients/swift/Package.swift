@@ -38,6 +38,14 @@ var allTargets: [Target] = [
         name: "AresClientTests",
         dependencies: ["AresClient"]
     ),
+    .target(
+        name: "AresTransport",
+        dependencies: ["AresClient", .product(name: "Crypto", package: "swift-crypto")]
+    ),
+    .testTarget(
+        name: "AresTransportTests",
+        dependencies: ["AresTransport"]
+    ),
 ]
 
 if openFHEEnabled {
