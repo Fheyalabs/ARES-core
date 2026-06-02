@@ -68,6 +68,9 @@ if openFHEEnabled {
             name: "AresClientFHETests",
             dependencies: ["AresClientFHE", "COpenFHEBridge"]
         ),
+        .executableTarget(
+            name: "AresSmoke",
+            dependencies: ["AresClient", "AresClientFHE", "AresTransport"]),
     ]
 }
 
