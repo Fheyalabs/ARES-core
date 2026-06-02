@@ -31,7 +31,8 @@ const (
 // MsgInput is the client-to-server encrypted-input submission; payload is
 // {"enc_x":"<hex serialized ciphertext>"}. MsgBoundPartial (from boundcheck
 // package) is the partial-decrypt reply. MsgChallenge is the server-to-client
-// unicast carrying enc_check + commitment (sent by the PostDispatchHook).
+// broadcast of ALL parties' check CTs + commitments (sent by the PostDispatchHook):
+// {"checks":{party:"<hex>"},"commitments":{party:"<hex>"}}.
 const (
 	MsgInput     = "admission.input"
 	MsgChallenge = "bound_check.challenge"

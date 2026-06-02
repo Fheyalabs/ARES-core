@@ -218,9 +218,11 @@ func (t *admissionTrigger) Start(sessionID string, participants []string, attrs 
 // PostDispatchHook — unicast bound_check.challenge after boundcheck.Enter
 // ---------------------------------------------------------------------------
 
-// challengeUnicastIfNeeded sends each participant their enc_check + commitment
-// when the boundcheck phase's Enter has populated CtxBoundCheckCiphers (i.e.,
-// the session has entered StateChecking after PhaseSubmitInput completes).
+// challengeUnicastIfNeeded broadcasts the FULL set of check ciphertexts +
+// commitments to EVERY participant after the boundcheck phase's Enter populates
+// CtxBoundCheckCiphers. Each party needs every check CT because boundcheck.Exit
+// fuses an N-of-N quorum per ciphertext — so every party must partial-decrypt
+// every check CT and reply with a map[checkedParty]→partial.
 // Duplicate sends are prevented by a sentinel flag in the session context.
 func challengeUnicastIfNeeded(runner *phase.SessionRunner, hub *transport.Hub, sessionID string) {
 	if hub == nil || runner == nil {
@@ -242,17 +244,24 @@ func challengeUnicastIfNeeded(runner *phase.SessionRunner, hub *transport.Hub, s
 	commitments, _ := phase.TryGet[map[string][]byte](sctx, boundcheck.CtxBoundCheckCommitments)
 	participants, _ := phase.TryGet[[]string](sctx, defaults.CtxParticipants)
 
+	// Build the full challenge once: all parties' enc_check + commitment (hex).
+	allChecks := make(map[string]string, len(checks))
+	for party, ec := range checks {
+		allChecks[party] = hex.EncodeToString(ec)
+	}
+	allCommitments := make(map[string]string, len(commitments))
+	for party, cm := range commitments {
+		allCommitments[party] = hex.EncodeToString(cm)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"checks":      allChecks,      // party -> enc_check hex
+		"commitments": allCommitments, // party -> commitment hex
+	})
+	if err != nil {
+		log.Printf("[challenge] marshal (session=%s): %v", sessionID, err)
+		return
+	}
 	for _, p := range participants {
-		encCheck := checks[p]
-		commitment := commitments[p]
-		payload, err := json.Marshal(map[string]string{
-			"enc_check":  hex.EncodeToString(encCheck),
-			"commitment": hex.EncodeToString(commitment),
-		})
-		if err != nil {
-			log.Printf("[challenge] marshal challenge for %s (session=%s): %v", p, sessionID, err)
-			continue
-		}
 		if err := hub.SendTo(p, transport.WSMessage{
 			Type:      bounded_admission.MsgChallenge,
 			SessionID: sessionID,
