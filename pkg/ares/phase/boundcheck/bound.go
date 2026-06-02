@@ -82,6 +82,14 @@ const (
 	CtxJointPublicKey    = "boundcheck.joint_public_key"  // []byte: pk_joint
 	CtxBoundCheckCiphers      = "boundcheck.check_ciphertexts"  // map[string][]byte: party -> enc_check (phase Provides; app unicasts)
 	CtxBoundCheckCommitments  = "boundcheck.check_commitments"  // map[string][]byte: party -> H(enc_check ‖ H(enc_x) ‖ session_id)
+
+	// CtxBoundCheckHandle / CtxBoundCheckFuse let a shared-runner session-service
+	// supply a PER-SESSION fhecalib.ContextHandle and fuse function via the
+	// SessionContext (set by the app's trigger at BeginSession), for apps that
+	// cannot bake a single handle into a process-shared Phase. They are honored
+	// only when the construction-time handle/fuse (NewPhaseWithCrypto) are nil.
+	CtxBoundCheckHandle = "boundcheck.handle" // fhecalib.ContextHandle (server-set)
+	CtxBoundCheckFuse   = "boundcheck.fuse"   // func(partials [][]byte, nSlots int) ([]float64, error) (server-set)
 )
 
 // MsgBoundPartial is the message type each party replies with: its partial
