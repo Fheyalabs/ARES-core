@@ -16,6 +16,7 @@ struct AresSmokeEntry {
         let participants = Int(arg("--participants", "3")!) ?? 3
         let authSecret = arg("--auth-secret", ProcessInfo.processInfo.environment["ARES_WS_SECRET"] ?? "")!
         let sessionID = arg("--session-id", "\(sub)-\(Int(Date().timeIntervalSince1970))")!
+        let mode = arg("--mode", "inbound") ?? "inbound"
 
         let code: Int32
         do {
@@ -26,8 +27,11 @@ struct AresSmokeEntry {
             case "voting":
                 code = Int32(try await VotingFlow.run(serverURL: server, participants: participants,
                     authSecret: authSecret, sessionID: sessionID))
+            case "boundcheck":
+                code = Int32(try await BoundCheckFlow.run(serverURL: server, participants: participants,
+                    authSecret: authSecret, sessionID: sessionID, mode: mode))
             default:
-                FileHandle.standardError.write(Data("usage: AresSmoke {auction|voting} --server URL --participants N\n".utf8))
+                FileHandle.standardError.write(Data("usage: AresSmoke {auction|voting|boundcheck} --server URL --participants N\n".utf8))
                 code = 2
             }
         } catch {

@@ -13,12 +13,14 @@ fun main(argv: Array<String>) {
     val n      = (arg("--participants", "3") ?: "3").toInt()
     val secret = arg("--auth-secret", System.getenv("ARES_WS_SECRET") ?: "")!!
     val sid    = arg("--session-id", "$sub-${System.currentTimeMillis() / 1000}")!!
+    val mode   = arg("--mode", "inbound") ?: "inbound"
     val code   = try {
         when (sub) {
             "voting" -> VotingFlow.run(server, n, secret, sid)
             "auction" -> AuctionFlow.run(server, n, secret, sid)
+            "boundcheck" -> BoundCheckFlow.run(server, n, secret, sid, mode)
             else -> {
-                System.err.println("usage: ares-smoke {voting} --server URL --participants N")
+                System.err.println("usage: ares-smoke {voting|auction|boundcheck} --server URL --participants N")
                 2
             }
         }
