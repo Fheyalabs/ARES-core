@@ -70,6 +70,18 @@ type Config struct {
 	// GET /v2/debug/logs. nil preserves the historical unauthenticated
 	// access (intended for trusted reverse-proxy deployments only).
 	DebugLogsAuth func(*http.Request) bool
+
+	// PostDispatchHook, if non-nil, is called after every inbound WS
+	// frame has been dispatched to the runner (HandleLineageMessage or
+	// HandleMessage). The hook receives the original client, message,
+	// and any dispatch error. The hook runs synchronously in the hub's
+	// readPump goroutine; it must not block.
+	//
+	// Intended for applications that need side effects after dispatch —
+	// for example, the anon-shuffle relay: once all onion.batch messages
+	// are accumulated the hook broadcasts the assembled batch to start
+	// the sequential peel chain.
+	PostDispatchHook func(c *Client, msg WSMessage, dispatchErr error)
 }
 
 // Service composes Hub + Artifacts + Admin + LogStream into a runnable
@@ -148,13 +160,22 @@ func NewService(cfg Config) (*Service, error) {
 	mux.HandleFunc("/v2/ws", hub.HandleWS)
 
 	// Dispatch every WS frame into the runner.
+	// v2 frames (Lineage != nil) go through HandleLineageMessage so the
+	// runner verifies the SC-10 lineage node before calling OnMessage.
+	// v1 frames fall through to the legacy HandleMessage path.
+	postHook := cfg.PostDispatchHook
 	hub.SetMessageHandler(func(c *Client, msg WSMessage) {
 		if msg.SessionID == "" {
 			// Frames without a session_id are non-routable (control
 			// messages, future client→server pings). Ignore.
 			return
 		}
-		_, err := cfg.Runner.HandleMessage(msg.SessionID, msg.Type, c.Pseudonym, msg.Payload)
+		var err error
+		if msg.Lineage != nil {
+			_, err = cfg.Runner.HandleLineageMessage(msg.SessionID, msg.Type, c.Pseudonym, msg.Payload, msg.Lineage)
+		} else {
+			_, err = cfg.Runner.HandleMessage(msg.SessionID, msg.Type, c.Pseudonym, msg.Payload)
+		}
 		if cfg.EventRing != nil {
 			errStr := ""
 			if err != nil {
@@ -165,6 +186,9 @@ func NewService(cfg Config) (*Service, error) {
 		if err != nil && !isPhaseDoesNotConsume(err) {
 			log.Printf("[dispatch] session=%s type=%s from=%s err=%v",
 				shortID(msg.SessionID), msg.Type, shortID(c.Pseudonym), err)
+		}
+		if postHook != nil {
+			postHook(c, msg, err)
 		}
 	})
 

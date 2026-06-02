@@ -185,7 +185,7 @@ func (PhaseSettle) Name() string                         { return "vote-settle" 
 func (PhaseSettle) Lifetime() phase.Lifetime             { return phase.LifetimePerSession }
 func (PhaseSettle) RunsAt() phase.RunsAt                 { return phase.RunsAtInline }
 func (PhaseSettle) EntryState() phase.SessionState       { return defaults.StateDecrypting }
-func (PhaseSettle) ExitState() phase.SessionState        { return defaults.StateBroadcasting }
+func (PhaseSettle) ExitState() phase.SessionState        { return phase.StateNone }
 func (PhaseSettle) ConsumedMessageTypes() []string       { return nil }
 func (PhaseSettle) InternalStates() []phase.SessionState { return nil }
 func (PhaseSettle) Requires() phase.ContextSchema {

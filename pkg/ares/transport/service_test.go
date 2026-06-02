@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Fheyalabs/ares-core/pkg/ares/lineage"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
+	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
 	"github.com/gorilla/websocket"
 )
 
@@ -259,4 +261,296 @@ func waitForHTTP(t *testing.T, url string, timeout time.Duration) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatalf("HTTP %s did not become reachable within %s", url, timeout)
+}
+
+// TestService_PostDispatchHook_CalledAfterDispatch verifies that
+// Config.PostDispatchHook fires after every dispatched WS frame with the
+// originating client and message. The test sends one "advance" frame and
+// asserts the hook recorded matching session_id and type fields.
+func TestService_PostDispatchHook_CalledAfterDispatch(t *testing.T) {
+	type hookCall struct {
+		pseudonym string
+		sessionID string
+		msgType   string
+		dispErr   error
+	}
+	var (
+		mu    sync.Mutex
+		calls []hookCall
+	)
+
+	runner := newDispatchRunner(t, nil)
+	addr := freePort(t)
+	svc, err := NewService(Config{
+		Addr:           addr,
+		ServiceName:    "hook-test",
+		AllowDevBypass: true,
+		Runner:         runner,
+		InviteType:     "hook.invite",
+		PostDispatchHook: func(c *Client, msg WSMessage, dispatchErr error) {
+			mu.Lock()
+			calls = append(calls, hookCall{
+				pseudonym: c.Pseudonym,
+				sessionID: msg.SessionID,
+				msgType:   msg.Type,
+				dispErr:   dispatchErr,
+			})
+			mu.Unlock()
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewService: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go svc.Run(ctx)
+	waitForHTTP(t, "http://"+addr+"/admin/health", 2*time.Second)
+
+	wsURL := url.URL{Scheme: "ws", Host: addr, Path: "/v2/ws"}
+	q := wsURL.Query()
+	q.Set("pseudonym", "hook-peer")
+	wsURL.RawQuery = q.Encode()
+	wsConn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer wsConn.Close()
+	waitFor(t, func() bool { return svc.Hub().IsConnected("hook-peer") }, 2*time.Second)
+
+	// Start a session.
+	body, _ := json.Marshal(sessionStartRequest{
+		SessionID:    "hook-s1",
+		Participants: []string{"hook-peer"},
+	})
+	resp, err := http.Post("http://"+addr+"/admin/sessions", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST sessions: %v", err)
+	}
+	resp.Body.Close()
+
+	// Drain the invite frame (it also fires the hook with type "hook.invite").
+	wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	wsConn.ReadMessage() //nolint:errcheck
+
+	// Send an "advance" frame — this is the one the hook must record.
+	frame := WSMessage{Type: "advance", SessionID: "hook-s1"}
+	raw, _ := json.Marshal(frame)
+	if err := wsConn.WriteMessage(websocket.TextMessage, raw); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	waitFor(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		for _, c := range calls {
+			if c.msgType == "advance" {
+				return true
+			}
+		}
+		return false
+	}, 2*time.Second)
+
+	mu.Lock()
+	defer mu.Unlock()
+	var found *hookCall
+	for i := range calls {
+		if calls[i].msgType == "advance" {
+			found = &calls[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("PostDispatchHook: no call recorded for 'advance' frame")
+	}
+	if found.pseudonym != "hook-peer" {
+		t.Errorf("hook client.Pseudonym = %q, want hook-peer", found.pseudonym)
+	}
+	if found.sessionID != "hook-s1" {
+		t.Errorf("hook msg.SessionID = %q, want hook-s1", found.sessionID)
+	}
+}
+
+// TestService_V2FrameRoutesThroughLineage verifies that a v2 WS frame
+// (Version="2", Lineage!=nil) is dispatched via HandleLineageMessage and
+// reaches Phase.OnMessage after lineage verification, while a v1 frame
+// (no Lineage) is routed through the plain HandleMessage path.
+//
+// The two paths are verified in independent sub-tests to avoid session-state
+// collision: once a twoStatePhase's CheckComplete returns true the session
+// advances to StateNone and the current phase pointer becomes nil — a second
+// frame to the same session would panic. Each sub-test owns its own runner
+// and service.
+//
+// This test exercises the msg.Lineage != nil branch inside the service's
+// SetMessageHandler closure using a full WS round-trip — the same seam
+// used by TestService_EndToEnd_AdminStartAndDispatch — since that closure
+// is the only place the branch lives.
+func TestService_V2FrameRoutesThroughLineage(t *testing.T) {
+	t.Run("v1_plain_HandleMessage", func(t *testing.T) {
+		signer, _ := sign.NewEd25519Signer()
+		peers := map[string]sign.Signer{sign.Ed25519Algorithm: signer}
+		store := lineage.NewInMemoryStore()
+
+		var (
+			mu      sync.Mutex
+			hookSaw bool
+		)
+		runner, _ := phase.ComposeWith(
+			[]phase.Phase{&twoStatePhase{
+				name:     "ltest",
+				entry:    "FIRST",
+				exit:     phase.StateNone,
+				consumes: []string{"v1.frame"},
+			}},
+			phase.WithSigner(signer),
+			phase.WithStore(store),
+			phase.WithPeerVerifiers(peers),
+		)
+		addr := freePort(t)
+		svc, err := NewService(Config{
+			Addr:           addr,
+			ServiceName:    "ltest-v1",
+			AllowDevBypass: true,
+			Runner:         runner,
+			InviteType:     "ltest.invite",
+			PostDispatchHook: func(c *Client, msg WSMessage, _ error) {
+				if msg.Lineage == nil && msg.Type == "v1.frame" {
+					mu.Lock()
+					hookSaw = true
+					mu.Unlock()
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go svc.Run(ctx)
+		waitForHTTP(t, "http://"+addr+"/admin/health", 2*time.Second)
+
+		wsURL := url.URL{Scheme: "ws", Host: addr, Path: "/v2/ws"}
+		q := wsURL.Query()
+		q.Set("pseudonym", "v1-peer")
+		wsURL.RawQuery = q.Encode()
+		wsConn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer wsConn.Close()
+		waitFor(t, func() bool { return svc.Hub().IsConnected("v1-peer") }, 2*time.Second)
+
+		body, _ := json.Marshal(sessionStartRequest{SessionID: "v1-s1", Participants: []string{"v1-peer"}})
+		resp, err := http.Post("http://"+addr+"/admin/sessions", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST sessions: %v", err)
+		}
+		resp.Body.Close()
+		wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		wsConn.ReadMessage() //nolint:errcheck // drain invite
+
+		raw, _ := json.Marshal(WSMessage{
+			Version: WireProtocolVersion, Type: "v1.frame", SessionID: "v1-s1",
+			Payload: json.RawMessage(`"hello"`),
+		})
+		if err := wsConn.WriteMessage(websocket.TextMessage, raw); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return hookSaw }, 2*time.Second)
+		mu.Lock()
+		if !hookSaw {
+			t.Error("v1 frame: PostDispatchHook not fired with nil Lineage")
+		}
+		mu.Unlock()
+	})
+
+	t.Run("v2_lineage_HandleLineageMessage", func(t *testing.T) {
+		signer, _ := sign.NewEd25519Signer()
+		peers := map[string]sign.Signer{sign.Ed25519Algorithm: signer}
+		store := lineage.NewInMemoryStore()
+
+		var (
+			mu      sync.Mutex
+			hookSaw bool
+		)
+		runner, _ := phase.ComposeWith(
+			[]phase.Phase{&twoStatePhase{
+				name:     "ltest",
+				entry:    "FIRST",
+				exit:     phase.StateNone,
+				consumes: []string{"v2.frame"},
+			}},
+			phase.WithSigner(signer),
+			phase.WithStore(store),
+			phase.WithPeerVerifiers(peers),
+		)
+		addr := freePort(t)
+		svc, err := NewService(Config{
+			Addr:           addr,
+			ServiceName:    "ltest-v2",
+			AllowDevBypass: true,
+			Runner:         runner,
+			InviteType:     "ltest.invite",
+			PostDispatchHook: func(c *Client, msg WSMessage, dispErr error) {
+				// dispErr may be non-nil if the phase already completed;
+				// we only care that the hook fired with a non-nil Lineage.
+				if msg.Lineage != nil && msg.Type == "v2.frame" {
+					mu.Lock()
+					hookSaw = true
+					mu.Unlock()
+				}
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewService: %v", err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		go svc.Run(ctx)
+		waitForHTTP(t, "http://"+addr+"/admin/health", 2*time.Second)
+
+		wsURL := url.URL{Scheme: "ws", Host: addr, Path: "/v2/ws"}
+		q := wsURL.Query()
+		q.Set("pseudonym", "v2-peer")
+		wsURL.RawQuery = q.Encode()
+		wsConn, _, err := websocket.DefaultDialer.Dial(wsURL.String(), nil)
+		if err != nil {
+			t.Fatalf("dial: %v", err)
+		}
+		defer wsConn.Close()
+		waitFor(t, func() bool { return svc.Hub().IsConnected("v2-peer") }, 2*time.Second)
+
+		body, _ := json.Marshal(sessionStartRequest{SessionID: "v2-s1", Participants: []string{"v2-peer"}})
+		resp, err := http.Post("http://"+addr+"/admin/sessions", "application/json", bytes.NewReader(body))
+		if err != nil {
+			t.Fatalf("POST sessions: %v", err)
+		}
+		resp.Body.Close()
+		wsConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+		wsConn.ReadMessage() //nolint:errcheck // drain invite
+
+		payload := []byte(`"hello-v2"`)
+		node, nodeErr := lineage.Commit("v2-s1", "ltest", "test-role", payload, nil, signer)
+		if nodeErr != nil {
+			t.Fatalf("lineage.Commit: %v", nodeErr)
+		}
+		raw, _ := json.Marshal(WSMessage{
+			Version:   WireProtocolVersionLineage,
+			Type:      "v2.frame",
+			SessionID: "v2-s1",
+			Payload:   json.RawMessage(payload),
+			Lineage:   &node,
+		})
+		if err := wsConn.WriteMessage(websocket.TextMessage, raw); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return hookSaw }, 2*time.Second)
+		mu.Lock()
+		if !hookSaw {
+			t.Error("v2 frame: PostDispatchHook not fired with non-nil Lineage")
+		}
+		mu.Unlock()
+	})
+
 }
