@@ -3,7 +3,7 @@ import AresClient   // Onion, Lineage, DAGNode, ByteUtil
 
 /// SC-2 / SC-10 anon gossip arc: wraps the L1 onion-routing and lineage
 /// primitives for a single participant in a slot-submission round.
-public struct GossipParticipant {
+public struct GossipParticipant: Sendable {
     let sessionID: String
     let selfIndex: Int
     let slotDKSk: Data

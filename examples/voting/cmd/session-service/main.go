@@ -18,6 +18,8 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -25,6 +27,7 @@ import (
 	"syscall"
 
 	"github.com/Fheyalabs/ares-core/examples/voting"
+	"github.com/Fheyalabs/ares-core/pkg/ares/phase"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/anon"
 	"github.com/Fheyalabs/ares-core/pkg/ares/phase/defaults"
 	"github.com/Fheyalabs/ares-core/pkg/ares/sign"
@@ -63,11 +66,21 @@ func main() {
 		Trigger:        trigger,
 		InviteType:     "vote.invitation",
 		LogStream:      logStream,
+		// PostDispatchHook drives the sequential onion-peel relay:
+		// after all onion.batch arrive, broadcast the assembled batch
+		// to participants[0]; when a peeler sends onion.peel_forward,
+		// relay it to the next peeler.  The hub handle is injected
+		// below after NewService returns (trigger.hub is set then).
+		PostDispatchHook: func(c *transport.Client, msg transport.WSMessage, _ error) {
+			peelRelayIfNeeded(runner, trigger.hub, msg.SessionID, msg.Type, c.Pseudonym, msg.Payload)
+		},
 	})
 	if err != nil {
 		log.Fatalf("voting: build service: %v", err)
 	}
-	innerTrigger.Hub = svc.Hub()
+	hub := svc.Hub()
+	innerTrigger.Hub = hub
+	trigger.hub = hub
 
 	log.Printf("[voting] session-service on :%s (shuffle+lineage, dev_bypass=%v)", port, devBypass)
 	if err := svc.Run(ctx); err != nil {
@@ -75,11 +88,121 @@ func main() {
 	}
 }
 
+// onionBatchPayload is the wire shape of onion.batch / onion.peel_forward.
+type onionBatchPayload struct {
+	Onions []string `json:"onions"` // base64-encoded onion bytes
+}
+
+// peelRelayIfNeeded drives the sequential onion-peel chain.
+//
+//   - onion.batch quorum met → assemble all N onions in participant order
+//     and send the merged batch to participants[0] as onion.peel_forward.
+//   - onion.peel_forward from participants[k] → relay the batch to
+//     participants[k+1] so the next peeler can strip its layer.
+//     The final peeler's peel_forward completes the runner's quorum;
+//     no further relay is needed.
+func peelRelayIfNeeded(runner *phase.SessionRunner, hub *transport.Hub,
+	sessionID, msgType, from string, payload json.RawMessage) {
+
+	if hub == nil {
+		return
+	}
+	sctx := runner.SessionContext(sessionID)
+	if sctx == nil {
+		return
+	}
+
+	participants, ok := phase.TryGet[[]string](sctx, anon.CtxParticipants)
+	if !ok || len(participants) == 0 {
+		return
+	}
+	n := len(participants)
+
+	switch msgType {
+	case anon.MsgOnionBatch:
+		// Check if all N batches have been collected.
+		onionBucketRaw, ok := sctx.Get("anon.bucket.onions")
+		if !ok {
+			return
+		}
+		bucket, ok := onionBucketRaw.(map[string][]byte)
+		if !ok || len(bucket) < n {
+			return
+		}
+		// All N batches collected.  Assemble in participant order and
+		// send to participants[0] to start the sequential peel chain.
+		assembled, err := assembleBatch(participants, bucket)
+		if err != nil {
+			log.Printf("[onion-relay] assemble batch session=%s: %v", sessionID, err)
+			return
+		}
+		log.Printf("[onion-relay] batch complete session=%s — sending to %s to start peel",
+			sessionID, participants[0])
+		hub.SendTo(participants[0], transport.WSMessage{
+			Type:      anon.MsgPeelForward,
+			SessionID: sessionID,
+			Payload:   assembled,
+		})
+
+	case anon.MsgPeelForward:
+		// Determine which peeler just forwarded.
+		peelerIdx := -1
+		for i, p := range participants {
+			if p == from {
+				peelerIdx = i
+				break
+			}
+		}
+		if peelerIdx < 0 || peelerIdx >= n-1 {
+			// Last peeler; runner's quorum will complete naturally.
+			return
+		}
+		// Relay the peeled batch to the next participant.
+		nextPeer := participants[peelerIdx+1]
+		log.Printf("[onion-relay] peel from %s session=%s — forwarding to %s",
+			from, sessionID, nextPeer)
+		hub.SendTo(nextPeer, transport.WSMessage{
+			Type:      anon.MsgPeelForward,
+			SessionID: sessionID,
+			Payload:   payload,
+		})
+	}
+}
+
+// assembleBatch builds the ordered onion list from N individual
+// single-onion batches keyed by participant pseudonym.
+func assembleBatch(participants []string, bucket map[string][]byte) (json.RawMessage, error) {
+	onions := make([]string, 0, len(participants))
+	for _, p := range participants {
+		raw, ok := bucket[p]
+		if !ok {
+			return nil, fmt.Errorf("missing onion batch from %s", p)
+		}
+		var bp onionBatchPayload
+		if err := json.Unmarshal(raw, &bp); err != nil {
+			return nil, fmt.Errorf("decode batch from %s: %w", p, err)
+		}
+		if len(bp.Onions) == 0 {
+			return nil, fmt.Errorf("empty onion list from %s", p)
+		}
+		if _, err := base64.StdEncoding.DecodeString(bp.Onions[0]); err != nil {
+			return nil, fmt.Errorf("invalid base64 from %s: %w", p, err)
+		}
+		onions = append(onions, bp.Onions[0])
+	}
+	assembled, err := json.Marshal(onionBatchPayload{Onions: onions})
+	if err != nil {
+		return nil, err
+	}
+	return json.RawMessage(assembled), nil
+}
+
 // votingTrigger wraps ManualAdminTrigger to seed the three participant
 // context keys the shuffle arc requires, then advances the session into
 // the GOSSIP state so PhaseGShuffle.Enter is called immediately.
 type votingTrigger struct {
 	inner *transport.ManualAdminTrigger
+	hub   *transport.Hub
 }
 
 func (t *votingTrigger) Start(sessionID string, participants []string, attrs map[string]any) error {
@@ -90,9 +213,9 @@ func (t *votingTrigger) Start(sessionID string, participants []string, attrs map
 	// the session context is populated before PhaseGShuffle.Requires()
 	// is consulted during the state advance.
 	canonical := map[string]any{
-		voting.CtxVoteParticipants:   participants,
-		defaults.CtxParticipants:     participants,
-		anon.CtxParticipants:         participants,
+		voting.CtxVoteParticipants: participants,
+		defaults.CtxParticipants:   participants,
+		anon.CtxParticipants:       participants,
 	}
 	for k, v := range attrs {
 		canonical[k] = v

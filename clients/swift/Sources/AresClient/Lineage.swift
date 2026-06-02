@@ -2,7 +2,7 @@ import Foundation
 import Crypto
 
 /// SC-10 lineage DAGNode in the hex/snake_case v2 wire form.
-public struct DAGNode: Codable, Equatable {
+public struct DAGNode: Codable, Equatable, Sendable {
     public var hash: String
     public var sessionID: String
     public var phaseID: String
