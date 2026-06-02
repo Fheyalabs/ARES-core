@@ -3,7 +3,21 @@ project(ares_fhe_jni CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(JNI REQUIRED)
+# Detect JDK for JNI headers. On modern JDKs the flat include layout puts
+# jni.h and jni_md.h in the same directory. Prefer JAVA_HOME; fall back to
+# common macOS locations.
+if(DEFINED ENV{JAVA_HOME})
+    set(JNI_ROOT "$ENV{JAVA_HOME}")
+elseif(EXISTS /opt/homebrew/opt/openjdk)
+    set(JNI_ROOT /opt/homebrew/opt/openjdk)
+else()
+    file(GLOB JDK_HOMES /Library/Java/JavaVirtualMachines/*/Contents/Home)
+    list(GET JDK_HOMES 0 JNI_ROOT)
+endif()
+set(JNI_INCLUDE_DIRS "${JNI_ROOT}/include")
+if(EXISTS "${JNI_ROOT}/include/darwin")
+    list(APPEND JNI_INCLUDE_DIRS "${JNI_ROOT}/include/darwin")
+endif()
 
 add_library(ares_fhe_jni SHARED jni_openfhe.cpp openfhe_wrapper.cpp)
 target_compile_definitions(ares_fhe_jni PRIVATE OPENFHE_VERSION=v1.5.1)
