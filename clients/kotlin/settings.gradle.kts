@@ -1,2 +1,2 @@
 rootProject.name = "ares-kotlin-client"
-include("ares-client", "ares-smoke")
+include("ares-client", "ares-smoke", "ares-client-fhe")
