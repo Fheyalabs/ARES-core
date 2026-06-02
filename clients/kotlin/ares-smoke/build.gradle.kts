@@ -5,6 +5,7 @@ plugins {
 }
 dependencies {
     implementation(project(":ares-client"))
+    implementation(project(":ares-client-fhe"))
     implementation("org.bouncycastle:bcprov-jdk18on:1.78.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")

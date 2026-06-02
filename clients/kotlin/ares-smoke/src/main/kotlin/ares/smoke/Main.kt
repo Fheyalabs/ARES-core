@@ -16,10 +16,7 @@ fun main(argv: Array<String>) {
     val code   = try {
         when (sub) {
             "voting" -> VotingFlow.run(server, n, secret, sid)
-            "auction" -> {
-                System.err.println("auction: Android-B (FHE) — not in Android-A")
-                2
-            }
+            "auction" -> AuctionFlow.run(server, n, secret, sid)
             else -> {
                 System.err.println("usage: ares-smoke {voting} --server URL --participants N")
                 2
