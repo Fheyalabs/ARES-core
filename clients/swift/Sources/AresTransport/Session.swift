@@ -15,7 +15,7 @@ public actor Session {
     private let serverURL: String
     private let task: URLSessionWebSocketTask
     private var inbox: [InboundFrame] = []
-    private var waiters: [CheckedContinuation<InboundFrame, any Error>] = []
+    private var waiters: [(id: UUID, cont: CheckedContinuation<InboundFrame, any Error>)] = []
     private var closed = false
     private let defaultTimeout: TimeInterval
 
@@ -30,6 +30,39 @@ public actor Session {
         self.pseudonym = pseudonym; self.sessionID = sessionID
         self.serverURL = serverURL; self.task = task; self.defaultTimeout = defaultTimeout
     }
+
+    // MARK: - Test-only surface (no-socket construction)
+    // A real URLSessionWebSocketTask cannot be stubbed cheaply, so we expose a
+    // package-internal init that skips the socket and two thin wrappers that let
+    // @testable tests drive `deliver`/`receiveAny` without a network connection.
+    // The public API surface is unchanged — this init is intentionally internal.
+    #if DEBUG
+    init(_testPseudonym: String) {
+        self.pseudonym = _testPseudonym
+        self.sessionID = "test"
+        self.serverURL = ""
+        // URLSession.shared.webSocketTask(with:) is the only public factory;
+        // we create a dummy task to a local URL — it will never be resumed.
+        self.task = URLSession.shared.webSocketTask(with: URL(string: "ws://127.0.0.1:0")!)
+        self.defaultTimeout = 30
+    }
+
+    // Directly enqueue a frame into inbox (bypasses the socket loop).
+    func _testEnqueue(_ frame: InboundFrame) {
+        deliver(frame)
+    }
+
+    // Attempt a receiveAny with `timeout` seconds; returns true if a frame was
+    // received, false if it timed out.  Does NOT throw — safe for XCTest.
+    func _testTakeWithTimeout(_ timeout: TimeInterval) async -> Bool {
+        do {
+            _ = try await receiveAny(timeout: timeout)
+            return true
+        } catch {
+            return false
+        }
+    }
+    #endif
 
     public static func connect(serverURL: String, pseudonym: String, sessionID: String,
                                authSecret: String = "", defaultTimeout: TimeInterval = 30) async throws -> Session {
@@ -81,11 +114,18 @@ public actor Session {
     }
 
     private func deliver(_ frame: InboundFrame) {
-        if !waiters.isEmpty { waiters.removeFirst().resume(returning: frame) }
-        else { inbox.append(frame) }
+        if !waiters.isEmpty {
+            let w = waiters.removeFirst()
+            w.cont.resume(returning: frame)
+        } else {
+            inbox.append(frame)
+        }
     }
+
     private func failWaiters(_ err: any Error) {
-        let ws = waiters; waiters.removeAll(); ws.forEach { $0.resume(throwing: err) }
+        let ws = waiters
+        waiters.removeAll()
+        for w in ws { w.cont.resume(throwing: err) }
     }
 
     public func send(_ type: String, payloadJSON: Data? = nil, lineage: DAGNode? = nil, seq: Int = 0) async throws {
@@ -95,25 +135,43 @@ public actor Session {
         try await task.send(.data(frame))
     }
 
-    private func nextFrame() async throws -> InboundFrame {
+    private func nextFrame(id: UUID) async throws -> InboundFrame {
         if !inbox.isEmpty { return inbox.removeFirst() }
         return try await withCheckedThrowingContinuation { cont in
-            waiters.append(cont)
+            waiters.append((id: id, cont: cont))
+        }
+    }
+
+    // Remove a waiter by id and resume its continuation with CancellationError so
+    // the associated `nextFrame` task can unwind.  A CheckedContinuation that is
+    // never resumed causes the waiting task to hang indefinitely (task cancellation
+    // does not fire withCheckedThrowingContinuation), so we must always resume.
+    private func removeWaiter(id: UUID) {
+        if let idx = waiters.firstIndex(where: { $0.id == id }) {
+            let w = waiters.remove(at: idx)
+            w.cont.resume(throwing: CancellationError())
         }
     }
 
     public func receiveAny(timeout: TimeInterval? = nil) async throws -> InboundFrame {
         if !inbox.isEmpty { return inbox.removeFirst() }
         let t = timeout ?? defaultTimeout
+        let id = UUID()
         return try await withThrowingTaskGroup(of: InboundFrame.self) { group in
-            group.addTask { try await self.nextFrame() }
+            group.addTask { try await self.nextFrame(id: id) }
             group.addTask {
                 try await Task.sleep(nanoseconds: UInt64(t * 1_000_000_000))
                 throw TransportError.timeout("\(self.pseudonym): receiveAny")
             }
-            let r = try await group.next()!
-            group.cancelAll()
-            return r
+            do {
+                let r = try await group.next()!
+                group.cancelAll()
+                return r
+            } catch {
+                group.cancelAll()
+                self.removeWaiter(id: id)
+                throw error
+            }
         }
     }
 
