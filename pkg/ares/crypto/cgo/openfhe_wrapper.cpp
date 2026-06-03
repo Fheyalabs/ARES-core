@@ -755,6 +755,136 @@ int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     }
 }
 
+// StreamedRotShareBytes generates a non-lead party's broadcast rotation-key share
+// ONE INDEX AT A TIME against the lead's base map, serializing each index's key and
+// freeing it before generating the next. Peak memory is therefore bounded to a
+// single rotation key rather than the whole map — the memory-bounded keygen path
+// for RAM-constrained clients (phones). The shares are NOT retained; only the total
+// serialized size is returned (the caller streams them to its transport/sink).
+int StreamedRotShareBytes(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle base, PublicKeyHandle own_pk, unsigned long long* out_total_bytes) {
+    try {
+        if (out_total_bytes == nullptr) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        const std::string key_tag = as_pk(own_pk)->pk->GetKeyTag();
+        const auto& base_map = as_rot(base)->keys;
+        unsigned long long total = 0;
+        for (int32_t idx : broadcast_rotation_indices(c->batch_size)) {
+            std::vector<int32_t> one{idx};
+            auto share = c->cc->MultiEvalAtIndexKeyGen(s->sk, base_map, one, key_tag);
+            std::stringstream ss;
+            Serial::Serialize(*share, ss, SerType::BINARY);
+            total += static_cast<unsigned long long>(ss.str().size());
+            // share + ss are freed at end of iteration -> peak bounded to one index.
+        }
+        *out_total_bytes = total;
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+// StreamedTwoPartyRotKeygenBytes generates a 2-party rotation key FULLY streamed:
+// for each rotation index it generates the lead's base[idx], the participant's
+// share[idx] against it, serializes both, clears the context's automorphism map,
+// and frees — so peak memory is bounded to a SINGLE rotation index across BOTH
+// parties (vs. holding the whole map). Returns total serialized bytes
+// (lead base + participant share). The memory-bounded multiparty keygen path.
+int StreamedTwoPartyRotKeygenBytes(CryptoContextHandle ctx,
+    SecretKeyShareHandle sk_lead, SecretKeyShareHandle sk_part, PublicKeyHandle pk_part,
+    unsigned long long* out_total_bytes) {
+    try {
+        if (out_total_bytes == nullptr) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* sl = as_sk(sk_lead);
+        auto* sp = as_sk(sk_part);
+        const std::string lead_tag = sl->sk->GetKeyTag();
+        const std::string part_tag = as_pk(pk_part)->pk->GetKeyTag();
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(lead_tag);
+        unsigned long long total = 0;
+        for (int32_t idx : broadcast_rotation_indices(c->batch_size)) {
+            std::vector<int32_t> one{idx};
+            c->cc->EvalAtIndexKeyGen(sl->sk, one);
+            auto base_i = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(lead_tag));
+            {
+                std::stringstream ss;
+                Serial::Serialize(*base_i, ss, SerType::BINARY);
+                total += static_cast<unsigned long long>(ss.str().size());
+            }
+            auto share_i = c->cc->MultiEvalAtIndexKeyGen(sp->sk, base_i, one, part_tag);
+            {
+                std::stringstream ss;
+                Serial::Serialize(*share_i, ss, SerType::BINARY);
+                total += static_cast<unsigned long long>(ss.str().size());
+            }
+            lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(lead_tag);
+        }
+        *out_total_bytes = total;
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+// MeasureBOnlyRotShare checks whether the CRS-saving wire optimization is possible:
+// for one rotation index it generates the lead's base key and a participant's share
+// against it, tests whether the participant's a-vector equals the lead's (i.e. 'a'
+// is shared across parties), and reports the full-key vs b-only serialized sizes.
+// If a is shared, a participant need only transmit its b-vector (the server pairs it
+// with the shared a), roughly halving the per-party upload.
+int MeasureBOnlyRotShare(CryptoContextHandle ctx,
+    SecretKeyShareHandle sk_lead, SecretKeyShareHandle sk_part, PublicKeyHandle pk_part,
+    unsigned long long* out_full_bytes, unsigned long long* out_b_only_bytes, int* out_a_shared) {
+    try {
+        if (out_full_bytes == nullptr || out_b_only_bytes == nullptr || out_a_shared == nullptr) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* sl = as_sk(sk_lead);
+        auto* sp = as_sk(sk_part);
+        const std::string lead_tag = sl->sk->GetKeyTag();
+        const std::string part_tag = as_pk(pk_part)->pk->GetKeyTag();
+        std::vector<int32_t> one{1};
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(lead_tag);
+        c->cc->EvalAtIndexKeyGen(sl->sk, one);
+        auto base_map = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(lead_tag));
+        auto share_map = c->cc->MultiEvalAtIndexKeyGen(sp->sk, base_map, one, part_tag);
+        if (base_map->empty() || share_map->empty()) {
+            return 2;
+        }
+        auto lead_key = base_map->begin()->second;
+        auto part_key = share_map->begin()->second;
+        const auto& la = lead_key->GetAVector();
+        const auto& pa = part_key->GetAVector();
+        bool shared = (la.size() == pa.size());
+        for (size_t i = 0; shared && i < la.size(); i++) {
+            if (!(la[i] == pa[i])) {
+                shared = false;
+            }
+        }
+        *out_a_shared = shared ? 1 : 0;
+        {
+            std::stringstream ss;
+            Serial::Serialize(part_key, ss, SerType::BINARY);
+            *out_full_bytes = static_cast<unsigned long long>(ss.str().size());
+        }
+        {
+            std::stringstream ss;
+            Serial::Serialize(part_key->GetBVector(), ss, SerType::BINARY);
+            *out_b_only_bytes = static_cast<unsigned long long>(ss.str().size());
+        }
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(lead_tag);
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final) {

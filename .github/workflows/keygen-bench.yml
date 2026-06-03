@@ -1,0 +1,105 @@
+name: keygen-bench
+
+# Manual-only benchmark lane for threshold-CKKS keygen amortization, including the
+# heavy depth-30 / ring-2^17 worst case that needs more RAM than the GitHub-hosted
+# runners (or a 16 GB dev box) can give. Run it on a high-memory self-hosted runner.
+#
+# This NEVER runs on push/PR — ARES-core's regular CI (go.yml, openfhe.yml) stays on
+# hosted runners. This is an opt-in measurement job only.
+on:
+  workflow_dispatch:
+    inputs:
+      runs_on:
+        description: "Runner label (a high-RAM, >=24 GB self-hosted runner for the heavy rows)."
+        type: string
+        default: "self-hosted"
+      heavy:
+        description: "Run the heavy ring>2^14 rows (incl. depth-30/2^17). Needs ~20 GB free RAM."
+        type: boolean
+        default: true
+      omp_threads:
+        description: "OMP_NUM_THREADS for OpenFHE (probe the concurrency effect; empty = library default)."
+        type: string
+        default: ""
+
+env:
+  OPENFHE_VERSION: v1.5.1
+  OPENFHE_PREFIX: /opt/openfhe
+
+jobs:
+  keygen-bench:
+    name: threshold-CKKS keygen amortization benchmark
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Cache OpenFHE install
+        id: cache-openfhe
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.OPENFHE_PREFIX }}
+          key: openfhe-${{ env.OPENFHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v1
+
+      - name: Build + install OpenFHE ${{ env.OPENFHE_VERSION }}
+        if: steps.cache-openfhe.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          git clone --branch "${OPENFHE_VERSION}" --depth 1 \
+            https://github.com/openfheorg/openfhe-development.git /tmp/openfhe
+          cd /tmp/openfhe && mkdir build && cd build
+          cmake -DCMAKE_INSTALL_PREFIX="${OPENFHE_PREFIX}" \
+            -DBUILD_BENCHMARKS=OFF -DBUILD_UNITTESTS=OFF -DBUILD_EXAMPLES=OFF \
+            -DBUILD_EXTRAS=OFF -DWITH_OPENMP=ON ..
+          make -j"$(nproc)"
+          sudo mkdir -p "${OPENFHE_PREFIX}"
+          sudo make install
+          sudo chown -R "$(id -u):$(id -g)" "${OPENFHE_PREFIX}"
+
+      - name: Register OpenFHE with the dynamic linker
+        run: |
+          echo "${OPENFHE_PREFIX}/lib" | sudo tee /etc/ld.so.conf.d/openfhe.conf >/dev/null
+          sudo ldconfig
+
+      - name: Configure cgo + benchmark env
+        run: |
+          {
+            echo "CGO_CXXFLAGS=-I${OPENFHE_PREFIX}/include/openfhe -I${OPENFHE_PREFIX}/include/openfhe/pke -I${OPENFHE_PREFIX}/include/openfhe/core -I${OPENFHE_PREFIX}/include/openfhe/cereal -I${OPENFHE_PREFIX}/include/openfhe/binfhe"
+            echo "CGO_LDFLAGS=-L${OPENFHE_PREFIX}/lib -Wl,-rpath,${OPENFHE_PREFIX}/lib"
+            echo "LD_LIBRARY_PATH=${OPENFHE_PREFIX}/lib:${LD_LIBRARY_PATH:-}"
+            echo "ARES_FHE_ALLOW_INSECURE=1"
+            echo "ARES_BENCH_HEAVY=${{ inputs.heavy && '1' || '0' }}"
+          } >> "$GITHUB_ENV"
+          if [ -n "${{ inputs.omp_threads }}" ]; then
+            echo "OMP_NUM_THREADS=${{ inputs.omp_threads }}" >> "$GITHUB_ENV"
+          fi
+
+      - name: free memory before benchmark
+        run: free -h || true
+
+      - name: keygen amortization profile (stage breakdown + sizes)
+        run: |
+          go test -tags openfhe -run TestKeygenAmortizationProfile -v -timeout 60m \
+            ./pkg/ares/crypto/cgo/ 2>&1 | tee /tmp/bench-profile.txt
+
+      - name: resident vs byte combine
+        run: |
+          go test -tags openfhe -run TestResidentCombineProfile -v -timeout 60m \
+            ./pkg/ares/crypto/cgo/ 2>&1 | tee /tmp/bench-resident.txt
+
+      - name: per-party share-gen RAM (incl. depth-30/2^17 worst case)
+        run: |
+          go test -tags openfhe -run TestPerPartyShareGenRAM -v -timeout 60m \
+            ./pkg/ares/crypto/cgo/ 2>&1 | tee /tmp/bench-per-party.txt
+          echo "=== peak memory after per-party run ==="; free -h || true
+
+      - name: upload benchmark results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keygen-bench-results
+          path: /tmp/bench-*.txt

@@ -64,6 +64,21 @@ int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
 int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle base, PublicKeyHandle own_pk,
     RotKeyHandle* out_share);
+// Memory-bounded rotation-key share generation: generates each rotation index's
+// share, serializes it, and frees it before the next, so peak RAM is one key
+// rather than the whole map. Returns total serialized bytes (shares not retained).
+int StreamedRotShareBytes(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle base, PublicKeyHandle own_pk, unsigned long long* out_total_bytes);
+// Fully-streamed 2-party rotation keygen: lead base + participant share per index,
+// peak bounded to a single rotation index across both parties.
+int StreamedTwoPartyRotKeygenBytes(CryptoContextHandle ctx,
+    SecretKeyShareHandle sk_lead, SecretKeyShareHandle sk_part, PublicKeyHandle pk_part,
+    unsigned long long* out_total_bytes);
+// Tests whether 'a' is shared across parties and measures full-key vs b-only
+// serialized size, for the CRS wire optimization (transmit only b, rebuild a).
+int MeasureBOnlyRotShare(CryptoContextHandle ctx,
+    SecretKeyShareHandle sk_lead, SecretKeyShareHandle sk_part, PublicKeyHandle pk_part,
+    unsigned long long* out_full_bytes, unsigned long long* out_b_only_bytes, int* out_a_shared);
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final);
