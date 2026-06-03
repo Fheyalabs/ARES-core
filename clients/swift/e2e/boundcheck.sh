@@ -3,6 +3,10 @@
 # Default client is Swift (swift run AresSmoke). Kotlin overrides via ARES_CLIENT_CMD.
 set -euo pipefail
 
+# Local e2e uses small/reduced CKKS rings; the bridge is secure-by-default, so opt
+# out for the local run (one-time warning is printed). NEVER export in production.
+export ARES_FHE_ALLOW_INSECURE=1
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 ARES_CLIENT_CMD="${ARES_CLIENT_CMD:-swift run --package-path $REPO_ROOT/clients/swift AresSmoke}"
 

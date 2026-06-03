@@ -3,7 +3,7 @@
 import XCTest
 @testable import AresClientFHE
 
-final class EvalRoundTripTests: XCTestCase {
+final class EvalRoundTripTests: FHETestCase {
     func testFullThresholdSmokePortYields17_0625() throws {
         let ctx = try CryptoContext(ringDim: 1024, scalingFactor: Double(UInt64(1) << 50), depth: 4)
         var pks: [PublicKey] = []; var sks: [SecretKeyShare] = []

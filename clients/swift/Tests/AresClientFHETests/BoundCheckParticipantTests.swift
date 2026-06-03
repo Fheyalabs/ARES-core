@@ -4,7 +4,7 @@ import XCTest
 import Crypto
 @testable import AresClientFHE
 
-final class BoundCheckParticipantTests: XCTestCase {
+final class BoundCheckParticipantTests: FHETestCase {
     // Build a context + a 2-party key so we have real serialized ciphertexts.
     private func setup() throws -> (CryptoContext, PublicKey, SecretKeyShare, SecretKeyShare) {
         let ctx = try CryptoContext(ringDim: 1024, scalingFactor: Double(UInt64(1) << 50), depth: 4)

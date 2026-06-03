@@ -4,7 +4,7 @@ import XCTest
 import Foundation
 @testable import AresClientFHE
 
-final class SerializationTests: XCTestCase {
+final class SerializationTests: FHETestCase {
     private func threeParties() throws -> (CryptoContext, PublicKey, [SecretKeyShare]) {
         let ctx = try CryptoContext(ringDim: 1024, scalingFactor: Double(UInt64(1) << 50), depth: 4)
         var pks: [PublicKey] = []; var sks: [SecretKeyShare] = []

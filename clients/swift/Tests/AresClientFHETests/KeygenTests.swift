@@ -3,7 +3,7 @@
 import XCTest
 @testable import AresClientFHE
 
-final class KeygenTests: XCTestCase {
+final class KeygenTests: FHETestCase {
     func testThreePartyKeygenChain() throws {
         let ctx = try CryptoContext(ringDim: 1024, scalingFactor: Double(UInt64(1) << 50), depth: 4)
         var pks: [PublicKey] = []

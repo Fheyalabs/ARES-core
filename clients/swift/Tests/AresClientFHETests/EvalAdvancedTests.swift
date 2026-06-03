@@ -3,7 +3,7 @@
 import XCTest
 @testable import AresClientFHE
 
-final class EvalAdvancedTests: XCTestCase {
+final class EvalAdvancedTests: FHETestCase {
     private func setupWithEvalKeys(_ parties: Int = 3, depth: UInt32 = 12) throws -> (CryptoContext, PublicKey, [SecretKeyShare]) {
         let ctx = try CryptoContext(ringDim: 1024, scalingFactor: Double(UInt64(1) << 50), depth: depth)
         var pks: [PublicKey] = []; var sks: [SecretKeyShare] = []

@@ -4,7 +4,7 @@ import XCTest
 import COpenFHEBridge
 @testable import AresClientFHE
 
-final class SmokeTests: XCTestCase {
+final class SmokeTests: FHETestCase {
     func testLinkedOpenFHEVersion() {
         XCTAssertEqual(AresFHE.openFHEVersion(), "v1.5.1")
     }

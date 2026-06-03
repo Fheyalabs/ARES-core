@@ -19,6 +19,7 @@
 #include <memory>
 #include <sstream>
 #include <stdlib.h>
+#include <cstdio>
 #include <stdexcept>
 #include <string.h>
 #include <string>
@@ -141,6 +142,29 @@ static double decrypt_first_slot(const CryptoContext<DCRTPoly>& cc,
     return values[0].real();
 }
 
+// ares_fhe_allow_insecure reports whether CKKS security enforcement should be
+// disabled (HEStd_NotSet). The DEFAULT is secure (HEStd_128_classic): a context
+// whose ring dimension is too small for the requested depth will be rejected by
+// OpenFHE's parameter generator. Tests and local dev that deliberately use small,
+// fast, sub-128-bit rings opt out by setting ARES_FHE_ALLOW_INSECURE to any
+// non-empty value other than "0". Opting out emits a one-time stderr warning so
+// an insecure run is never silent.
+static bool ares_fhe_allow_insecure() {
+    const char* v = getenv("ARES_FHE_ALLOW_INSECURE");
+    bool allow = (v != nullptr && v[0] != '\0' && !(v[0] == '0' && v[1] == '\0'));
+    if (allow) {
+        static bool warned = false;
+        if (!warned) {
+            fprintf(stderr,
+                "[ares/openfhe] WARNING: ARES_FHE_ALLOW_INSECURE set -> CKKS security "
+                "level is HEStd_NotSet (NO 128-bit guarantee). For tests/dev only; "
+                "never in production.\n");
+            warned = true;
+        }
+    }
+    return allow;
+}
+
 static CryptoContext<DCRTPoly> make_ckks_context(uint32_t batch_size, uint32_t depth,
     int scaling_mod_size, int first_mod_size) {
     CCParams<CryptoContextCKKSRNS> parameters;
@@ -148,7 +172,7 @@ static CryptoContext<DCRTPoly> make_ckks_context(uint32_t batch_size, uint32_t d
     parameters.SetScalingModSize(scaling_mod_size > 0 ? scaling_mod_size : 50);
     parameters.SetFirstModSize(first_mod_size > 0 ? first_mod_size : 60);
     parameters.SetBatchSize(batch_size);
-    parameters.SetSecurityLevel(HEStd_NotSet);
+    parameters.SetSecurityLevel(ares_fhe_allow_insecure() ? HEStd_NotSet : HEStd_128_classic);
     parameters.SetRingDim(std::max<uint32_t>(1 << 10, batch_size * 2));
 
     auto cc = GenCryptoContext(parameters);
@@ -1109,6 +1133,10 @@ int ARESOpenFHESmoke(char* err, size_t err_len) {
         parameters.SetScalingModSize(50);
         parameters.SetFirstModSize(60);
         parameters.SetBatchSize(8);
+        // Intentionally HEStd_NotSet: this is a fixed ring-256 toolchain self-test
+        // (verifies the OpenFHE link + a trivial encrypt/mult/decrypt), never a real
+        // session. A secure ring would defeat its purpose. Real contexts go through
+        // make_ckks_context, which is secure-by-default (see ares_fhe_allow_insecure).
         parameters.SetSecurityLevel(HEStd_NotSet);
         parameters.SetRingDim(1 << 8);
 
