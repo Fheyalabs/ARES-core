@@ -49,6 +49,68 @@ moving toward.
   blocking most of the work (ARES-core 1.0 stable + Fheya app Phase
   1b/2/D real implementations).
 
+## [0.7.5] — 2026-06-03
+
+### Added
+
+- **Swift ARES client library (`clients/swift`, SwiftPM).** A full client for the
+  ARES protocol:
+  - *Protocol-crypto (L1):* SC-2 N-layer onion routing (X25519 → HKDF-SHA256 →
+    AES-256-GCM), SC-10 lineage DAG nodes with cross-language golden-vector parity
+    (Go ≡ Python ≡ Swift), v2 wire frames, and Ed25519 device signing over canonical
+    JSON.
+  - *Threshold-CKKS FHE (L2, `AresClientFHE`, gated behind `ARES_OPENFHE`):* binds
+    the canonical `pkg/ares/crypto/cgo/openfhe_wrapper` C bridge — N-party keygen
+    chain, eval-mult + eval-sum key protocols, encrypt, partial-decrypt, fuse, eval
+    ops, and full serialization, behind RAII handles.
+  - *Transport (L3, `AresTransport`):* WebSocket `Session` / `AdminClient` /
+    `Orchestrator` + `GossipParticipant`, proven by local cross-language end-to-end
+    runs (sealed-bid auction FHE-ciphertext interop; voting onion-shuffle + lineage
+    interop).
+- **Kotlin/Android ARES client library (`clients/kotlin`, Gradle).** Mirrors the
+  Swift client: L1 (Bouncy Castle X25519/Ed25519/HKDF + JCA) with golden-vector
+  parity (signature byte-exact via deterministic Ed25519); L3 transport over OkHttp;
+  threshold-CKKS FHE via JNI over the same canonical `openfhe_wrapper`
+  (`ares-client-fhe`); voting + auction + bound-check cross-language e2e.
+- **Client-side ARES-BC `BoundCheckParticipant` (Swift + Kotlin).** Implicit
+  pass/fail verification of the server's `check_commitment` plus the party's
+  partial-decrypt contribution; the application sees only a `BoundCheckResult` — the
+  integrity check is transparent, and what to do on failure is application policy.
+- **`examples/bounded_admission`.** A runnable ARES-BC session-service (invite →
+  pre-shared keygen → bound check → settle) that broadcasts the full check-ciphertext
+  + commitment set to every party for the N-of-N decryption quorum. Drives the
+  cross-language bound-check e2e: in-bound admitted, out-of-bound flagged, tampered
+  `enc_check` rejected by the implicit check.
+
+### Changed
+
+- **CKKS contexts are secure-by-default (`HEStd_128_classic`).** The OpenFHE bridge
+  previously created contexts with `HEStd_NotSet`, silently disabling 128-bit
+  security enforcement; an under-provisioned ring (too small for the requested
+  multiplicative depth) is now rejected at context creation. Tests and local dev that
+  deliberately use small, fast, sub-128-bit rings opt out via
+  `ARES_FHE_ALLOW_INSECURE=1`, which falls back to `HEStd_NotSet` and prints a
+  one-time stderr warning (never silent).
+
+### Fixed
+
+- **Transport verifies lineage frames.** v2 frames carrying lineage now route through
+  the SC-10 `HandleLineageMessage` verification at the service layer instead of plain
+  `HandleMessage` (v1 frames unaffected).
+- **Swift transport:** a timed-out `receiveAny` now evicts and resumes its waiter,
+  fixing an orphaned-continuation leak.
+- **`examples/voting`:** `PhaseSettle.ExitState` corrected from a dead `BROADCASTING`
+  state to `StateNone`; the anonymous onion-bucket accessor is exported so a
+  WebSocket deployment of the shuffle arc can relay peeled onions.
+
+### Build
+
+- **Kotlin builds pin the Gradle daemon to JDK 17.** The bundled Kotlin compiler
+  crashes when run on a host JDK that postdates it (e.g. JDK 26). The daemon-JVM
+  criteria (`clients/kotlin/gradle/gradle-daemon-jvm.properties`, resolved via the
+  foojay convention) make fresh builds reproducible regardless of the host's default
+  JDK.
+
 ## [0.7.0] — 2026-05-31
 
 ### Added
@@ -507,7 +569,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.0...v0.7.5
 [0.7.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.2...v0.6.0
 [0.5.2]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.1...v0.5.2
