@@ -44,6 +44,8 @@ int GenEvalMultKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
 int GenRotKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle* out_share);
 
+int SingleKeyEvalMultKeyGen(CryptoContextHandle ctx, SecretKeyShareHandle sk);
+
 int EvalMultKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     EvalMultKeyHandle* out_base);
 int EvalMultKeySwitchShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
@@ -87,6 +89,8 @@ int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key);
 // Encrypt/Decrypt
 CiphertextHandle Encrypt(CryptoContextHandle ctx, PublicKeyHandle pk,
     double* values, int n_values);
+int DecryptSingle(CryptoContextHandle ctx, CiphertextHandle ct,
+    SecretKeyShareHandle sk, double* out_values, int* out_n_values);
 int MultiDecMain(CryptoContextHandle ctx, CiphertextHandle ct,
     SecretKeyShareHandle sk, CiphertextHandle* out_partial);
 int MultiDecFusion(CryptoContextHandle ctx,
@@ -199,6 +203,31 @@ int ARESFullFusePayloadCKKS(
     char* err,
     size_t err_len
 );
+
+typedef void* LWEPrivateKeyHandle;
+
+// Scheme-switching argmin (CKKS→FHEW LUT, depth-independent, single-key only).
+// Packs num_values keys into slots 0..num_values-1 of a single ciphertext,
+// runs EvalMinSchemeSwitching (FHEW-based exact argmin), and returns
+// [out_min, out_argmin] as two CKKS ciphertexts. out_argmin is one-hot over
+// num_values slots. scale_sign is the scaling factor applied before switching
+// to FHEW (default 1.0 if ≤ 0). num_values must be a power of two.
+//
+// On success returns 0. On failure returns non-zero and writes to err.
+int SchemeSwitchingArgmin(
+    CryptoContextHandle ctx,
+    PublicKeyHandle pk,
+    SecretKeyShareHandle sk,
+    CiphertextHandle packed_ct,
+    uint32_t num_values,
+    double scale_sign,
+    CiphertextHandle* out_min,
+    CiphertextHandle* out_argmin,
+    char* err,
+    size_t err_len
+);
+
+void FreeLWEPrivateKey(LWEPrivateKeyHandle key);
 
 // Memory management
 void FreePublicKey(PublicKeyHandle pk);

@@ -574,6 +574,17 @@ int MultiAddPublicKeys(CryptoContextHandle ctx, PublicKeyHandle* pks, int n_keys
     }
 }
 
+int SingleKeyEvalMultKeyGen(CryptoContextHandle ctx, SecretKeyShareHandle sk) {
+    try {
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        c->cc->EvalMultKeyGen(s->sk);
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
 int GenEvalMultKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk, EvalMultKeyHandle* out_share) {
     try {
         if (out_share == nullptr) {
@@ -932,6 +943,31 @@ CiphertextHandle Encrypt(CryptoContextHandle ctx, PublicKeyHandle pk, double* va
         return reinterpret_cast<CiphertextHandle>(new ARESCiphertext{c->cc->Encrypt(p->pk, pt)});
     } catch (...) {
         return nullptr;
+    }
+}
+
+// DecryptSingle: direct single-key Decrypt (not threshold). For use with
+// standard (non-multiparty) key pairs from KeyGenFirst.
+int DecryptSingle(CryptoContextHandle ctx, CiphertextHandle ct, SecretKeyShareHandle sk, double* out_values, int* out_n_values) {
+    try {
+        if (ct == nullptr || sk == nullptr || out_values == nullptr || out_n_values == nullptr || *out_n_values <= 0) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        Plaintext pt;
+        c->cc->Decrypt(s->sk, as_ct(ct)->ct, &pt);
+        int n = std::min(*out_n_values, static_cast<int>(pt->GetLength()));
+        for (int i = 0; i < n; i++) {
+            out_values[i] = pt->GetCKKSPackedValue()[i].real();
+            if (std::isnan(out_values[i]) || std::isinf(out_values[i])) {
+                out_values[i] = 0.0;
+            }
+        }
+        *out_n_values = n;
+        return 0;
+    } catch (...) {
+        return 1;
     }
 }
 
@@ -1727,6 +1763,100 @@ int ARESFullFusePayloadCKKS(
         return 1;
     } catch (...) {
         set_error(err, err_len, "unknown OpenFHE full-fuse failure");
+        return 1;
+    }
+}
+
+// ── Scheme-switching argmin (CKKS→FHEW LUT, depth-independent, single-key only) ──
+
+struct ARESLWESecretKey {
+    LWEPrivateKey sk;
+};
+
+static ARESLWESecretKey* as_lwe(LWEPrivateKeyHandle handle) {
+    return reinterpret_cast<ARESLWESecretKey*>(handle);
+}
+
+void FreeLWEPrivateKey(LWEPrivateKeyHandle key) {
+    if (key) {
+        delete as_lwe(key);
+    }
+}
+
+int SchemeSwitchingArgmin(
+    CryptoContextHandle ctx,
+    PublicKeyHandle pk,
+    SecretKeyShareHandle sk,
+    CiphertextHandle packed_ct,
+    uint32_t num_values,
+    double scale_sign,
+    CiphertextHandle* out_min,
+    CiphertextHandle* out_argmin,
+    char* err,
+    size_t err_len
+) {
+    (void)err;
+    (void)err_len;
+    try {
+        auto* c = as_ctx(ctx);
+        auto* pub = as_pk(pk);
+        auto* sec = as_sk(sk);
+        auto* in_ct = as_ct(packed_ct);
+
+        if (num_values < 2 || (num_values & (num_values - 1)) != 0) {
+            if (err) snprintf(err, err_len, "num_values must be a power of two >= 2, got %u", num_values);
+            return 1;
+        }
+        if (scale_sign <= 0.0) {
+            scale_sign = 1.0;
+        }
+
+        // Enable scheme switching on this context (not enabled by default)
+        c->cc->Enable(SCHEMESWITCH);
+
+        // Build scheme-switching params: exact argmin via FHEW LUT
+        SchSwchParams params;
+        c->cc->SetParamsFromCKKSCryptocontext(params);
+        params.SetSecurityLevelCKKS(HEStd_128_classic);
+        params.SetSecurityLevelFHEW(STD128);
+        params.SetNumSlotsCKKS(num_values);
+        params.SetBatchSize(num_values);
+        params.SetNumValues(num_values);
+        params.SetComputeArgmin(true);
+        params.SetOneHotEncoding(true);
+        params.SetUseAltArgmin(false);
+        uint32_t pLWE = 4;
+        params.SetCtxtModSizeFHEWLargePrec(25);
+        params.SetCtxtModSizeFHEWIntermedSwch(27);
+
+        // Setup: creates FHEW context, returns LWE secret key
+        auto lwesk = c->cc->EvalSchemeSwitchingSetup(params);
+
+        // Generate switching keys (rotation, conjugation, switching) into the CKKS context
+        KeyPair<DCRTPoly> kp;
+        kp.publicKey = pub->pk;
+        kp.secretKey = sec->sk;
+        c->cc->EvalSchemeSwitchingKeyGen(kp, lwesk);
+
+        // Run the exact argmin: returns [min_ciphertext, argmin_ciphertext]
+        auto result = c->cc->EvalMinSchemeSwitching(
+            in_ct->ct, pub->pk, num_values, num_values, pLWE, scale_sign);
+
+        // EvalMinSchemeSwitching returns [min, argmin]. The argmin is one-hot
+        // when oneHotEncoding=true (spanning num_values slots).
+        if (result.size() < 2) {
+            if (err) snprintf(err, err_len, "EvalMinSchemeSwitching returned %zu results, expected >=2", result.size());
+            return 1;
+        }
+
+        *out_min = reinterpret_cast<CiphertextHandle>(new ARESCiphertext{result[0]});
+        *out_argmin = reinterpret_cast<CiphertextHandle>(new ARESCiphertext{result[1]});
+        return 0;
+    } catch (const std::exception& ex) {
+        if (err) snprintf(err, err_len, "scheme-switching argmin: %s", ex.what());
+        return 1;
+    } catch (...) {
+        if (err) snprintf(err, err_len, "scheme-switching argmin: unknown error");
         return 1;
     }
 }
