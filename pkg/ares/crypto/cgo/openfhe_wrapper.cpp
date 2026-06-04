@@ -1106,30 +1106,54 @@ int EvalArgmax(CryptoContextHandle ctx,
         // Precompute sharp(cts[i] - cts[j]) once per ordered pair.
         // For i != j: pair[i][j] = p(cts[i] - cts[j]) ≈ 1 if cts[i] > cts[j], ≈ 0 otherwise.
         // mask[i] = ∏_{j != i} pair[i][j].
+        //
+        // Degree-1 optimisation: p(x) = c₀ + c₁·x is evaluated with level-free
+        // EvalMultConst + EvalAdd (plaintext) — saves 1 multiplicative level vs
+        // Horner form, which is the difference between n=5 and n=6 fitting at
+        // ring 2¹⁴ / depth 4.
+        bool deg1 = (coeffs.size() == 2);
         std::vector<std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>>> pair(
             n_cts, std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>>(n_cts));
         for (int i = 0; i < n_cts; ++i) {
             for (int j = 0; j < n_cts; ++j) {
                 if (i == j) continue;
                 auto diff = c->cc->EvalSub(as_ct(cts[i])->ct, as_ct(cts[j])->ct);
-                pair[i][j] = c->cc->EvalPoly(diff, coeffs);
+                if (deg1) {
+                    auto scaled = c->cc->EvalMult(diff, coeffs[1]);
+                    auto constant = c->cc->MakeCKKSPackedPlaintext(
+                        std::vector<double>(c->batch_size, coeffs[0]));
+                    pair[i][j] = c->cc->EvalAdd(scaled, constant);
+                } else {
+                    pair[i][j] = c->cc->EvalPoly(diff, coeffs);
+                }
             }
         }
 
+        // Balanced product tree: for n_cts factors, depth = ceil(log2(n_cts-1)).
+        // The sequential chain (acc=acc*next) would need n_cts-2 levels — with
+        // a balanced tree, n=6 needs 3 levels instead of 4, which is the
+        // difference between fitting ring 2^14 depth 4 or not.
         std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>> masks(n_cts);
         for (int i = 0; i < n_cts; ++i) {
-            lbcrypto::Ciphertext<lbcrypto::DCRTPoly> acc;
-            bool first = true;
+            std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>> factors;
+            factors.reserve(n_cts - 1);
             for (int j = 0; j < n_cts; ++j) {
-                if (i == j) continue;
-                if (first) {
-                    acc = pair[i][j];
-                    first = false;
-                } else {
-                    acc = c->cc->EvalMult(acc, pair[i][j]);
-                }
+                if (i != j) factors.push_back(pair[i][j]);
             }
-            masks[i] = acc;
+            // Balanced reduce: pair up and multiply until one remains
+            while (factors.size() > 1) {
+                std::vector<lbcrypto::Ciphertext<lbcrypto::DCRTPoly>> next;
+                next.reserve((factors.size() + 1) / 2);
+                for (size_t k = 0; k < factors.size(); k += 2) {
+                    if (k + 1 == factors.size()) {
+                        next.push_back(factors[k]);
+                    } else {
+                        next.push_back(c->cc->EvalMult(factors[k], factors[k+1]));
+                    }
+                }
+                factors = std::move(next);
+            }
+            masks[i] = factors[0];
         }
 
         for (int i = 0; i < n_cts; ++i) {

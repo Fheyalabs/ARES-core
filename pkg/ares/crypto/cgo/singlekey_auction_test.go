@@ -20,7 +20,7 @@ func TestSingleKeyAuctionFull_EndToEnd(t *testing.T) {
 
 	// Full composite key assembly + argmax fits n=2,3 at deg=1 (ring 2^14/depth 4).
 	// n=4,5 need more ring/depth for homomorphic key assembly.
-	for _, n := range []int{2, 3} {
+	for _, n := range []int{2, 3, 4, 5} {
 		n := n
 		for trial := 0; trial < 5; trial++ {
 			t.Run(fmt.Sprintf("n=%d-trial=%d", n, trial), func(t *testing.T) {

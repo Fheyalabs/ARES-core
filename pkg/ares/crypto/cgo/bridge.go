@@ -1644,39 +1644,35 @@ func SingleKeyAuctionFull(
 	}
 	scale := C.double(0.9 / maxKeySpan)
 
-	// Build composite keys: key_i = K·(price-floor)/span + WStar·(5-★) + WDist·dist²
-	// Then negate+scale for argmax: score_i = -scale · key_i
+	// Build scores for argmax: score_i = -scale · [K·(price-floor)/span + WStar·(5-★) + WDist·dist²]
+	// = EvalMultConst(price, -scale·K/span) + Enc(-scale·offset)
+	// Costs exactly 1 level (the single EvalMultConst). Negation and offset are bundled.
 	scores := make([]C.CiphertextHandle, n)
 	for i := 0; i < n; i++ {
-		// offset = WStar·starPenalty + WDist·dist² - K·floor/span
-		offset := wsc*C.double(5.0-starNorms[i]) + wdc*C.double(distSqs[i]) - Kc*C.double(floor)/C.double(span)
+		// fullOffset = -scale * [WStar·(5-★) + WDist·dist² - K·floor/span]
+		fullOffset := -scale * (wsc*C.double(5.0-starNorms[i]) + wdc*C.double(distSqs[i]) - Kc*C.double(floor)/C.double(span))
 
-		offVals := make([]C.double, 4); offVals[0] = offset
+		offVals := make([]C.double, 4); offVals[0] = fullOffset
 		offCt := C.Encrypt(ctx, cPk, &offVals[0], 4)
 		if offCt == nil { return -1, nil, fmt.Errorf("encrypt offset[%d] failed", i) }
 		defer C.FreeCiphertext(offCt)
 
-		// Encrypt raw price
+		// Encrypt raw price, then scale into the score domain in one level
 		pVals := make([]C.double, 4); pVals[0] = C.double(priceCents[i])
 		pCt := C.Encrypt(ctx, cPk, &pVals[0], 4)
 		if pCt == nil { return -1, nil, fmt.Errorf("encrypt price[%d] failed", i) }
 		defer C.FreeCiphertext(pCt)
 
-		// (K/span)*price — EvalMultConst is level-free
-		scaledPrice := C.EvalMultConst(ctx, pCt, Kc/C.double(span))
+		// scaledPrice = price * (-scale·K/span) — costs 1 EvalMult level
+		scaledPrice := C.EvalMultConst(ctx, pCt, -scale*Kc/C.double(span))
 		if scaledPrice == nil { return -1, nil, fmt.Errorf("scale price[%d] failed", i) }
 
-		// key = (K/span)*price + offset
-		key := C.EvalAdd(ctx, scaledPrice, offCt)
+		// score = scaledPrice + offset (EvalAdd is level-free)
+		score := C.EvalAdd(ctx, scaledPrice, offCt)
 		C.FreeCiphertext(scaledPrice)
-		if key == nil { return -1, nil, fmt.Errorf("assemble key[%d] failed", i) }
-		defer C.FreeCiphertext(key)
-
-		// score = -scale * key
-		negCt := C.EvalMultConst(ctx, key, -scale)
-		if negCt == nil { return -1, nil, fmt.Errorf("negate/scale[%d] failed", i) }
-		defer C.FreeCiphertext(negCt)
-		scores[i] = negCt
+		if score == nil { return -1, nil, fmt.Errorf("assemble score[%d] failed", i) }
+		defer C.FreeCiphertext(score)
+		scores[i] = score
 	}
 
 	// Argmax: step(x) = 0.5+0.75x-0.25x^3 (deg=3) or x/2+0.5 (deg=1)
