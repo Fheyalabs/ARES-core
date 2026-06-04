@@ -1670,6 +1670,150 @@ func SingleKeyAuctionServer(
 	return encryptedMasks, nil
 }
 
+// SingleKeyEncrypt encrypts a single scalar under a single-party public key,
+// returning a serialized ciphertext (4-slot, value in slot 0). The caller
+// uses this to encrypt a bid locally so the server never sees the plaintext.
+func SingleKeyEncrypt(params ContractParams, pk []byte, value float64) ([]byte, error) {
+	if len(pk) == 0 {
+		return nil, fmt.Errorf("pk required")
+	}
+
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	cPk, err := deserializePublicKey(ctx, pk)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize pk: %w", err)
+	}
+	defer C.FreePublicKey(cPk)
+
+	vals := make([]C.double, 4)
+	vals[0] = C.double(value)
+	ct := C.Encrypt(ctx, cPk, &vals[0], 4)
+	if ct == nil {
+		return nil, fmt.Errorf("encrypt failed")
+	}
+	defer C.FreeCiphertext(ct)
+
+	return serializeCiphertext(ct)
+}
+
+// SingleKeyAuctionServerEnc is the privacy-preserving variant of
+// SingleKeyAuctionServer. Instead of plaintext prices, it accepts
+// pre-encrypted bid ciphertexts produced by each bidder via
+// SingleKeyEncrypt. The server never learns plaintext prices; it only
+// manipulates ciphertexts homomorphically.
+//
+// The server still encrypts the server-authoritative offset (rating / distance)
+// because those values are server-visible by design. Only the price component
+// is kept opaque through bidder-side encryption.
+func SingleKeyAuctionServerEnc(
+	params ContractParams,
+	pk []byte,
+	encBids [][]byte,
+	starNorms, distSqs []float64,
+	nonces [][]byte,
+	floorCents, capCents int,
+	w AuctionWeights,
+	degree int,
+) (encryptedMasks [][]byte, err error) {
+	n := len(encBids)
+	if n < 2 {
+		return nil, fmt.Errorf("need >= 2 bids, got %d", n)
+	}
+	if len(starNorms) != n || len(distSqs) != n || len(nonces) != n {
+		return nil, fmt.Errorf("mismatched input lengths")
+	}
+	if len(pk) == 0 {
+		return nil, fmt.Errorf("pk required")
+	}
+
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	cPk, err := deserializePublicKey(ctx, pk)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize pk: %w", err)
+	}
+	defer C.FreePublicKey(cPk)
+
+	span := float64(capCents - floorCents)
+	if span <= 0 {
+		span = 1
+	}
+	floor := float64(floorCents)
+	Kc, wsc, wdc := C.double(w.K), C.double(w.WStar), C.double(w.WDist)
+
+	maxKeySpan := w.K + w.WStar*5.0
+	for _, d := range distSqs {
+		if w.WDist*d > maxKeySpan {
+			maxKeySpan = w.WDist * d
+		}
+	}
+	scale := C.double(0.9 / maxKeySpan)
+
+	scores := make([]C.CiphertextHandle, n)
+	for i := 0; i < n; i++ {
+		fullOffset := -scale * (wsc*C.double(5.0-starNorms[i]) + wdc*C.double(distSqs[i]) - Kc*C.double(floor)/C.double(span))
+		offVals := make([]C.double, 4)
+		offVals[0] = fullOffset
+		offCt := C.Encrypt(ctx, cPk, &offVals[0], 4)
+		if offCt == nil {
+			return nil, fmt.Errorf("encrypt offset[%d] failed", i)
+		}
+		defer C.FreeCiphertext(offCt)
+
+		// Price comes in pre-encrypted from the bidder — deserialize it.
+		pCt, err := deserializeCiphertext(ctx, encBids[i])
+		if err != nil {
+			return nil, fmt.Errorf("deserialize encBid[%d]: %w", i, err)
+		}
+		defer C.FreeCiphertext(pCt)
+
+		scaledPrice := C.EvalMultConst(ctx, pCt, -scale*Kc/C.double(span))
+		if scaledPrice == nil {
+			return nil, fmt.Errorf("scale price[%d] failed", i)
+		}
+		score := C.EvalAdd(ctx, scaledPrice, offCt)
+		C.FreeCiphertext(scaledPrice)
+		if score == nil {
+			return nil, fmt.Errorf("assemble score[%d] failed", i)
+		}
+		defer C.FreeCiphertext(score)
+		scores[i] = score
+	}
+
+	sharp := []C.double{0.5, 0.75, 0, -0.25}
+	if degree == 1 {
+		sharp = []C.double{0.5, 0.5}
+	}
+	cMasks := make([]C.CiphertextHandle, n)
+	rc := C.EvalArgmax(ctx, &scores[0], C.int(n), &sharp[0], C.int(len(sharp)), &cMasks[0])
+	if rc != 0 {
+		return nil, fmt.Errorf("argmax failed (depth %d insufficient for n=%d)", params.Depth, n)
+	}
+	defer func() {
+		for _, m := range cMasks {
+			C.FreeCiphertext(m)
+		}
+	}()
+
+	encryptedMasks = make([][]byte, n)
+	for i := 0; i < n; i++ {
+		encryptedMasks[i], err = serializeCiphertext(cMasks[i])
+		if err != nil {
+			return nil, fmt.Errorf("serialize mask[%d]: %w", i, err)
+		}
+	}
+	return encryptedMasks, nil
+}
+
 // SingleKeyAuctionDecrypt decrypts encrypted masks with the rider's secret key.
 // Returns per-driver mask values and the winner index (argmax). The agreed price
 // is the winner's lineage-committed bid — verified by checking the driver's
