@@ -38,32 +38,34 @@ jobs:
         with:
           go-version: "1.22"
 
-      - name: Cache OpenFHE install
-        id: cache-openfhe
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.OPENFHE_PREFIX }}
-          key: openfhe-${{ env.OPENFHE_VERSION }}-${{ runner.os }}-${{ runner.arch }}-v1
-
-      - name: Build + install OpenFHE ${{ env.OPENFHE_VERSION }}
-        if: steps.cache-openfhe.outputs.cache-hit != 'true'
+      # A persistent self-hosted runner already has OpenFHE provisioned (for the
+      # harness / app), so use it directly — don't build from source per run (the
+      # box has no build toolchain, and per-run builds are the wrong model). Detect
+      # the install prefix; fail with guidance if it's missing.
+      - name: Locate OpenFHE on the runner
         run: |
-          set -euo pipefail
-          git clone --branch "${OPENFHE_VERSION}" --depth 1 \
-            https://github.com/openfheorg/openfhe-development.git /tmp/openfhe
-          cd /tmp/openfhe && mkdir build && cd build
-          cmake -DCMAKE_INSTALL_PREFIX="${OPENFHE_PREFIX}" \
-            -DBUILD_BENCHMARKS=OFF -DBUILD_UNITTESTS=OFF -DBUILD_EXAMPLES=OFF \
-            -DBUILD_EXTRAS=OFF -DWITH_OPENMP=ON ..
-          make -j"$(nproc)"
-          sudo mkdir -p "${OPENFHE_PREFIX}"
-          sudo make install
-          sudo chown -R "$(id -u):$(id -g)" "${OPENFHE_PREFIX}"
-
-      - name: Register OpenFHE with the dynamic linker
-        run: |
-          echo "${OPENFHE_PREFIX}/lib" | sudo tee /etc/ld.so.conf.d/openfhe.conf >/dev/null
-          sudo ldconfig
+          set -uo pipefail
+          PREFIX=""
+          for p in /usr/local /opt/openfhe /opt/openfhe-development "$HOME/openfhe"; do
+            if ls "$p"/lib/libOPENFHEcore.so* >/dev/null 2>&1 && [ -d "$p/include/openfhe" ]; then
+              PREFIX="$p"; break
+            fi
+          done
+          if [ -z "$PREFIX" ]; then
+            LIB=$(ldconfig -p 2>/dev/null | awk '/libOPENFHEcore/{print $NF; exit}')
+            if [ -n "$LIB" ]; then
+              CAND=$(dirname "$(dirname "$LIB")")
+              [ -d "$CAND/include/openfhe" ] && PREFIX="$CAND"
+            fi
+          fi
+          if [ -z "$PREFIX" ]; then
+            echo "::error::OpenFHE 1.5.x + dev headers not found (checked /usr/local, /opt/openfhe, ldconfig)."
+            echo "Provision OpenFHE on the runner box once (lib/libOPENFHEcore.so* + include/openfhe), then re-run."
+            exit 1
+          fi
+          echo "OPENFHE_PREFIX=$PREFIX" >> "$GITHUB_ENV"
+          echo "Using OpenFHE at $PREFIX:"
+          ls -la "$PREFIX"/lib/libOPENFHEcore.so* 2>/dev/null | head -2
 
       - name: Configure cgo + benchmark env
         run: |
