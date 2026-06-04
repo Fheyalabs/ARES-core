@@ -1587,51 +1587,38 @@ func SingleKeyDecrypt(params ContractParams, sk, ct []byte, nSlots int) ([]float
 // AuctionWeights parameterises the lexicographic ranking key.
 type AuctionWeights struct{ K, WStar, WDist float64 }
 
-// SingleKeyAuctionFull runs the complete single-key reverse auction end-to-end
-// at ring 2^14/depth 4. Returns winner index and per-driver mask values.
-// The agreed price is the winner's lineage-committed bid (plaintext lookup).
+// SingleKeyAuctionServer runs the server-side reverse auction on encrypted bids.
+// It takes only the rider's PUBLIC key (never the secret key). Returns serialized
+// encrypted mask ciphertexts — the server CANNOT decrypt them. The rider calls
+// SingleKeyAuctionDecrypt locally to learn the winner.
 //
-// Binding: the winning driver's bid was lineage-committed before the auction
-// (H(enc_price_j || nonce_j || session_id)), so a server that tampered with
-// the argmax to pick a different winner would need to forge that commitment.
-// The rider decrypts the masks to find the winner, then verifies the lineage
-// commitment on the winning bid.
-//
-// Shared secret for OTP/bilateral verification: SHA256(nonces[winner] || sessionID).
-// Both rider (who decrypts masks) and winning driver (who holds nonce) derive it.
-func SingleKeyAuctionFull(
+// Each driver's bid must be signed with their long-term identity key:
+//   sig_i = Sign(sk_driver_i, H(enc_bid_i || nonce_i || session_id))
+// The rider verifies the winning driver's signature after decryption.
+// This prevents server-spawned ghost drivers from winning without detection.
+func SingleKeyAuctionServer(
 	params ContractParams,
+	pk []byte,
 	priceCents []int, starNorms, distSqs []float64,
 	nonces [][]byte,
 	floorCents, capCents int,
 	w AuctionWeights,
 	degree int,
-) (winnerIdx int, masks []float64, err error) {
+) (encryptedMasks [][]byte, err error) {
 	n := len(priceCents)
-	if n < 2 {
-		return -1, nil, fmt.Errorf("need >= 2 bids, got %d", n)
-	}
+	if n < 2 { return nil, fmt.Errorf("need >= 2 bids, got %d", n) }
 	if len(starNorms) != n || len(distSqs) != n || len(nonces) != n {
-		return -1, nil, fmt.Errorf("mismatched input lengths")
+		return nil, fmt.Errorf("mismatched input lengths")
 	}
+	if pk == nil || len(pk) == 0 { return nil, fmt.Errorf("pk required") }
 
 	ctx, err := createContractContext(params)
-	if err != nil {
-		return -1, nil, err
-	}
+	if err != nil { return nil, err }
 	defer C.FreeCryptoContext(ctx)
 
-	var cPk C.PublicKeyHandle
-	var cSk C.SecretKeyShareHandle
-	if C.KeyGenFirst(ctx, &cPk, &cSk) != 0 {
-		return -1, nil, fmt.Errorf("keygen failed")
-	}
+	cPk, err := deserializePublicKey(ctx, pk)
+	if err != nil { return nil, fmt.Errorf("deserialize pk: %w", err) }
 	defer C.FreePublicKey(cPk)
-	defer C.FreeSecretKeyShare(cSk)
-
-	if C.SingleKeyEvalMultKeyGen(ctx, cSk) != 0 {
-		return -1, nil, fmt.Errorf("eval-mult keygen failed")
-	}
 
 	span := float64(capCents - floorCents)
 	if span <= 0 { span = 1 }
@@ -1644,58 +1631,80 @@ func SingleKeyAuctionFull(
 	}
 	scale := C.double(0.9 / maxKeySpan)
 
-	// Build scores for argmax: score_i = -scale · [K·(price-floor)/span + WStar·(5-★) + WDist·dist²]
-	// = EvalMultConst(price, -scale·K/span) + Enc(-scale·offset)
-	// Costs exactly 1 level (the single EvalMultConst). Negation and offset are bundled.
 	scores := make([]C.CiphertextHandle, n)
 	for i := 0; i < n; i++ {
-		// fullOffset = -scale * [WStar·(5-★) + WDist·dist² - K·floor/span]
 		fullOffset := -scale * (wsc*C.double(5.0-starNorms[i]) + wdc*C.double(distSqs[i]) - Kc*C.double(floor)/C.double(span))
-
 		offVals := make([]C.double, 4); offVals[0] = fullOffset
 		offCt := C.Encrypt(ctx, cPk, &offVals[0], 4)
-		if offCt == nil { return -1, nil, fmt.Errorf("encrypt offset[%d] failed", i) }
+		if offCt == nil { return nil, fmt.Errorf("encrypt offset[%d] failed", i) }
 		defer C.FreeCiphertext(offCt)
 
-		// Encrypt raw price, then scale into the score domain in one level
 		pVals := make([]C.double, 4); pVals[0] = C.double(priceCents[i])
 		pCt := C.Encrypt(ctx, cPk, &pVals[0], 4)
-		if pCt == nil { return -1, nil, fmt.Errorf("encrypt price[%d] failed", i) }
+		if pCt == nil { return nil, fmt.Errorf("encrypt price[%d] failed", i) }
 		defer C.FreeCiphertext(pCt)
 
-		// scaledPrice = price * (-scale·K/span) — costs 1 EvalMult level
 		scaledPrice := C.EvalMultConst(ctx, pCt, -scale*Kc/C.double(span))
-		if scaledPrice == nil { return -1, nil, fmt.Errorf("scale price[%d] failed", i) }
-
-		// score = scaledPrice + offset (EvalAdd is level-free)
+		if scaledPrice == nil { return nil, fmt.Errorf("scale price[%d] failed", i) }
 		score := C.EvalAdd(ctx, scaledPrice, offCt)
 		C.FreeCiphertext(scaledPrice)
-		if score == nil { return -1, nil, fmt.Errorf("assemble score[%d] failed", i) }
+		if score == nil { return nil, fmt.Errorf("assemble score[%d] failed", i) }
 		defer C.FreeCiphertext(score)
 		scores[i] = score
 	}
 
-	// Argmax: step(x) = 0.5+0.75x-0.25x^3 (deg=3) or x/2+0.5 (deg=1)
 	sharp := []C.double{0.5, 0.75, 0, -0.25}
 	if degree == 1 { sharp = []C.double{0.5, 0.5} }
 	cMasks := make([]C.CiphertextHandle, n)
 	rc := C.EvalArgmax(ctx, &scores[0], C.int(n), &sharp[0], C.int(len(sharp)), &cMasks[0])
 	if rc != 0 {
-		return -1, nil, fmt.Errorf("argmax failed (depth %d insufficient for n=%d)", params.Depth, n)
+		return nil, fmt.Errorf("argmax failed (depth %d insufficient for n=%d)", params.Depth, n)
 	}
 	defer func() { for _, m := range cMasks { C.FreeCiphertext(m) } }()
 
-	// Decrypt masks — single-key, clean
+	encryptedMasks = make([][]byte, n)
+	for i := 0; i < n; i++ {
+		encryptedMasks[i], err = serializeCiphertext(cMasks[i])
+		if err != nil { return nil, fmt.Errorf("serialize mask[%d]: %w", i, err) }
+	}
+	return encryptedMasks, nil
+}
+
+// SingleKeyAuctionDecrypt decrypts encrypted masks with the rider's secret key.
+// Returns per-driver mask values and the winner index (argmax). The agreed price
+// is the winner's lineage-committed bid — verified by checking the driver's
+// signature on H(enc_bid || nonce || session_id).
+func SingleKeyAuctionDecrypt(
+	params ContractParams,
+	sk []byte,
+	encryptedMasks [][]byte,
+) (masks []float64, winnerIdx int, err error) {
+	n := len(encryptedMasks)
+	if n < 2 { return nil, -1, fmt.Errorf("need >= 2 masks") }
+	if sk == nil || len(sk) == 0 { return nil, -1, fmt.Errorf("sk required") }
+
+	ctx, err := createContractContext(params)
+	if err != nil { return nil, -1, err }
+	defer C.FreeCryptoContext(ctx)
+
+	cSk, err := deserializeSecretKeyShare(ctx, sk, true)
+	if err != nil { return nil, -1, fmt.Errorf("deserialize sk: %w", err) }
+	defer C.FreeSecretKeyShare(cSk)
+
 	masks = make([]float64, n)
 	best, bestVal := -1, 0.0
 	for i := 0; i < n; i++ {
+		cCt, err := deserializeCiphertext(ctx, encryptedMasks[i])
+		if err != nil { return nil, -1, fmt.Errorf("deserialize mask[%d]: %w", i, err) }
 		var v C.double; nOut := C.int(1)
-		if C.DecryptSingle(ctx, cMasks[i], cSk, &v, &nOut) != 0 {
-			return -1, nil, fmt.Errorf("decrypt mask[%d] failed", i)
+		if C.DecryptSingle(ctx, cCt, cSk, &v, &nOut) != 0 {
+			C.FreeCiphertext(cCt)
+			return nil, -1, fmt.Errorf("decrypt mask[%d] failed", i)
 		}
+		C.FreeCiphertext(cCt)
 		masks[i] = float64(v)
 		if best < 0 || masks[i] > bestVal { best, bestVal = i, masks[i] }
 	}
-	return best, masks, nil
+	return masks, best, nil
 }
 
