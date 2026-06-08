@@ -36,3 +36,4 @@ venv/
 .env
 .env.*
 !.env.example
+clients/rideshareswift/.build/
