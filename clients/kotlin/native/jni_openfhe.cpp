@@ -180,4 +180,26 @@ JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeCiphertext(JNIEnv*, jc
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeEvalMultKey(JNIEnv*, jclass, jlong h){FreeEvalMultKey(P(h));}
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeRotKey(JNIEnv*, jclass, jlong h){FreeRotKey(P(h));}
 
+
+// ── single-key (initiator-only, not threshold) ──
+
+JNIEXPORT jint JNICALL Java_ares_client_fhe_NativeFHE_singleKeyEvalMultKeyGen
+  (JNIEnv*, jclass, jlong ctx, jlong sk) {
+    return SingleKeyEvalMultKeyGen(P(ctx), P(sk));
+}
+
+JNIEXPORT jint JNICALL Java_ares_client_fhe_NativeFHE_decryptSingle
+  (JNIEnv* env, jclass, jlong ctx, jlong ct, jlong sk,
+   jdoubleArray outVals, jintArray nVals) {
+    jint* nPtr = env->GetIntArrayElements(nVals, nullptr);
+    jint cap = env->GetArrayLength(outVals);
+    jdouble* v = env->GetDoubleArrayElements(outVals, nullptr);
+    int n = (int)cap;
+    int rc = DecryptSingle(P(ctx), P(ct), P(sk), v, &n);
+    env->ReleaseDoubleArrayElements(outVals, v, 0);
+    *nPtr = (jint)n;
+    env->ReleaseIntArrayElements(nVals, nPtr, 0);
+    return rc;
+}
+
 } // extern "C"

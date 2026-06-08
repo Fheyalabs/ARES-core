@@ -40,6 +40,25 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoClose
         if (out.isEmpty()) throw FHEException("fuse failed"); return out
     }
 
+    /** Single-party keygen + eval-mult key. Rider-only; no multi-party rounds. */
+    fun singleKeyGen(): KeyPairShare {
+        val a = NativeFHE.keyGenFirst(raw)
+        if (a.size != 2) throw FHEException("keygen first failed")
+        if (NativeFHE.singleKeyEvalMultKeyGen(raw, a[1]) != 0)
+            throw FHEException("eval-mult keygen failed")
+        return KeyPairShare(PublicKey(a[0]), SecretKeyShare(a[1]))
+    }
+
+    /** Direct single-key decrypt (no threshold fusion). */
+    fun decryptSingle(ct: Ciphertext, sk: SecretKeyShare, slots: Int): DoubleArray {
+        val out = DoubleArray(slots)
+        val n = intArrayOf(slots)
+        if (NativeFHE.decryptSingle(raw, ct.raw, sk.raw, out, n) != 0)
+            throw FHEException("decrypt single failed")
+        return out.copyOf(n[0])
+    }
+
+
     // eval-key shares
     fun genEvalMultKeyShare(sk: SecretKeyShare): EvalMultKey { val h = NativeFHE.genEvalMultKeyShare(raw, sk.raw); if (h==0L) throw FHEException("eval-mult share"); return EvalMultKey(h) }
     fun genRotKeyShare(sk: SecretKeyShare): RotKey { val h = NativeFHE.genRotKeyShare(raw, sk.raw); if (h==0L) throw FHEException("rot share"); return RotKey(h) }

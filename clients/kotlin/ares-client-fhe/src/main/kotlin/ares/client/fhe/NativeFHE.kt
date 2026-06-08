@@ -51,5 +51,10 @@ internal object NativeFHE {
     external fun freeEvalMultKey(h: Long)
     external fun freeRotKey(h: Long)
 
+    // Single-key (initiator-only, not threshold)
+    external fun singleKeyEvalMultKeyGen(ctx: Long, sk: Long): Int
+    external fun decryptSingle(ctx: Long, ct: Long, sk: Long,
+        outVals: DoubleArray, nVals: IntArray): Int
+
     fun version(): String { val b = ByteArray(32); val n = getVersion(b); return if (n > 0) String(b, 0, n) else "" }
 }
