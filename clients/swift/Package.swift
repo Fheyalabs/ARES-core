@@ -79,6 +79,7 @@ let package = Package(
     platforms: [.macOS(.v13), .iOS(.v16)],
     products: [
         .library(name: "AresClient", targets: ["AresClient"]),
+        .library(name: "AresClientFHE", targets: ["AresClientFHE", "COpenFHEBridge"]),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-crypto.git", from: "3.0.0"),
