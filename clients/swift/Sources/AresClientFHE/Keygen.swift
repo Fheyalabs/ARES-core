@@ -34,4 +34,14 @@ extension CryptoContext {
         guard rc == 0, let out else { throw FHEError.keygenFailed }
         return PublicKey(out)
     }
+
+    /// Single-party keygen (not threshold). Generates a keypair and installs the
+    /// eval-mult key on the context so EvalMult ops work. The caller gets back
+    /// (publicKey, secretKey). Used by the rideshare rider — no multi-party rounds.
+    public func singleKeyGen() throws -> KeyPairShare {
+        let kp = try keyGenFirst()
+        let rc = SingleKeyEvalMultKeyGen(raw, kp.secretKey.raw)
+        guard rc == 0 else { throw FHEError.keygenFailed }
+        return kp
+    }
 }
