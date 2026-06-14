@@ -45,6 +45,10 @@ internal object NativeFHE {
     external fun deserializeEvalMultKey(ctx: Long, data: ByteArray): Long
     external fun serializeRotKey(h: Long): ByteArray?
     external fun deserializeRotKey(ctx: Long, data: ByteArray): Long
+    // b-only rotation-key wire (CRS optimization): transmit only b, send/seed a once.
+    external fun serializeRotKeyBVectors(h: Long): ByteArray?
+    external fun serializeRotKeyAVectors(h: Long): ByteArray?
+    external fun reconstructRotKeyFromAB(ctx: Long, a: ByteArray, b: ByteArray): Long
     external fun freePublicKey(h: Long)
     external fun freeSecretKeyShare(h: Long)
     external fun freeCiphertext(h: Long)

@@ -130,4 +130,44 @@ extension CryptoContext {
         guard let h else { throw FHEError.deserializeFailed }
         return RotKey(h)
     }
+
+    // MARK: – RotKey b-only wire (CRS optimization)
+
+    /// Serialize only the b-vectors of a rotation/eval-sum key share, the per-party
+    /// b-only wire payload. The shared a-vectors are sent once (`serializeAVectors`)
+    /// or seeded from a CRS; the combiner rebuilds the full share with
+    /// `reconstructRotKey(a:b:)`. Halves the per-party upload with no new crypto.
+    public func serializeBVectors(_ key: RotKey) throws -> Data {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializeRotKeyBVectors(key.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return copyAndFree(buf, len)
+    }
+
+    /// Serialize only the shared CRS a-vectors of a rotation key (byte-identical
+    /// across parties; transmit once per epoch or derive from a seed).
+    public func serializeAVectors(_ key: RotKey) throws -> Data {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializeRotKeyAVectors(key.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return copyAndFree(buf, len)
+    }
+
+    /// Rebuild a full rotation-key share from the shared a-vectors and a party's
+    /// b-vectors. The two serialized maps must cover the same rotation indices.
+    public func reconstructRotKey(a: Data, b: Data) throws -> RotKey {
+        let h: UnsafeMutableRawPointer? = a.withUnsafeBytes { aRaw in
+            b.withUnsafeBytes { bRaw in
+                ReconstructRotKeyFromAB(self.raw,
+                                        aRaw.bindMemory(to: UInt8.self).baseAddress, a.count,
+                                        bRaw.bindMemory(to: UInt8.self).baseAddress, b.count)
+            }
+        }
+        guard let h else { throw FHEError.deserializeFailed }
+        return RotKey(h)
+    }
 }

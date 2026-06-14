@@ -173,6 +173,13 @@ JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_deserializeEvalMultKey(JN
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializeRotKey(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializeRotKey(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_deserializeRotKey(JNIEnv* env, jclass, jlong ctx, jbyteArray d){jsize n=env->GetArrayLength(d); jbyte* p=env->GetByteArrayElements(d,nullptr); void* out=DeserializeRotKey(P(ctx),reinterpret_cast<uint8_t*>(p),(size_t)n); env->ReleaseByteArrayElements(d,p,JNI_ABORT); return H(out);}
 
+// b-only rotation-key wire (CRS optimization): transmit only b, send/seed a once,
+// rebuild the full share from shared a + party b. The wrapper provides
+// SerializeRotKeyBVectors / SerializeRotKeyAVectors / ReconstructRotKeyFromAB.
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializeRotKeyBVectors(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializeRotKeyBVectors(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializeRotKeyAVectors(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializeRotKeyAVectors(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_reconstructRotKeyFromAB(JNIEnv* env, jclass, jlong ctx, jbyteArray a, jbyteArray b){jsize an=env->GetArrayLength(a); jbyte* ap=env->GetByteArrayElements(a,nullptr); jsize bn=env->GetArrayLength(b); jbyte* bp=env->GetByteArrayElements(b,nullptr); void* out=ReconstructRotKeyFromAB(P(ctx),reinterpret_cast<const uint8_t*>(ap),(size_t)an,reinterpret_cast<const uint8_t*>(bp),(size_t)bn); env->ReleaseByteArrayElements(a,ap,JNI_ABORT); env->ReleaseByteArrayElements(b,bp,JNI_ABORT); return H(out);}
+
 // ── free ──
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freePublicKey(JNIEnv*, jclass, jlong h){FreePublicKey(P(h));}
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeSecretKeyShare(JNIEnv*, jclass, jlong h){FreeSecretKeyShare(P(h));}
