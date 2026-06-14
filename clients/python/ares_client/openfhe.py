@@ -317,6 +317,29 @@ class OpenFHEHelper:
         final = await self.combine_evalkey_round2(params, final_pk, final_shares, combined.eval_sum_final)
         return shares, final
 
+    # ── b-only rotation-key wire (CRS optimization) ──────────────────
+
+    async def split_rot_share(
+        self, params: ContractParams, eval_sum_share: bytes,
+    ) -> tuple[bytes, bytes]:
+        """Split a full eval-sum (rotation) key share into its shared a-vectors
+        and per-party b-vectors. A participant uploads only b; the shared a is
+        sent once per epoch or seeded from a CRS, and the combiner rebuilds the
+        full share with reconstruct_rot_share. Returns (a, b)."""
+        r = await self._call("split_rot_share", params,
+            eval_sum_share=_b64enc(eval_sum_share))
+        return _b64dec(r["eval_sum_share_a"]), _b64dec(r["eval_sum_share_b"])
+
+    async def reconstruct_rot_share(
+        self, params: ContractParams, a: bytes, b: bytes,
+    ) -> bytes:
+        """Rebuild a full eval-sum key share from the shared a-vectors and a
+        party's b-vectors. Returns the full serialized share."""
+        r = await self._call("reconstruct_rot_share", params,
+            eval_sum_share_a=_b64enc(a),
+            eval_sum_share_b=_b64enc(b))
+        return _b64dec(r["eval_sum_share"])
+
     # ── Decomposable scoring primitives ──────────────────────────────
 
     async def eval_add(self, params: ContractParams, ct_a: bytes, ct_b: bytes) -> bytes:

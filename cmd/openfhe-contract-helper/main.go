@@ -47,6 +47,12 @@ type request struct {
 	EvalMultFinalShares  []string `json:"eval_mult_final_shares,omitempty"`
 	EvalSumFinalKey      string   `json:"eval_sum_final_key,omitempty"`
 
+	// b-only rotation-key wire: split a full eval-sum share into a/b, and
+	// reconstruct the full share from the shared a + a party's b.
+	EvalSumShare  string `json:"eval_sum_share,omitempty"`
+	EvalSumShareA string `json:"eval_sum_share_a,omitempty"`
+	EvalSumShareB string `json:"eval_sum_share_b,omitempty"`
+
 	// Decomposable scoring primitives. See helperclient/scoring_ops.go.
 	EvalKeys       string             `json:"eval_keys,omitempty"`
 	CiphertextA    string             `json:"ciphertext_a,omitempty"`
@@ -69,6 +75,8 @@ type response struct {
 	EvalSumBase        string    `json:"eval_sum_base,omitempty"`
 	EvalMultShare      string    `json:"eval_mult_share,omitempty"`
 	EvalSumShare       string    `json:"eval_sum_share,omitempty"`
+	EvalSumShareA      string    `json:"eval_sum_share_a,omitempty"`
+	EvalSumShareB      string    `json:"eval_sum_share_b,omitempty"`
 	EvalMultFinalShare string    `json:"eval_mult_final_share,omitempty"`
 
 	// argmax returns a per-candidate mask ciphertext list.
@@ -288,6 +296,33 @@ func run(req request) (response, error) {
 			EvalMultFinal: encodeB64(final.EvalMultFinal),
 			EvalSumFinal:  encodeB64(final.EvalSumFinal),
 		}, nil
+	case "split_rot_share":
+		full, err := decodeB64("eval_sum_share", req.EvalSumShare)
+		if err != nil {
+			return response{}, err
+		}
+		a, b, err := openfhe.SplitRotShareAB(params, full)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalSumShareA: encodeB64(a),
+			EvalSumShareB: encodeB64(b),
+		}, nil
+	case "reconstruct_rot_share":
+		a, err := decodeB64("eval_sum_share_a", req.EvalSumShareA)
+		if err != nil {
+			return response{}, err
+		}
+		b, err := decodeB64("eval_sum_share_b", req.EvalSumShareB)
+		if err != nil {
+			return response{}, err
+		}
+		full, err := openfhe.ReconstructRotShareAB(params, a, b)
+		if err != nil {
+			return response{}, err
+		}
+		return response{EvalSumShare: encodeB64(full)}, nil
 	case "fuse_partials":
 		partials := make([][]byte, 0, len(req.Partials))
 		for i, raw := range req.Partials {

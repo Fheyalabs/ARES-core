@@ -57,6 +57,50 @@ func reconstructRotKeyFromAB(ctx C.CryptoContextHandle, a, b []byte) (C.RotKeyHa
 	return key, nil
 }
 
+// SplitRotShareAB splits a serialized rotation/eval-sum key share into its shared
+// a-vectors and its per-party b-vectors. A participant uploads only b; the shared a
+// is transmitted once per epoch (or seeded from a CRS) and the combiner rebuilds the
+// full share with ReconstructRotShareAB. Halves the per-party upload with no new crypto.
+func SplitRotShareAB(params ContractParams, fullShare []byte) (a []byte, b []byte, err error) {
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	share, err := deserializeRotKey(ctx, fullShare)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer C.FreeRotKey(share)
+
+	if a, err = serializeRotKeyAVectors(share); err != nil {
+		return nil, nil, err
+	}
+	if b, err = serializeRotKeyBVectors(share); err != nil {
+		return nil, nil, err
+	}
+	return a, b, nil
+}
+
+// ReconstructRotShareAB rebuilds a full rotation-key share from the shared a-vectors
+// and a party's b-vectors, returning its full serialization. The two serialized maps
+// must cover the same rotation indices.
+func ReconstructRotShareAB(params ContractParams, a, b []byte) ([]byte, error) {
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	share, err := reconstructRotKeyFromAB(ctx, a, b)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeRotKey(share)
+	return serializeRotKey(share)
+}
+
 // bOnlyRotResult holds the serialized byte slices a correctness test compares.
 type bOnlyRotResult struct {
 	full   []byte // full (a,b) serialization of the participant share

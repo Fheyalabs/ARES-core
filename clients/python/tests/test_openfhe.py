@@ -34,6 +34,14 @@ def _repo_root() -> Path:
 def helper_binary() -> str:
     if shutil.which("go") is None:
         pytest.skip("go not on PATH")
+    # These tests use small, fast ring dimensions (ring_dim=8192) that sit below
+    # the 128-bit-secure minimum for their multiplicative depth. OpenFHE 1.5.1
+    # enforces the security standard strictly and rejects such a context, so the
+    # correctness tests opt out via ARES_FHE_ALLOW_INSECURE. The helper subprocess
+    # inherits this env; the wrapper stays secure-by-default (HEStd_128_classic)
+    # for production, which uses real ring dimensions.
+    prev_insecure = os.environ.get("ARES_FHE_ALLOW_INSECURE")
+    os.environ["ARES_FHE_ALLOW_INSECURE"] = "1"
     out_dir = Path(tempfile.mkdtemp(prefix="ares-helper-"))
     binary = out_dir / "openfhe-contract-helper"
     repo = _repo_root()
@@ -47,6 +55,10 @@ def helper_binary() -> str:
         msg = proc.stderr.decode(errors="replace")
         pytest.skip(f"OpenFHE helper build failed (missing OpenFHE?): {msg[:300]}")
     yield str(binary)
+    if prev_insecure is None:
+        os.environ.pop("ARES_FHE_ALLOW_INSECURE", None)
+    else:
+        os.environ["ARES_FHE_ALLOW_INSECURE"] = prev_insecure
     try:
         os.unlink(binary)
         os.rmdir(out_dir)
@@ -137,3 +149,31 @@ async def test_helper_propagates_op_errors(helper_binary):
         with pytest.raises(HelperError):
             # encrypt_profile with empty values should fail server-side.
             await h.encrypt(params, b"\x00", [])
+
+
+@pytest.mark.asyncio
+async def test_bonly_rot_share_split_reconstruct(helper_binary):
+    """b-only rotation-key wire: a participant's full eval-sum share splits into
+    shared a-vectors plus per-party b-vectors; uploading only b and rebuilding
+    from the shared a + b round-trips to the same key. Mirrors the Go and Swift
+    checks through the Python IPC client.
+    """
+    params = ContractParams(ring_dim=8192, depth=4)
+    async with OpenFHEHelper(helper_binary) as h:
+        first = await h.keygen_first(params)
+        second = await h.keygen_next(params, first.public_key)
+        lead = await h.evalkey_round1_lead(params, first.secret_key_share)
+        r1 = await h.evalkey_round1_participant(
+            params, second.secret_key_share,
+            lead.eval_mult_base, lead.eval_sum_base, second.public_key,
+        )
+        full = r1.eval_sum_share
+
+        a, b = await h.split_rot_share(params, full)
+        # b-only is the per-party payload; the shared a is sent once per epoch.
+        assert len(b) < len(full), f"b-only ({len(b)}) must be smaller than full ({len(full)})"
+
+        recon = await h.reconstruct_rot_share(params, a, b)
+        a2, b2 = await h.split_rot_share(params, recon)
+        assert a2 == a, "reconstructed a-vectors must match the shared a"
+        assert b2 == b, "reconstructed b-vectors must match the transmitted b"
