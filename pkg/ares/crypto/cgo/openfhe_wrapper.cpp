@@ -896,6 +896,74 @@ int MeasureBOnlyRotShare(CryptoContextHandle ctx,
     }
 }
 
+// ---- Production b-only rotation-key wire (CRS optimization) ----
+// The rotation-key 'a'-vectors are byte-identical across parties (derived from
+// shared public randomness), so each party transmits only its 'b'-vectors and the
+// combiner rebuilds the full share from the shared 'a' + the party 'b'. No new
+// crypto; ~50% wire saving. MeasureBOnlyRotShare proves the soundness/size.
+int SerializeRotKeyBVectors(RotKeyHandle share, uint8_t** out_data, size_t* out_len) {
+    try {
+        auto* r = as_rot(share);
+        std::map<usint, std::vector<DCRTPoly>> bmap;
+        for (const auto& kv : *r->keys) {
+            bmap[kv.first] = kv.second->GetBVector();
+        }
+        return serialize_object(bmap, out_data, out_len);
+    } catch (...) {
+        return 1;
+    }
+}
+
+int SerializeRotKeyAVectors(RotKeyHandle share, uint8_t** out_data, size_t* out_len) {
+    try {
+        auto* r = as_rot(share);
+        std::map<usint, std::vector<DCRTPoly>> amap;
+        for (const auto& kv : *r->keys) {
+            amap[kv.first] = kv.second->GetAVector();
+        }
+        return serialize_object(amap, out_data, out_len);
+    } catch (...) {
+        return 1;
+    }
+}
+
+RotKeyHandle ReconstructRotKeyFromAB(CryptoContextHandle ctx,
+    const uint8_t* a_data, size_t a_len, const uint8_t* b_data, size_t b_len) {
+    try {
+        auto* c = as_ctx(ctx);
+        if (a_data == nullptr || b_data == nullptr || a_len == 0 || b_len == 0) {
+            return nullptr;
+        }
+        std::map<usint, std::vector<DCRTPoly>> amap;
+        std::map<usint, std::vector<DCRTPoly>> bmap;
+        {
+            std::string raw(reinterpret_cast<const char*>(a_data), a_len);
+            std::stringstream is(raw);
+            Serial::Deserialize(amap, is, SerType::BINARY);
+        }
+        {
+            std::string raw(reinterpret_cast<const char*>(b_data), b_len);
+            std::stringstream is(raw);
+            Serial::Deserialize(bmap, is, SerType::BINARY);
+        }
+        auto keys = std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>();
+        for (const auto& kv : bmap) {
+            usint idx = kv.first;
+            auto a_it = amap.find(idx);
+            if (a_it == amap.end()) {
+                return nullptr;
+            }
+            auto k = std::make_shared<EvalKeyRelinImpl<DCRTPoly>>(c->cc);
+            k->SetAVector(a_it->second);
+            k->SetBVector(kv.second);
+            (*keys)[idx] = k;
+        }
+        return reinterpret_cast<RotKeyHandle>(new ARESRotKey{keys});
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final) {

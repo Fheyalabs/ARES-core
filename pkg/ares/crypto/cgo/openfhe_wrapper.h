@@ -81,6 +81,14 @@ int StreamedTwoPartyRotKeygenBytes(CryptoContextHandle ctx,
 int MeasureBOnlyRotShare(CryptoContextHandle ctx,
     SecretKeyShareHandle sk_lead, SecretKeyShareHandle sk_part, PublicKeyHandle pk_part,
     unsigned long long* out_full_bytes, unsigned long long* out_b_only_bytes, int* out_a_shared);
+// Production b-only rotation-key wire (the CRS optimization). The rotation-key
+// 'a'-vectors are byte-identical across parties (shared CRS), so a party transmits
+// only its 'b'-vectors and the combiner rebuilds the full share from the shared
+// 'a' + the party 'b'. No new crypto. out_data is malloc'd; free it in Go.
+int SerializeRotKeyBVectors(RotKeyHandle share, uint8_t** out_data, size_t* out_len);
+int SerializeRotKeyAVectors(RotKeyHandle share, uint8_t** out_data, size_t* out_len);
+RotKeyHandle ReconstructRotKeyFromAB(CryptoContextHandle ctx,
+    const uint8_t* a_data, size_t a_len, const uint8_t* b_data, size_t b_len);
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final);
