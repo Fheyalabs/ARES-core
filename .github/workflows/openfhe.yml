@@ -96,8 +96,13 @@ jobs:
       - name: go vet (openfhe)
         run: go vet -tags openfhe ./...
 
+      # -short skips the keygen amortization / RAM benchmarks (TestKeygenAmortizationProfile,
+      # TestPerPartyShareGenRAM, TestResidentCombineProfile, TestStreamedKeygenRAM,
+      # TestBOnlyTransfer). Those sweep depth-30 / ring-2^17 keygen and exhaust the hosted
+      # runner's memory, killing the step with SIGTERM (exit 143). They run in their own
+      # workflow_dispatch lane (keygen-bench.yml) on a high-RAM self-hosted runner.
       - name: go test (openfhe)
-        run: go test -tags openfhe ./... -count=1 -timeout 600s
+        run: go test -tags openfhe -short ./... -count=1 -timeout 600s
 
       - name: openfhe-helper --version
         run: |
