@@ -30,8 +30,50 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.8.0] — 2026-06-14
+
+### Added
+
+- **Single-key (non-threshold) CKKS reverse auction (`pkg/ares/crypto/cgo`,
+  blind-price / ride-share).** A single-initiator MVP for sealed-price reverse
+  auctions where one party holds the secret key: `SingleKeyEncrypt` +
+  `SingleKeyAuctionServerEnc` for blind-price submission, an `n=5` full
+  composite-key assembly at ring 2^14 / depth 4, and a server/rider split that
+  binds the driver identity into the encrypted bid. `singleKeyGen()` and
+  `decryptSingle()` are exposed in the Swift (`AresClientFHE`) and Kotlin
+  (`ares-client-fhe`) clients; see `examples/ride_share`.
+- **b-only rotation-key wire (CRS optimization).** Multiparty rotation /
+  eval-sum key `a`-vectors are byte-identical across parties under the shared
+  CRS, so a participant transmits only its `b`-vectors and the combiner rebuilds
+  the full share from the shared `a` plus the party `b`: roughly half the
+  per-party rotation-key upload, with no new crypto. Core bridge
+  (`SerializeRotKeyBVectors` / `SerializeRotKeyAVectors` /
+  `ReconstructRotKeyFromAB`) plus client wiring: Swift and Kotlin native
+  bindings, and Python `split_rot_share` / `reconstruct_rot_share` ops over the
+  contract-helper IPC.
+- **Threshold-CKKS keygen amortization + memory-bounded benchmark suite
+  (`pkg/ares/crypto/cgo`).** `TestKeygenAmortizationProfile` (stage breakdown and
+  sizes), `TestResidentCombineProfile` (byte-path vs resident-in-RAM combine),
+  and `TestPerPartyShareGenRAM` / `TestStreamedKeygenRAM` (per-party share-gen
+  RAM through the depth-30 / ring-2^17 worst case), plus the
+  `MeasureBOnlyRotShare` bridge helper. They are guarded by `testing.Short()`
+  and run in a dedicated `keygen-bench.yml` `workflow_dispatch` lane on a
+  high-RAM self-hosted runner.
+- **Swift `AresClientFHE` is exposed as a SwiftPM library product**, so
+  downstream packages can depend on the FHE client directly.
+
+### Fixed
+
+- **Swift `Decrypt.swift`:** corrected the extension braces.
+
 ### CI
 
+- The hosted-runner `openfhe` lane now runs `go test -tags openfhe -short`. The
+  keygen amortization / RAM benchmarks above were running on every push and
+  exhausting the hosted runner, SIGTERM-killing the step (exit 143); the lane had
+  been red since the suite landed. `-short` triggers the benchmarks' existing
+  skips, and they keep their self-hosted `keygen-bench.yml` lane (which now uses
+  the runner's pre-installed OpenFHE instead of building it).
 - OpenFHE CI lane now installs to `/opt/openfhe` (instead of
   `/usr/local`) and caches that prefix only. Three concrete wins:
   cache restore drops from ~4 min to ~2 s, the build step is reliably
