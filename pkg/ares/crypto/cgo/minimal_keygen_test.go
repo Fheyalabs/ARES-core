@@ -53,3 +53,30 @@ func evalSumShareBytesForTest(t *testing.T, params ContractParams) int {
 	}
 	return len(round1.EvalSumShare)
 }
+
+// TestMinimalStreamedRotShareShrinks confirms the streamed per-index keygen helper
+// honors minimal mode: the streamed total for the minimal index set is smaller than
+// the full-batch streamed total at the same ring (fewer keys streamed = less work/RAM).
+func TestMinimalStreamedRotShareShrinks(t *testing.T) {
+	const profileDim, payloadSlots = 128, 640
+	// Fixed ring large enough that (a) the minimal broadcast indices (up to 512 for
+	// payload 640) are valid at this batch size, and (b) the full-batch set is bigger
+	// than the minimal set. Set here, not in the shared DefaultContractParams.
+	full := ContractParams{RingDim: 8192, ScalingFactor: float64(uint64(1) << 50), Depth: 12}
+	minimal := full
+	minimal.MinimalRotationKeys = true
+	minimal.ProfileDim = profileDim
+	minimal.PayloadSlotCount = payloadSlots
+
+	fullTotal, err := benchStreamedFullRot(full)
+	if err != nil {
+		t.Fatalf("full streamed keygen: %v", err)
+	}
+	minTotal, err := benchStreamedFullRot(minimal)
+	if err != nil {
+		t.Fatalf("minimal streamed keygen: %v", err)
+	}
+	if minTotal == 0 || minTotal >= fullTotal {
+		t.Fatalf("minimal streamed total (%d) must be > 0 and < full (%d)", minTotal, fullTotal)
+	}
+}

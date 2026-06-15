@@ -832,7 +832,10 @@ int StreamedRotShareBytes(CryptoContextHandle ctx, SecretKeyShareHandle sk,
         const std::string key_tag = as_pk(own_pk)->pk->GetKeyTag();
         const auto& base_map = as_rot(base)->keys;
         unsigned long long total = 0;
-        for (int32_t idx : broadcast_rotation_indices(c->batch_size)) {
+        auto idx_set = c->minimal_rotation_keys
+            ? minimal_rotation_indices(c->profile_dim, c->payload_slot_count)
+            : broadcast_rotation_indices(c->batch_size);
+        for (int32_t idx : idx_set) {
             std::vector<int32_t> one{idx};
             auto share = c->cc->MultiEvalAtIndexKeyGen(s->sk, base_map, one, key_tag);
             std::stringstream ss;
@@ -867,7 +870,10 @@ int StreamedTwoPartyRotKeygenBytes(CryptoContextHandle ctx,
         const std::string part_tag = as_pk(pk_part)->pk->GetKeyTag();
         lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(lead_tag);
         unsigned long long total = 0;
-        for (int32_t idx : broadcast_rotation_indices(c->batch_size)) {
+        auto idx_set = c->minimal_rotation_keys
+            ? minimal_rotation_indices(c->profile_dim, c->payload_slot_count)
+            : broadcast_rotation_indices(c->batch_size);
+        for (int32_t idx : idx_set) {
             std::vector<int32_t> one{idx};
             c->cc->EvalAtIndexKeyGen(sl->sk, one);
             auto base_i = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(lead_tag));
