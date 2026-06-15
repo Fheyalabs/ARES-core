@@ -191,8 +191,9 @@ func runIncrementalCombineCheck(params ContractParams) (res incrementalCombineRe
 // the share's []byte, and repeat — peak Go-side RAM is the accumulator plus one
 // share, not all N shares resident at once.
 type EvalSumIncrementalFold struct {
-	ctx   C.CryptoContextHandle
-	accum C.RotKeyHandle
+	ctx     C.CryptoContextHandle
+	accum   C.RotKeyHandle
+	ownsCtx bool // true if Finalize should free ctx (created via NewEvalSumIncrementalFold)
 }
 
 // NewEvalSumIncrementalFold creates an incremental eval-sum fold accumulator
@@ -214,7 +215,7 @@ func NewEvalSumIncrementalFold(params ContractParams, leadBase []byte) (*EvalSum
 		C.FreeCryptoContext(ctx)
 		return nil, fmt.Errorf("eval-sum combine start failed")
 	}
-	return &EvalSumIncrementalFold{ctx: ctx, accum: accum}, nil
+	return &EvalSumIncrementalFold{ctx: ctx, accum: accum, ownsCtx: true}, nil
 }
 
 // Fold deserializes one participant's eval-sum share, folds it into the
@@ -238,9 +239,11 @@ func (f *EvalSumIncrementalFold) Fold(publicKey, evalSumShare []byte) error {
 	return nil
 }
 
-// Finalize serializes the accumulator and frees all C handles.
+// Finalize serializes the accumulator and frees C handles owned by this fold.
 func (f *EvalSumIncrementalFold) Finalize() ([]byte, error) {
-	defer C.FreeCryptoContext(f.ctx)
+	if f.ownsCtx {
+		defer C.FreeCryptoContext(f.ctx)
+	}
 	defer C.FreeRotKey(f.accum)
 	return serializeRotKey(f.accum)
 }

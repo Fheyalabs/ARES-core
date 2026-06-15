@@ -2050,7 +2050,7 @@ func NewEvalSumIncrementalFoldWithContext(ctx *CryptoContext, leadBase []byte) (
 	if accum == nil {
 		return nil, fmt.Errorf("eval-sum combine start failed")
 	}
-	return &EvalSumIncrementalFold{ctx: ctx.handle, accum: accum}, nil
+	return &EvalSumIncrementalFold{ctx: ctx.handle, accum: accum, ownsCtx: false}, nil
 }
 
 // EvalKeyRound2ParticipantWithContext is like EvalKeyRound2Participant but uses
