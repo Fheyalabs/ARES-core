@@ -185,3 +185,62 @@ func runIncrementalCombineCheck(params ContractParams) (res incrementalCombineRe
 	}
 	return res, nil
 }
+
+// EvalSumIncrementalFold folds eval-sum (rotation) key shares one at a time into a
+// live accumulator, so the caller can generate a participant share, fold it, nil
+// the share's []byte, and repeat — peak Go-side RAM is the accumulator plus one
+// share, not all N shares resident at once.
+type EvalSumIncrementalFold struct {
+	ctx   C.CryptoContextHandle
+	accum C.RotKeyHandle
+}
+
+// NewEvalSumIncrementalFold creates an incremental eval-sum fold accumulator
+// seeded with the lead base. The caller must call Finalize() to free the
+// underlying C handles.
+func NewEvalSumIncrementalFold(params ContractParams, leadBase []byte) (*EvalSumIncrementalFold, error) {
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	seed, err := deserializeRotKey(ctx, leadBase)
+	if err != nil {
+		C.FreeCryptoContext(ctx)
+		return nil, err
+	}
+	accum := C.EvalSumCombineStart(seed)
+	C.FreeRotKey(seed)
+	if accum == nil {
+		C.FreeCryptoContext(ctx)
+		return nil, fmt.Errorf("eval-sum combine start failed")
+	}
+	return &EvalSumIncrementalFold{ctx: ctx, accum: accum}, nil
+}
+
+// Fold deserializes one participant's eval-sum share, folds it into the
+// accumulator, and frees the C++ key before returning.
+func (f *EvalSumIncrementalFold) Fold(publicKey, evalSumShare []byte) error {
+	pk, err := deserializePublicKey(f.ctx, publicKey)
+	if err != nil {
+		return err
+	}
+	share, err := deserializeRotKey(f.ctx, evalSumShare)
+	if err != nil {
+		C.FreePublicKey(pk)
+		return err
+	}
+	rc := C.EvalSumCombineFold(f.ctx, f.accum, pk, share)
+	C.FreeRotKey(share)
+	C.FreePublicKey(pk)
+	if rc != 0 {
+		return fmt.Errorf("eval-sum combine fold failed")
+	}
+	return nil
+}
+
+// Finalize serializes the accumulator and frees all C handles.
+func (f *EvalSumIncrementalFold) Finalize() ([]byte, error) {
+	defer C.FreeCryptoContext(f.ctx)
+	defer C.FreeRotKey(f.accum)
+	return serializeRotKey(f.accum)
+}
