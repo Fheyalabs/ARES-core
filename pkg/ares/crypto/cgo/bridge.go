@@ -1909,3 +1909,218 @@ func SingleKeyAuctionDecrypt(
 	return masks, best, nil
 }
 
+
+// --- Shared context (context-reuse) variants -----------------------------------
+
+// CryptoContext is a reusable CKKS context that callers can create once and pass
+// to multiple WithContext functions, avoiding the per-call context
+// allocation/deallocation overhead (~3 GB at ring 2^16). The caller MUST call
+// Close() to free the underlying C handle.
+type CryptoContext struct {
+	handle C.CryptoContextHandle
+}
+
+// NewCryptoContext creates a CKKS context from ContractParams. The caller owns the
+// returned context and must call Close() to free it.
+func NewCryptoContext(params ContractParams) (*CryptoContext, error) {
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	return &CryptoContext{handle: ctx}, nil
+}
+
+// Close frees the underlying C CKKS context handle.
+func (c *CryptoContext) Close() {
+	if c.handle != nil {
+		C.FreeCryptoContext(c.handle)
+		c.handle = nil
+	}
+}
+
+// evalKeyRound1LeadWithContext is the context-reusing body of EvalKeyRound1Lead.
+func evalKeyRound1LeadWithContext(ctx *CryptoContext, secretKeyShare []byte) (EvalKeyRound1LeadShare, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, true)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	var mult C.EvalMultKeyHandle
+	if rc := C.EvalMultKeyGenLead(ctx.handle, sk, &mult); rc != 0 {
+		return EvalKeyRound1LeadShare{}, fmt.Errorf("eval-mult lead key generation failed")
+	}
+	defer C.FreeEvalMultKey(mult)
+	multBytes, err := serializeEvalMultKey(mult)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+	var sum C.RotKeyHandle
+	if rc := C.EvalSumKeyGenLead(ctx.handle, sk, &sum); rc != 0 {
+		return EvalKeyRound1LeadShare{}, fmt.Errorf("eval-sum lead key generation failed")
+	}
+	defer C.FreeRotKey(sum)
+	sumBytes, err := serializeRotKey(sum)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+	return EvalKeyRound1LeadShare{EvalMultBase: multBytes, EvalSumBase: sumBytes}, nil
+}
+
+// EvalKeyRound1LeadWithContext is like EvalKeyRound1Lead but uses the provided
+// shared context instead of creating a new one.
+func EvalKeyRound1LeadWithContext(ctx *CryptoContext, secretKeyShare []byte) (EvalKeyRound1LeadShare, error) {
+	return evalKeyRound1LeadWithContext(ctx, secretKeyShare)
+}
+
+// EvalKeyRound1ParticipantWithContext is like EvalKeyRound1Participant but uses the
+// provided shared context instead of creating a new one.
+func EvalKeyRound1ParticipantWithContext(ctx *CryptoContext, secretKeyShare, evalMultBase, evalSumBase, ownPublicKey []byte) (EvalKeyRound1ParticipantShare, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, false)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	multBase, err := deserializeEvalMultKey(ctx.handle, evalMultBase)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeEvalMultKey(multBase)
+	sumBase, err := deserializeRotKey(ctx.handle, evalSumBase)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeRotKey(sumBase)
+	ownPK, err := deserializePublicKey(ctx.handle, ownPublicKey)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreePublicKey(ownPK)
+	var multShare C.EvalMultKeyHandle
+	if rc := C.EvalMultKeySwitchShare(ctx.handle, sk, multBase, &multShare); rc != 0 {
+		return EvalKeyRound1ParticipantShare{}, fmt.Errorf("eval-mult switch-share generation failed")
+	}
+	defer C.FreeEvalMultKey(multShare)
+	multBytes, err := serializeEvalMultKey(multShare)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	var sumShare C.RotKeyHandle
+	if rc := C.EvalSumKeyShare(ctx.handle, sk, sumBase, ownPK, &sumShare); rc != 0 {
+		return EvalKeyRound1ParticipantShare{}, fmt.Errorf("eval-sum share generation failed")
+	}
+	defer C.FreeRotKey(sumShare)
+	sumBytes, err := serializeRotKey(sumShare)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	return EvalKeyRound1ParticipantShare{EvalMultSwitchShare: multBytes, EvalSumShare: sumBytes}, nil
+}
+
+// CombineEvalMultSwitchSharesWithContext is like CombineEvalMultSwitchShares but
+// uses the provided shared context.
+func CombineEvalMultSwitchSharesWithContext(ctx *CryptoContext, publicKeys, evalMultShares [][]byte) ([]byte, error) {
+	pks, freePKs, err := deserializePublicKeys(ctx.handle, publicKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer freePKs()
+	multShares, freeMultShares, err := deserializeEvalMultKeys(ctx.handle, evalMultShares)
+	if err != nil {
+		return nil, err
+	}
+	defer freeMultShares()
+	var joined C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultSwitchShares(ctx.handle, (*C.PublicKeyHandle)(unsafe.Pointer(&pks[0])), (*C.EvalMultKeyHandle)(unsafe.Pointer(&multShares[0])), C.int(len(multShares)), &joined); rc != 0 {
+		return nil, fmt.Errorf("eval-mult switch-share combination failed")
+	}
+	defer C.FreeEvalMultKey(joined)
+	return serializeEvalMultKey(joined)
+}
+
+// NewEvalSumIncrementalFoldWithContext is like NewEvalSumIncrementalFold but uses
+// the provided shared context. The returned fold does NOT own the context — the
+// caller must keep ctx alive until Finalize() returns.
+func NewEvalSumIncrementalFoldWithContext(ctx *CryptoContext, leadBase []byte) (*EvalSumIncrementalFold, error) {
+	seed, err := deserializeRotKey(ctx.handle, leadBase)
+	if err != nil {
+		return nil, err
+	}
+	accum := C.EvalSumCombineStart(seed)
+	C.FreeRotKey(seed)
+	if accum == nil {
+		return nil, fmt.Errorf("eval-sum combine start failed")
+	}
+	return &EvalSumIncrementalFold{ctx: ctx.handle, accum: accum}, nil
+}
+
+// EvalKeyRound2ParticipantWithContext is like EvalKeyRound2Participant but uses
+// the provided shared context.
+func EvalKeyRound2ParticipantWithContext(ctx *CryptoContext, secretKeyShare, evalMultJoined, finalPublicKey []byte, lead bool) (EvalKeyRound2ParticipantShare, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, lead)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	joined, err := deserializeEvalMultKey(ctx.handle, evalMultJoined)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreeEvalMultKey(joined)
+	finalPK, err := deserializePublicKey(ctx.handle, finalPublicKey)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreePublicKey(finalPK)
+	var finalShare C.EvalMultKeyHandle
+	if rc := C.EvalMultKeyFinalShare(ctx.handle, sk, joined, finalPK, &finalShare); rc != 0 {
+		return EvalKeyRound2ParticipantShare{}, fmt.Errorf("eval-mult final-share generation failed")
+	}
+	defer C.FreeEvalMultKey(finalShare)
+	finalBytes, err := serializeEvalMultKey(finalShare)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	return EvalKeyRound2ParticipantShare{EvalMultFinalShare: finalBytes}, nil
+}
+
+// CombineEvalKeyRound2WithContext is like CombineEvalKeyRound2 but uses the
+// provided shared context.
+func CombineEvalKeyRound2WithContext(ctx *CryptoContext, finalPublicKey []byte, evalMultFinalShares [][]byte, evalSumFinal []byte) (EvalKeyFinal, error) {
+	finalPK, err := deserializePublicKey(ctx.handle, finalPublicKey)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	defer C.FreePublicKey(finalPK)
+	finalShares := make([]C.EvalMultKeyHandle, len(evalMultFinalShares))
+	for i, b := range evalMultFinalShares {
+		finalShares[i], err = deserializeEvalMultKey(ctx.handle, b)
+		if err != nil {
+			for j := 0; j < i; j++ {
+				C.FreeEvalMultKey(finalShares[j])
+			}
+			return EvalKeyFinal{}, err
+		}
+	}
+	defer func() {
+		for _, s := range finalShares {
+			if s != nil {
+				C.FreeEvalMultKey(s)
+			}
+		}
+	}()
+	sumFinal, err := deserializeRotKey(ctx.handle, evalSumFinal)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	defer C.FreeRotKey(sumFinal)
+	var final C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultFinalShares(ctx.handle, finalPK, &finalShares[0], C.int(len(finalShares)), &final); rc != 0 {
+		return EvalKeyFinal{}, fmt.Errorf("combine eval-mult final shares failed")
+	}
+	finalBytes, err := serializeEvalMultKey(final)
+	C.FreeEvalMultKey(final)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	return EvalKeyFinal{EvalMultFinal: finalBytes, EvalSumFinal: evalSumFinal}, nil
+}
