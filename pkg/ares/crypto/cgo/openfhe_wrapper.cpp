@@ -328,6 +328,18 @@ static Ciphertext<DCRTPoly> broadcast_first_slot(const CryptoContext<DCRTPoly>& 
     return out;
 }
 
+// fold_dot_to_first_slot sums the first profile_dim slots of ct into slot 0 using
+// positive power-of-two rotations — the minimal-key equivalent of EvalSum(ct, dim)
+// for the dot product, using only the at-index keys minimal_rotation_indices generates.
+static Ciphertext<DCRTPoly> fold_dot_to_first_slot(const CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct, int profile_dim) {
+    auto acc = ct;
+    for (int s = 1; s < profile_dim; s *= 2) {
+        acc = cc->EvalAdd(acc, cc->EvalRotate(acc, s));
+    }
+    return acc;
+}
+
 static std::vector<int32_t> broadcast_rotation_indices(uint32_t batch_size) {
     std::vector<int32_t> indices;
     for (uint32_t shift = 1; shift < batch_size; shift *= 2) {
@@ -1737,6 +1749,7 @@ int ARESFullFusePayloadCKKS(
     const int* candidate_packages,
     int package_bytes,
     int payload_slot_count,
+    int minimal_rotation_keys,
     uint8_t** out_ct,
     size_t* out_ct_len,
     char* err,
@@ -1827,7 +1840,9 @@ int ARESFullFusePayloadCKKS(
         ct_scores.reserve(static_cast<size_t>(n_candidates));
         for (int i = 0; i < n_candidates; i++) {
             auto prod = cc->EvalMult(init, candidates[i]);
-            auto sim = cc->EvalSum(prod, profile_dim);
+            auto sim = minimal_rotation_keys
+                ? fold_dot_to_first_slot(cc, prod, profile_dim)
+                : cc->EvalSum(prod, profile_dim);
             sim = broadcast_first_slot(cc, sim, payload_slot_count, batch_size);
             double dlat = static_cast<double>(initiator_lat_q - candidate_lat_q[i]);
             double dlon = static_cast<double>(initiator_lon_q - candidate_lon_q[i]);

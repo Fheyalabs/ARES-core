@@ -169,6 +169,7 @@ type FullFuseRequest struct {
 	EvalKeys             EvalKeyFinal
 	PackageBytes         int
 	PayloadSlotCount     int
+	MinimalRotationKeys  bool
 }
 
 func DistributedKeyGenFirst(params ContractParams) (DistributedKeyShare, error) {
@@ -529,6 +530,11 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
 	defer C.free(unsafe.Pointer(schedule))
 
+	minimalFlag := C.int(0)
+	if req.MinimalRotationKeys {
+		minimalFlag = 1
+	}
+
 	var out *C.uint8_t
 	var outLen C.size_t
 	var errBuf [512]C.char
@@ -563,6 +569,7 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 		(*C.int)(unsafe.Pointer(&packages[0])),
 		C.int(packageBytes),
 		C.int(payloadSlots),
+		minimalFlag,
 		&out,
 		&outLen,
 		&errBuf[0],

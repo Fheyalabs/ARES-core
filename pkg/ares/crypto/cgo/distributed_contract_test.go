@@ -161,6 +161,79 @@ func TestFullFusePayloadUsesSubmittedCiphertexts(t *testing.T) {
 	}
 }
 
+func TestFullFusePayloadMinimalRotationKeys(t *testing.T) {
+	params := DefaultContractParams(32, 12)
+	params.MinimalRotationKeys = true
+	params.ProfileDim = 4
+	params.PayloadSlotCount = 32
+
+	shares := distributedSharesForTest(t, params, 3)
+	evalKeys := distributedEvalKeysForTest(t, params, shares)
+
+	initProfile := []float64{1, 0, 0, 0}
+	loserProfile := []float64{0, 1, 0, 0}
+	winnerProfile := []float64{1, 0, 0, 0}
+	initCT, err := EncryptCKKSForContract(params, shares[len(shares)-1].PublicKey, initProfile)
+	if err != nil {
+		t.Fatalf("encrypt initiator profile: %v", err)
+	}
+	loserCT, err := EncryptCKKSForContract(params, shares[len(shares)-1].PublicKey, loserProfile)
+	if err != nil {
+		t.Fatalf("encrypt loser profile: %v", err)
+	}
+	winnerCT, err := EncryptCKKSForContract(params, shares[len(shares)-1].PublicKey, winnerProfile)
+	if err != nil {
+		t.Fatalf("encrypt winner profile: %v", err)
+	}
+
+	loserPackage := []int{0x11, 0x22, 0x33, 0x44}
+	winnerPackage := []int{0xA5, 0x5A, 0xC3, 0x3C}
+	ctWinner, err := FullFusePayloadCKKS(params, FullFuseRequest{
+		InitiatorCiphertext:  initCT,
+		CandidateCiphertexts: [][]byte{loserCT, winnerCT},
+		CandidateLatQ:        []int{0, 0},
+		CandidateLonQ:        []int{0, 0},
+		CandidateBrownies:    []int{0, 0},
+		CandidatePackages:    [][]int{loserPackage, winnerPackage},
+		ProfileDim:           len(initProfile),
+		Alpha:                0,
+		Beta:                 1,
+		Gamma:                0,
+		Comparator:           "tanh_chebyshev",
+		ComparatorDegree:     7,
+		ComparatorGain:       40,
+		ComparatorScale:      1,
+		ComparatorBound:      1,
+		SelectorSchedule:     "none",
+		EvalKeys:             evalKeys,
+		PackageBytes:         len(winnerPackage),
+		PayloadSlotCount:     len(winnerPackage) * 8,
+		MinimalRotationKeys:  true,
+	})
+	if err != nil {
+		t.Fatalf("minimal full fuse payload: %v", err)
+	}
+	partials := make([][]byte, 0, len(shares))
+	for _, share := range shares {
+		partial, err := PartialDecryptCKKSForContract(params, ctWinner, share.SecretKeyShare, share.Lead)
+		if err != nil {
+			t.Fatalf("partial decrypt lead=%v: %v", share.Lead, err)
+		}
+		partials = append(partials, partial)
+	}
+	slots, err := FuseCKKSPartialsForContract(params, partials, len(winnerPackage)*8)
+	if err != nil {
+		t.Fatalf("fuse minimal payload partials: %v", err)
+	}
+	recovered := slotsToBytesForTest(slots, len(winnerPackage))
+	for i, want := range winnerPackage {
+		if recovered[i] != byte(want) {
+			t.Fatalf("minimal-mode recovered %x, want %x (slots=%v)",
+				recovered, intsToBytesForTest(winnerPackage), slots[:8])
+		}
+	}
+}
+
 func slotsToBytesForTest(slots []float64, n int) []byte {
 	out := make([]byte, n)
 	for bit := 0; bit < n*8 && bit < len(slots); bit++ {

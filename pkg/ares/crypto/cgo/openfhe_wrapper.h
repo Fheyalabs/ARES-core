@@ -211,6 +211,7 @@ int ARESFullFusePayloadCKKS(
     const int* candidate_packages,
     int package_bytes,
     int payload_slot_count,
+    int minimal_rotation_keys,
     uint8_t** out_ct,
     size_t* out_ct_len,
     char* err,
