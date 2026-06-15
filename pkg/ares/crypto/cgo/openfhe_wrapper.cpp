@@ -1038,6 +1038,37 @@ int CombineEvalSumKeys(CryptoContextHandle ctx,
     }
 }
 
+// EvalSumCombineStart / EvalSumCombineFold are the incremental form of
+// CombineEvalSumKeys. CombineEvalSumKeys folds one share at a time but needs every
+// share deserialized and resident at once; the incremental form lets a caller
+// deserialize and free each share inside its own loop, so peak RAM is the
+// accumulator plus one share instead of all N rotation-key maps. The folded result
+// is byte-identical to CombineEvalSumKeys for the same (lead base, then participant
+// shares) order.
+RotKeyHandle EvalSumCombineStart(RotKeyHandle seed) {
+    try {
+        // Seed with the lead base (shares[0]); the fold below assigns fresh maps, so
+        // the seed handle is never mutated, matching CombineEvalSumKeys' joined seed.
+        return reinterpret_cast<RotKeyHandle>(new ARESRotKey{as_rot(seed)->keys});
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+int EvalSumCombineFold(CryptoContextHandle ctx, RotKeyHandle accum, PublicKeyHandle pk, RotKeyHandle share) {
+    try {
+        if (accum == nullptr || pk == nullptr || share == nullptr) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* a = as_rot(accum);
+        a->keys = c->cc->MultiAddEvalAutomorphismKeys(a->keys, as_rot(share)->keys, as_pk(pk)->pk->GetKeyTag());
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
 int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key) {
     try {
         auto* c = as_ctx(ctx);

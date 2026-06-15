@@ -97,6 +97,11 @@ RotKeyHandle ReconstructRotKeyFromAB(CryptoContextHandle ctx,
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final);
+// Incremental eval-sum combine: fold shares one at a time (peak RAM = accumulator
+// + one share, vs all N for CombineEvalSumKeys). Seed with the lead base, then fold
+// each participant share; the result matches CombineEvalSumKeys.
+RotKeyHandle EvalSumCombineStart(RotKeyHandle seed);
+int EvalSumCombineFold(CryptoContextHandle ctx, RotKeyHandle accum, PublicKeyHandle pk, RotKeyHandle share);
 int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key);
 
 // Encrypt/Decrypt
