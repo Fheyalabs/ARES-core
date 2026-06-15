@@ -2124,3 +2124,48 @@ func CombineEvalKeyRound2WithContext(ctx *CryptoContext, finalPublicKey []byte, 
 	}
 	return EvalKeyFinal{EvalMultFinal: finalBytes, EvalSumFinal: evalSumFinal}, nil
 }
+
+// --- Streamed (per-index) rotation keygen Go wrappers -------------------------
+
+// StreamedEvalSumKeyGenLeadWithContext is like EvalSumKeyGenLead but generates
+// rotation keys one index at a time, freeing C++ memory after each, so peak RAM
+// is bounded to a single rotation key rather than the full map.
+func StreamedEvalSumKeyGenLeadWithContext(ctx *CryptoContext, secretKeyShare []byte) ([]byte, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, true)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	var sum C.RotKeyHandle
+	if rc := C.StreamedEvalSumKeyGenLead(ctx.handle, sk, &sum); rc != 0 {
+		return nil, fmt.Errorf("streamed eval-sum lead key generation failed")
+	}
+	defer C.FreeRotKey(sum)
+	return serializeRotKey(sum)
+}
+
+// StreamedEvalSumKeyShareWithContext is like EvalSumKeyShare but generates one
+// index at a time against the lead base.
+func StreamedEvalSumKeyShareWithContext(ctx *CryptoContext, secretKeyShare, evalSumBase, ownPublicKey []byte) ([]byte, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, false)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	sumBase, err := deserializeRotKey(ctx.handle, evalSumBase)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeRotKey(sumBase)
+	ownPK, err := deserializePublicKey(ctx.handle, ownPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreePublicKey(ownPK)
+	var sumShare C.RotKeyHandle
+	if rc := C.StreamedEvalSumKeyShare(ctx.handle, sk, sumBase, ownPK, &sumShare); rc != 0 {
+		return nil, fmt.Errorf("streamed eval-sum share generation failed")
+	}
+	defer C.FreeRotKey(sumShare)
+	return serializeRotKey(sumShare)
+}

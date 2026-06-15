@@ -169,14 +169,14 @@ static bool ares_fhe_allow_insecure() {
 }
 
 static CryptoContext<DCRTPoly> make_ckks_context(uint32_t batch_size, uint32_t depth,
-    int scaling_mod_size, int first_mod_size) {
+    int scaling_mod_size, int first_mod_size, uint32_t ring_dim = 0) {
     CCParams<CryptoContextCKKSRNS> parameters;
     parameters.SetMultiplicativeDepth(depth);
     parameters.SetScalingModSize(scaling_mod_size > 0 ? scaling_mod_size : 50);
     parameters.SetFirstModSize(first_mod_size > 0 ? first_mod_size : 60);
     parameters.SetBatchSize(batch_size);
     parameters.SetSecurityLevel(ares_fhe_allow_insecure() ? HEStd_NotSet : HEStd_128_classic);
-    parameters.SetRingDim(std::max<uint32_t>(1 << 10, batch_size * 2));
+    parameters.SetRingDim(ring_dim > 0 ? ring_dim : std::max<uint32_t>(1 << 10, batch_size * 2));
 
     auto cc = GenCryptoContext(parameters);
     cc->Enable(PKE);
@@ -525,13 +525,13 @@ static int serialize_object(const T& obj, uint8_t** out_data, size_t* out_len) {
 
 extern "C" {
 
-CryptoContextHandle CreateCKKSContext(uint32_t ring_dim, double scaling_factor, uint32_t depth) {
+CryptoContextHandle CreateCKKSContext(uint32_t ring_dim, double scaling_factor, uint32_t depth, uint32_t batch_size) {
     try {
-        uint32_t batch_size = ring_dim >= 16 ? ring_dim / 2 : 8;
+        uint32_t bs = batch_size > 0 ? batch_size : (ring_dim >= 16 ? ring_dim / 2 : 8);
         int scaling_mod_size = static_cast<int>(infer_scaling_mod_size(scaling_factor));
         auto* ctx = new ARESCryptoContext{
-            make_ckks_context(batch_size, depth == 0 ? 2 : depth, scaling_mod_size, 60),
-            batch_size,
+            make_ckks_context(bs, depth == 0 ? 2 : depth, scaling_mod_size, 60, ring_dim),
+            bs,
             {},
             {},
             nullptr,
@@ -1158,7 +1158,7 @@ int MultiDecFusion(CryptoContextHandle ctx, CiphertextHandle* partials, int n_pa
             partial_vec.push_back(as_ct(partials[i])->ct);
         }
         Plaintext out;
-        c->cc->MultipartyDecryptFusion(partial_vec, &out);
+        try { c->cc->MultipartyDecryptFusion(partial_vec, &out); } catch (const std::exception& e) { fprintf(stderr, "[ares] MultiDecFusion exception: %s\n", e.what()); fflush(stderr); throw; }
         int capacity = *out_n_values > 0 ? *out_n_values : static_cast<int>(c->batch_size);
         out->SetLength(static_cast<size_t>(capacity));
         auto slots = out->GetCKKSPackedValue();
@@ -1168,7 +1168,13 @@ int MultiDecFusion(CryptoContextHandle ctx, CiphertextHandle* partials, int n_pa
         }
         *out_n_values = count;
         return 0;
+    } catch (const std::exception& ex) {
+        fprintf(stderr, "[ares] MultiDecFusion error: %s\n", ex.what());
+        fflush(stderr);
+        return 1;
     } catch (...) {
+        fprintf(stderr, "[ares] MultiDecFusion unknown error\n");
+        fflush(stderr);
         return 1;
     }
 }
@@ -1807,12 +1813,15 @@ int ARESFullFusePayloadCKKS(
             return 1;
         }
 
-        uint32_t batch_size = ring_dim >= 16 ? ring_dim / 2 : next_power_of_two(static_cast<uint32_t>(std::max(payload_slot_count, profile_dim)));
+        // batch_size from payload needs, not ring_dim/2, so ciphertexts are
+        // compact (matching C++ prototype at batch=1024 for 80-byte pkgs).
+        // ring_dim stays at the caller's value for key compatibility.
+        uint32_t batch_size = next_power_of_two(static_cast<uint32_t>(std::max(payload_slot_count, profile_dim)));
         if (batch_size < static_cast<uint32_t>(payload_slot_count)) {
             set_error(err, err_len, "contract batch size too small for payload slots");
             return 1;
         }
-        auto cc = make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60);
+        auto cc = make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60, ring_dim);
 
         EvalKey<DCRTPoly> mult_key;
         {
@@ -2043,3 +2052,76 @@ int SchemeSwitchingArgmin(
 }
 
 } // extern "C"
+
+// --- Streamed (per-index, memory-bounded) rotation keygen --------------------
+// These generate one rotation index at a time, serialise it, and free the C++
+// key before generating the next, so peak RAM is bounded to a single rotation
+// key (~90 MB at ring 2^16) rather than the full map (~1.5 GB for 17 indices).
+// The output is the standard serialised EvalKey map (byte-identical to the
+// all-at-once EvalSumKeyGenLead / EvalSumKeyShare), so downstream code is
+// unchanged — only peak memory differs.
+
+int StreamedEvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle* out_base) {
+    try {
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        const std::string tag = s->sk->GetKeyTag();
+        auto idx_set = c->minimal_rotation_keys
+            ? minimal_rotation_indices(c->profile_dim, c->payload_slot_count)
+            : broadcast_rotation_indices(c->batch_size);
+        if (idx_set.empty()) {
+            *out_base = reinterpret_cast<RotKeyHandle>(
+                new ARESRotKey{std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>()});
+            return 0;
+        }
+        // Generate the first index.
+        std::vector<int32_t> first{idx_set[0]};
+        c->cc->EvalAtIndexKeyGen(s->sk, first);
+        auto accum = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(tag));
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(tag);
+        // Generate and merge remaining indices one at a time.
+        for (size_t i = 1; i < idx_set.size(); i++) {
+            std::vector<int32_t> one{idx_set[i]};
+            c->cc->EvalAtIndexKeyGen(s->sk, one);
+            auto key_i = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(tag));
+            lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(
+                tag);
+            for (auto& kv : *key_i) {
+                (*accum)[kv.first] = kv.second;
+            }
+        }
+        *out_base = reinterpret_cast<RotKeyHandle>(new ARESRotKey{accum});
+        return 0;
+    } catch (...) { return 1; }
+}
+
+int StreamedEvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle base, PublicKeyHandle own_pk, RotKeyHandle* out_share) {
+    try {
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        const std::string key_tag = as_pk(own_pk)->pk->GetKeyTag();
+        const auto& base_map = as_rot(base)->keys;
+        auto idx_set = c->minimal_rotation_keys
+            ? minimal_rotation_indices(c->profile_dim, c->payload_slot_count)
+            : broadcast_rotation_indices(c->batch_size);
+        if (idx_set.empty()) {
+            *out_share = reinterpret_cast<RotKeyHandle>(
+                new ARESRotKey{std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>()});
+            return 0;
+        }
+        // Generate and merge indices one at a time.
+        std::vector<int32_t> first{idx_set[0]};
+        auto accum = c->cc->MultiEvalAtIndexKeyGen(s->sk, base_map, first, key_tag);
+        for (size_t i = 1; i < idx_set.size(); i++) {
+            std::vector<int32_t> one{idx_set[i]};
+            auto key_i = c->cc->MultiEvalAtIndexKeyGen(s->sk, base_map, one, key_tag);
+            for (auto& kv : *key_i) {
+                (*accum)[kv.first] = kv.second;
+            }
+        }
+        *out_share = reinterpret_cast<RotKeyHandle>(new ARESRotKey{accum});
+        return 0;
+    } catch (...) { return 1; }
+}

@@ -23,7 +23,8 @@ typedef void* PlaintextHandle;
 CryptoContextHandle CreateCKKSContext(
     uint32_t ring_dim,     // 32768
     double scaling_factor, // 2^52
-    uint32_t depth         // 12
+    uint32_t depth,        // 12
+    uint32_t batch_size    // 0 = ring_dim/2 (default), >0 = explicit batch
 );
 void FreeCryptoContext(CryptoContextHandle ctx);
 // SetMinimalRotationKeys opts a context into dimension-parameterized rotation-key
@@ -69,6 +70,16 @@ int InsertEvalMultKey(CryptoContextHandle ctx, EvalMultKeyHandle key);
 int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle* out_base);
 int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle base, PublicKeyHandle own_pk,
+    RotKeyHandle* out_share);
+// Streamed (per-index) rotation-key generation: produces the same output as
+// EvalSumKeyGenLead / EvalSumKeyShare but generates one index at a time,
+// merging into an accumulator, so peak C++ memory is bounded to a single
+// rotation key (~90 MB at ring 2^16) instead of the full map (~1.5 GB for
+// 17 minimal indices).
+int StreamedEvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle* out_base);
+int StreamedEvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle base, PublicKeyHandle own_pk,
     RotKeyHandle* out_share);
 // Memory-bounded rotation-key share generation: generates each rotation index's
