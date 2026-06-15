@@ -34,6 +34,9 @@ struct ARESCryptoContext {
     std::vector<PrivateKey<DCRTPoly>> secret_keys;
     EvalKey<DCRTPoly> eval_mult_base;
     std::shared_ptr<std::map<usint, EvalKey<DCRTPoly>>> eval_sum_base;
+    int profile_dim = 0;
+    int payload_slot_count = 0;
+    bool minimal_rotation_keys = false;
 };
 
 struct ARESPublicKey {
@@ -334,6 +337,23 @@ static std::vector<int32_t> broadcast_rotation_indices(uint32_t batch_size) {
     return indices;
 }
 
+// minimal_rotation_indices returns the at-index rotation set a dimension-parameterized
+// scorer needs: positive power-of-two shifts (< profile_dim) to fold a profile_dim-wide
+// dot product into slot 0, plus negative power-of-two shifts (< payload_slot_count) to
+// broadcast slot 0 across the candidate's payload bit-slots. Mirrors Go
+// minimalRotationIndices; replaces the full-batch EvalSumKeyGen + broadcast set. The
+// "< profile_dim" bound is load-bearing (must match fold_dot_to_first_slot in the scorer).
+static std::vector<int32_t> minimal_rotation_indices(int profile_dim, int payload_slot_count) {
+    std::vector<int32_t> indices;
+    for (int s = 1; s < profile_dim; s *= 2) {
+        indices.push_back(static_cast<int32_t>(s));
+    }
+    for (int s = 1; s < payload_slot_count; s *= 2) {
+        indices.push_back(-static_cast<int32_t>(s));
+    }
+    return indices;
+}
+
 static std::shared_ptr<std::map<usint, EvalKey<DCRTPoly>>> clone_key_map(
     const std::map<usint, EvalKey<DCRTPoly>>& keys
 ) {
@@ -513,6 +533,16 @@ CryptoContextHandle CreateCKKSContext(uint32_t ring_dim, double scaling_factor, 
 
 void FreeCryptoContext(CryptoContextHandle ctx) {
     delete reinterpret_cast<ARESCryptoContext*>(ctx);
+}
+
+void SetMinimalRotationKeys(CryptoContextHandle ctx, int profile_dim, int payload_slot_count) {
+    if (ctx == nullptr) {
+        return;
+    }
+    auto* c = reinterpret_cast<ARESCryptoContext*>(ctx);
+    c->profile_dim = profile_dim;
+    c->payload_slot_count = payload_slot_count;
+    c->minimal_rotation_keys = true;
 }
 
 int KeyGenFirst(CryptoContextHandle ctx, PublicKeyHandle* out_pk, SecretKeyShareHandle* out_sk) {
@@ -731,8 +761,13 @@ int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk, RotKeyHa
         }
         auto* c = as_ctx(ctx);
         auto* s = as_sk(sk);
-        c->cc->EvalSumKeyGen(s->sk);
-        c->cc->EvalAtIndexKeyGen(s->sk, broadcast_rotation_indices(c->batch_size));
+        if (c->minimal_rotation_keys) {
+            c->cc->EvalAtIndexKeyGen(s->sk,
+                minimal_rotation_indices(c->profile_dim, c->payload_slot_count));
+        } else {
+            c->cc->EvalSumKeyGen(s->sk);
+            c->cc->EvalAtIndexKeyGen(s->sk, broadcast_rotation_indices(c->batch_size));
+        }
         auto keys = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(s->sk->GetKeyTag()));
         *out_base = reinterpret_cast<RotKeyHandle>(new ARESRotKey{keys});
         return 0;
@@ -751,14 +786,16 @@ int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
         auto* c = as_ctx(ctx);
         auto* s = as_sk(sk);
         const std::string key_tag = as_pk(own_pk)->pk->GetKeyTag();
-        auto share = c->cc->MultiEvalSumKeyGen(s->sk, as_rot(base)->keys, key_tag);
-        auto rotate_share = c->cc->MultiEvalAtIndexKeyGen(
-            s->sk,
-            as_rot(base)->keys,
-            broadcast_rotation_indices(c->batch_size),
-            key_tag
-        );
-        merge_key_maps(share, rotate_share);
+        std::shared_ptr<std::map<usint, EvalKey<DCRTPoly>>> share;
+        if (c->minimal_rotation_keys) {
+            share = c->cc->MultiEvalAtIndexKeyGen(s->sk, as_rot(base)->keys,
+                minimal_rotation_indices(c->profile_dim, c->payload_slot_count), key_tag);
+        } else {
+            share = c->cc->MultiEvalSumKeyGen(s->sk, as_rot(base)->keys, key_tag);
+            auto rotate_share = c->cc->MultiEvalAtIndexKeyGen(s->sk, as_rot(base)->keys,
+                broadcast_rotation_indices(c->batch_size), key_tag);
+            merge_key_maps(share, rotate_share);
+        }
         *out_share = reinterpret_cast<RotKeyHandle>(new ARESRotKey{share});
         return 0;
     } catch (...) {

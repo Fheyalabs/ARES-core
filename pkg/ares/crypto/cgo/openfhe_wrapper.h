@@ -26,6 +26,11 @@ CryptoContextHandle CreateCKKSContext(
     uint32_t depth         // 12
 );
 void FreeCryptoContext(CryptoContextHandle ctx);
+// SetMinimalRotationKeys opts a context into dimension-parameterized rotation-key
+// generation: EvalSumKeyGenLead/Share emit only the at-index keys a profile_dim
+// dot-product fold + a payload_slot_count broadcast need, instead of the full ring/2
+// batch. Default (unset) keeps full-batch EvalSum + broadcast keygen.
+void SetMinimalRotationKeys(CryptoContextHandle ctx, int profile_dim, int payload_slot_count);
 
 // Threshold keygen (N-party)
 int KeyGenFirst(CryptoContextHandle ctx,

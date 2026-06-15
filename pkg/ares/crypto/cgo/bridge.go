@@ -54,6 +54,13 @@ type ContractParams struct {
 	RingDim       uint32
 	ScalingFactor float64
 	Depth         uint32
+	// MinimalRotationKeys opts into dimension-parameterized rotation-key generation:
+	// only the at-index keys ProfileDim/PayloadSlotCount need are produced. Default
+	// false keeps the full-batch EvalSum + broadcast keygen. ProfileDim and
+	// PayloadSlotCount are read only when MinimalRotationKeys is true.
+	MinimalRotationKeys bool
+	ProfileDim          int
+	PayloadSlotCount    int
 }
 
 type DistributedKeyShare struct {
@@ -969,6 +976,9 @@ func createContractContext(params ContractParams) (C.CryptoContextHandle, error)
 	ctx := C.CreateCKKSContext(C.uint32_t(params.RingDim), C.double(params.ScalingFactor), C.uint32_t(params.Depth))
 	if ctx == nil {
 		return nil, fmt.Errorf("failed to create OpenFHE contract context")
+	}
+	if params.MinimalRotationKeys {
+		C.SetMinimalRotationKeys(ctx, C.int(params.ProfileDim), C.int(params.PayloadSlotCount))
 	}
 	return ctx, nil
 }
