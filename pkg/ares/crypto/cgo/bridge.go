@@ -359,6 +359,39 @@ func CombineEvalKeyRound1(params ContractParams, publicKeys [][]byte, evalMultSh
 	return EvalKeyRound1Combined{EvalMultJoined: joinedBytes, EvalSumFinal: sumFinalBytes}, nil
 }
 
+// CombineEvalMultSwitchShares combines the N eval-mult switch-key shares into the
+// joint eval-mult key (the relinearization key). This is the eval-mult half of
+// CombineEvalKeyRound1; callers who fold eval-sum shares incrementally via
+// NewEvalSumIncrementalFold use this to combine the (small) eval-mult shares.
+func CombineEvalMultSwitchShares(params ContractParams, publicKeys [][]byte, evalMultShares [][]byte) ([]byte, error) {
+	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) {
+		return nil, fmt.Errorf("public/eval-mult share counts must match and be non-empty")
+	}
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	pks, freePKs, err := deserializePublicKeys(ctx, publicKeys)
+	if err != nil {
+		return nil, err
+	}
+	defer freePKs()
+	multShares, freeMultShares, err := deserializeEvalMultKeys(ctx, evalMultShares)
+	if err != nil {
+		return nil, err
+	}
+	defer freeMultShares()
+
+	var joined C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultSwitchShares(ctx, (*C.PublicKeyHandle)(unsafe.Pointer(&pks[0])), (*C.EvalMultKeyHandle)(unsafe.Pointer(&multShares[0])), C.int(len(multShares)), &joined); rc != 0 {
+		return nil, fmt.Errorf("eval-mult switch-share combination failed")
+	}
+	defer C.FreeEvalMultKey(joined)
+	return serializeEvalMultKey(joined)
+}
+
 func EvalKeyRound2Participant(params ContractParams, secretKeyShare, evalMultJoined, finalPublicKey []byte, lead bool) (EvalKeyRound2ParticipantShare, error) {
 	ctx, err := createContractContext(params)
 	if err != nil {
@@ -973,7 +1006,21 @@ func createContractContext(params ContractParams) (C.CryptoContextHandle, error)
 	if params.Depth == 0 {
 		params.Depth = 30
 	}
-	ctx := C.CreateCKKSContext(C.uint32_t(params.RingDim), C.double(params.ScalingFactor), C.uint32_t(params.Depth))
+	// Compute batch_size from profile/payload needs when minimal keys are used,
+	// so that eval-key and scoring contexts have matching batch_size. Default 0
+	// keeps the legacy ring_dim/2 behavior.
+	bs := C.uint32_t(0)
+	if params.MinimalRotationKeys && params.ProfileDim > 0 && params.PayloadSlotCount > 0 {
+		need := params.ProfileDim
+		if params.PayloadSlotCount > need {
+			need = params.PayloadSlotCount
+		}
+		bs = C.uint32_t(1)
+		for bs < C.uint32_t(need) {
+			bs <<= 1
+		}
+	}
+	ctx := C.CreateCKKSContext(C.uint32_t(params.RingDim), C.double(params.ScalingFactor), C.uint32_t(params.Depth), bs)
 	if ctx == nil {
 		return nil, fmt.Errorf("failed to create OpenFHE contract context")
 	}
@@ -1194,7 +1241,7 @@ func ThresholdSmokeCKKS(parties int) error {
 	if parties < 2 {
 		return fmt.Errorf("threshold smoke requires at least two parties")
 	}
-	ctx := C.CreateCKKSContext(C.uint32_t(1024), C.double(float64(uint64(1)<<50)), C.uint32_t(4))
+	ctx := C.CreateCKKSContext(C.uint32_t(1024), C.double(float64(uint64(1)<<50)), C.uint32_t(4), 0)
 	if ctx == nil {
 		return fmt.Errorf("failed to create OpenFHE threshold context")
 	}
