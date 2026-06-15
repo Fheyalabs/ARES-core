@@ -338,11 +338,6 @@ func CombineEvalKeyRound1(params ContractParams, publicKeys [][]byte, evalMultSh
 		return EvalKeyRound1Combined{}, err
 	}
 	defer freeMultShares()
-	sumShares, freeSumShares, err := deserializeRotKeys(ctx, evalSumShares)
-	if err != nil {
-		return EvalKeyRound1Combined{}, err
-	}
-	defer freeSumShares()
 
 	var joined C.EvalMultKeyHandle
 	if rc := C.CombineEvalMultSwitchShares(ctx, (*C.PublicKeyHandle)(unsafe.Pointer(&pks[0])), (*C.EvalMultKeyHandle)(unsafe.Pointer(&multShares[0])), C.int(len(multShares)), &joined); rc != 0 {
@@ -354,12 +349,10 @@ func CombineEvalKeyRound1(params ContractParams, publicKeys [][]byte, evalMultSh
 		return EvalKeyRound1Combined{}, err
 	}
 
-	var sumFinal C.RotKeyHandle
-	if rc := C.CombineEvalSumKeys(ctx, (*C.PublicKeyHandle)(unsafe.Pointer(&pks[0])), (*C.RotKeyHandle)(unsafe.Pointer(&sumShares[0])), C.int(len(sumShares)), &sumFinal); rc != 0 {
-		return EvalKeyRound1Combined{}, fmt.Errorf("eval-sum share combination failed")
-	}
-	defer C.FreeRotKey(sumFinal)
-	sumFinalBytes, err := serializeRotKey(sumFinal)
+	// Fold the eval-sum (rotation) shares one at a time so peak RAM is the
+	// accumulator plus one share, not all N rotation-key maps resident at once;
+	// byte-identical to the all-at-once CombineEvalSumKeys.
+	sumFinalBytes, err := combineEvalSumIncremental(ctx, publicKeys, evalSumShares)
 	if err != nil {
 		return EvalKeyRound1Combined{}, err
 	}
