@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
+//go:build openfhe
+
 package cgo
 
 // minimalRotationIndices returns the at-index rotation set a dimension-parameterized
