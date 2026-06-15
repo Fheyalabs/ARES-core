@@ -197,6 +197,7 @@ RotKeyHandle DeserializeRotKey(CryptoContextHandle ctx,
     uint8_t* data, size_t len);
 
 int ARESFullFusePayloadCKKS(
+    CryptoContextHandle ctx_handle,
     uint32_t ring_dim,
     double scaling_factor,
     uint32_t depth,

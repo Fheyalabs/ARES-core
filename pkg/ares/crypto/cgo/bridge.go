@@ -565,6 +565,7 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 	var outLen C.size_t
 	var errBuf [512]C.char
 	if rc := C.ARESFullFusePayloadCKKS(
+			nil, // ctx_handle: NULL = create fresh context
 		C.uint32_t(params.RingDim),
 		C.double(params.ScalingFactor),
 		C.uint32_t(params.Depth),
@@ -2168,4 +2169,76 @@ func StreamedEvalSumKeyShareWithContext(ctx *CryptoContext, secretKeyShare, eval
 	}
 	defer C.FreeRotKey(sumShare)
 	return serializeRotKey(sumShare)
+}
+
+// FullFusePayloadCKKSWithContext is like FullFusePayloadCKKS but reuses the
+// provided CKKS context instead of creating a new one — eliminates ~4 GB of
+// duplicate context memory at ring 2^16.
+func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]byte, error) {
+	n := len(req.CandidateCiphertexts)
+	if n == 0 || len(req.InitiatorCiphertext) == 0 {
+		return nil, fmt.Errorf("initiator and at least one candidate ciphertext required")
+	}
+	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n || len(req.CandidatePackages) != n {
+		return nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
+	}
+	pkgBytes := req.PackageBytes
+	if pkgBytes <= 0 {
+		return nil, fmt.Errorf("packageBytes must be positive")
+	}
+	payloadSlots := req.PayloadSlotCount
+	if payloadSlots <= 0 {
+		return nil, fmt.Errorf("payloadSlotCount must be positive")
+	}
+	candidateBlob, candidateLens := concatCandidateCiphertexts(req.CandidateCiphertexts)
+	latQ := intsToCInts(req.CandidateLatQ)
+	lonQ := intsToCInts(req.CandidateLonQ)
+	brownies := intsToCInts(req.CandidateBrownies)
+	packages, err := flattenCandidatePackages(req.CandidatePackages, pkgBytes)
+	if err != nil {
+		return nil, err
+	}
+	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
+	defer C.free(unsafe.Pointer(comparator))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	defer C.free(unsafe.Pointer(schedule))
+	minimalFlag := C.int(0)
+	if req.MinimalRotationKeys {
+		minimalFlag = 1
+	}
+	var out *C.uint8_t
+	var outLen C.size_t
+	var errBuf [512]C.char
+	if rc := C.ARESFullFusePayloadCKKS(
+		ctx.handle, // reuse caller's context
+		C.uint32_t(0), C.double(0), C.uint32_t(0), // ring/scaling/depth: unused when ctx set
+		(*C.uint8_t)(unsafe.Pointer(&req.InitiatorCiphertext[0])), C.size_t(len(req.InitiatorCiphertext)),
+		(*C.uint8_t)(unsafe.Pointer(&candidateBlob[0])), (*C.size_t)(unsafe.Pointer(&candidateLens[0])),
+		(*C.int)(unsafe.Pointer(&latQ[0])), (*C.int)(unsafe.Pointer(&lonQ[0])), (*C.int)(unsafe.Pointer(&brownies[0])),
+		C.int(n), C.int(req.ProfileDim),
+		C.int(req.InitiatorLatQ), C.int(req.InitiatorLonQ),
+		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
+		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
+		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
+		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0])), C.size_t(len(req.EvalKeys.EvalMultFinal)),
+		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0])), C.size_t(len(req.EvalKeys.EvalSumFinal)),
+		(*C.int)(unsafe.Pointer(&packages[0])), C.int(pkgBytes), C.int(payloadSlots),
+		minimalFlag, &out, &outLen, &errBuf[0], C.size_t(len(errBuf)),
+	); rc != 0 {
+		return nil, fmt.Errorf("full fuse payload: %s", C.GoString(&errBuf[0]))
+	}
+	result := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+	C.free(unsafe.Pointer(out))
+	return result, nil
+}
+
+// concatCandidateCiphertexts flattens candidate ciphertexts into one blob with length array.
+func concatCandidateCiphertexts(cts [][]byte) ([]byte, []C.size_t) {
+	lens := make([]C.size_t, len(cts))
+	var blob []byte
+	for i, ct := range cts {
+		lens[i] = C.size_t(len(ct))
+		blob = append(blob, ct...)
+	}
+	return blob, lens
 }

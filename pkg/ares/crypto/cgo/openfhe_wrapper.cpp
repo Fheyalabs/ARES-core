@@ -1762,6 +1762,7 @@ int ARESScoreCandidatesCKKS(
 }
 
 int ARESFullFusePayloadCKKS(
+    CryptoContextHandle ctx_handle,
     uint32_t ring_dim,
     double scaling_factor,
     uint32_t depth,
@@ -1821,7 +1822,9 @@ int ARESFullFusePayloadCKKS(
             set_error(err, err_len, "contract batch size too small for payload slots");
             return 1;
         }
-        auto cc = make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60, ring_dim);
+        auto cc = (ctx_handle != nullptr)
+            ? as_ctx(ctx_handle)->cc
+            : make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60, ring_dim);
 
         EvalKey<DCRTPoly> mult_key;
         {
