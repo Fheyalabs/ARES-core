@@ -25,6 +25,49 @@
 #include <string>
 #include <vector>
 
+// --- RSS heap instrumentation ---
+#ifdef __APPLE__
+#include <mach/mach.h>
+static size_t current_rss_kb() {
+    struct mach_task_basic_info info;
+    mach_msg_type_number_t count = MACH_TASK_BASIC_INFO_COUNT;
+    if (task_info(mach_task_self(), MACH_TASK_BASIC_INFO,
+                  (task_info_t)&info, &count) == KERN_SUCCESS) {
+        return info.resident_size / 1024;
+    }
+    return 0;
+}
+#else
+#include <unistd.h>
+static size_t current_rss_kb() {
+    FILE* f = fopen("/proc/self/status", "r");
+    if (!f) return 0;
+    char line[256];
+    size_t rss = 0;
+    while (fgets(line, sizeof(line), f)) {
+        if (sscanf(line, "VmRSS: %zu kB", &rss) == 1) break;
+    }
+    fclose(f);
+    return rss;
+}
+#endif
+
+static void logHeap(const char* label) {
+    static bool enabled = []() {
+        const char* value = getenv("ARES_OPENFHE_HEAP_LOG");
+        return value != nullptr && value[0] != '\0' && strcmp(value, "0") != 0;
+    }();
+    if (!enabled) return;
+    static size_t last_rss = 0;
+    size_t rss = current_rss_kb();
+    if (last_rss == 0) last_rss = rss;
+    fprintf(stderr, "[heap] %-40s  RSS=%7.1f MB  Δ=%+6.1f MB\n",
+        label, rss / 1024.0, (rss - last_rss) / 1024.0);
+    last_rss = rss;
+}
+#define HEAP_LOG(label) logHeap(label)
+// --- end heap instrumentation ---
+
 using namespace lbcrypto;
 
 struct ARESCryptoContext {
@@ -170,6 +213,7 @@ static bool ares_fhe_allow_insecure() {
 
 static CryptoContext<DCRTPoly> make_ckks_context(uint32_t batch_size, uint32_t depth,
     int scaling_mod_size, int first_mod_size, uint32_t ring_dim = 0) {
+    HEAP_LOG("make_ckks_context start");
     CCParams<CryptoContextCKKSRNS> parameters;
     parameters.SetMultiplicativeDepth(depth);
     parameters.SetScalingModSize(scaling_mod_size > 0 ? scaling_mod_size : 50);
@@ -184,6 +228,7 @@ static CryptoContext<DCRTPoly> make_ckks_context(uint32_t batch_size, uint32_t d
     cc->Enable(LEVELEDSHE);
     cc->Enable(ADVANCEDSHE);
     cc->Enable(MULTIPARTY);
+    HEAP_LOG("make_ckks_context done");
     return cc;
 }
 
@@ -663,6 +708,7 @@ int GenRotKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk, RotKeyHandl
 }
 
 int EvalMultKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk, EvalMultKeyHandle* out_base) {
+    HEAP_LOG("EvalMultKeyGenLead start");
     try {
         if (out_base == nullptr) {
             return 1;
@@ -767,6 +813,7 @@ int InsertEvalMultKey(CryptoContextHandle ctx, EvalMultKeyHandle key) {
 }
 
 int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk, RotKeyHandle* out_base) {
+    HEAP_LOG("EvalSumKeyGenLead start");
     try {
         if (out_base == nullptr) {
             return 1;
@@ -782,6 +829,7 @@ int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk, RotKeyHa
         }
         auto keys = clone_key_map(c->cc->GetEvalAutomorphismKeyMap(s->sk->GetKeyTag()));
         *out_base = reinterpret_cast<RotKeyHandle>(new ARESRotKey{keys});
+    HEAP_LOG("EvalSumKeyGenLead done");
         return 0;
     } catch (...) {
         return 1;
@@ -791,6 +839,7 @@ int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk, RotKeyHa
 int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle base, PublicKeyHandle own_pk,
     RotKeyHandle* out_share) {
+    HEAP_LOG("EvalSumKeyShare start");
     try {
         if (out_share == nullptr) {
             return 1;
@@ -809,6 +858,7 @@ int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
             merge_key_maps(share, rotate_share);
         }
         *out_share = reinterpret_cast<RotKeyHandle>(new ARESRotKey{share});
+    HEAP_LOG("EvalSumKeyShare done");
         return 0;
     } catch (...) {
         return 1;
@@ -1063,6 +1113,22 @@ int EvalSumCombineFold(CryptoContextHandle ctx, RotKeyHandle accum, PublicKeyHan
         auto* c = as_ctx(ctx);
         auto* a = as_rot(accum);
         a->keys = c->cc->MultiAddEvalAutomorphismKeys(a->keys, as_rot(share)->keys, as_pk(pk)->pk->GetKeyTag());
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+int MergeEvalSumKeyMaps(RotKeyHandle accum, RotKeyHandle next) {
+    try {
+        if (accum == nullptr || next == nullptr) {
+            return 1;
+        }
+        auto* a = as_rot(accum);
+        auto* n = as_rot(next);
+        for (const auto& kv : *n->keys) {
+            (*a->keys)[kv.first] = kv.second;
+        }
         return 0;
     } catch (...) {
         return 1;
@@ -2138,6 +2204,9 @@ int StreamedEvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
 int GeneratePerIndexEvalSumKey(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     int32_t index, RotKeyHandle* out_key) {
     try {
+        if (out_key == nullptr) {
+            return 1;
+        }
         auto* c = as_ctx(ctx);
         auto* s = as_sk(sk);
         std::vector<int32_t> one{index};
@@ -2147,6 +2216,24 @@ int GeneratePerIndexEvalSumKey(CryptoContextHandle ctx, SecretKeyShareHandle sk,
         lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(
             s->sk->GetKeyTag());
         *out_key = reinterpret_cast<RotKeyHandle>(new ARESRotKey{keys});
+        return 0;
+    } catch (...) { return 1; }
+}
+
+int GeneratePerIndexEvalSumShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle single_index_base, PublicKeyHandle own_pk,
+    int32_t index, RotKeyHandle* out_share) {
+    try {
+        if (single_index_base == nullptr || own_pk == nullptr || out_share == nullptr) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        const std::string key_tag = as_pk(own_pk)->pk->GetKeyTag();
+        std::vector<int32_t> one{index};
+        auto share = c->cc->MultiEvalAtIndexKeyGen(
+            s->sk, as_rot(single_index_base)->keys, one, key_tag);
+        *out_share = reinterpret_cast<RotKeyHandle>(new ARESRotKey{share});
         return 0;
     } catch (...) { return 1; }
 }

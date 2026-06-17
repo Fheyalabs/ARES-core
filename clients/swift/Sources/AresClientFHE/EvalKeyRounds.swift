@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import COpenFHEBridge
+import Foundation
 
 extension CryptoContext {
 
@@ -100,11 +101,42 @@ extension CryptoContext {
         guard InsertEvalSumKey(raw, key.raw) == 0 else { throw FHEError.evalKeyFailed }
     }
 
+    // MARK: – Streamed (per-index, merged into accumulator) eval-sum keygen
+
+    public func streamedEvalSumKeyGenLead(_ sk: SecretKeyShare) throws -> RotKey {
+        var out: UnsafeMutableRawPointer?
+        guard StreamedEvalSumKeyGenLead(raw, sk.raw, &out) == 0, let out else {
+            throw FHEError.evalKeyFailed
+        }
+        return RotKey(out)
+    }
+
+    public func streamedEvalSumKeyShare(_ sk: SecretKeyShare, base: RotKey,
+                                        ownPK: PublicKey) throws -> RotKey {
+        var out: UnsafeMutableRawPointer?
+        guard StreamedEvalSumKeyShare(raw, sk.raw, base.raw, ownPK.raw, &out) == 0, let out else {
+            throw FHEError.evalKeyFailed
+        }
+        return RotKey(out)
+    }
+
     // MARK: – Per-index (never-merged) eval-sum keygen
 
     public func generatePerIndexEvalSumKey(for sk: SecretKeyShare, index: Int32) throws -> String {
         var out: UnsafeMutableRawPointer?
         guard GeneratePerIndexEvalSumKey(raw, sk.raw, index, &out) == 0, let out else {
+            throw FHEError.evalKeyFailed
+        }
+        let key = RotKey(out)
+        return try serializeBase64(key)
+    }
+
+    public func generatePerIndexEvalSumShare(for sk: SecretKeyShare,
+                                             singleIndexBase: RotKey,
+                                             ownPK: PublicKey,
+                                             index: Int32) throws -> String {
+        var out: UnsafeMutableRawPointer?
+        guard GeneratePerIndexEvalSumShare(raw, sk.raw, singleIndexBase.raw, ownPK.raw, index, &out) == 0, let out else {
             throw FHEError.evalKeyFailed
         }
         let key = RotKey(out)
@@ -128,6 +160,25 @@ extension CryptoContext {
         for idx in indices {
             let b64 = try generatePerIndexEvalSumKey(for: sk, index: idx)
             result.append((idx, b64))
+        }
+        return result
+    }
+
+    public func generatePerIndexEvalSumShares(for sk: SecretKeyShare,
+                                              baseKeysByIndex: [(Int32, String)],
+                                              ownPK: PublicKey) throws -> [(Int32, String)] {
+        var result: [(Int32, String)] = []
+        result.reserveCapacity(baseKeysByIndex.count)
+        for (idx, base64) in baseKeysByIndex {
+            guard let data = Data(base64Encoded: base64) else {
+                throw FHEError.deserializeFailed
+            }
+            let base = try deserializeRotKey(data)
+            let share = try generatePerIndexEvalSumShare(for: sk,
+                                                         singleIndexBase: base,
+                                                         ownPK: ownPK,
+                                                         index: idx)
+            result.append((idx, share))
         }
         return result
     }

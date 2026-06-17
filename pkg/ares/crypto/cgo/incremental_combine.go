@@ -12,6 +12,14 @@ import "C"
 
 import "fmt"
 
+// IndexedEvalSumKey is one serialized single-index eval-sum/rotation key.
+// Key contains the normal OpenFHE binary RotKey map serialization for exactly
+// one rotation index.
+type IndexedEvalSumKey struct {
+	Index int
+	Key   []byte
+}
+
 // CombineEvalSumSharesIncremental folds the eval-sum (rotation) key shares one at a
 // time: the lead base seeds the accumulator and each participant share is
 // deserialized, folded, and freed before the next, so peak RAM is the accumulator
@@ -29,6 +37,55 @@ func CombineEvalSumSharesIncremental(params ContractParams, publicKeys [][]byte,
 	}
 	defer C.FreeCryptoContext(ctx)
 	return combineEvalSumIncremental(ctx, publicKeys, evalSumShares)
+}
+
+// CombineEvalKeyRound1PerIndex combines the normal one-per-party eval-mult
+// round-1 shares with eval-sum shares supplied as one RotKey per rotation index.
+// evalSumSharesByParty is ordered like publicKeys/evalMultShares: party 0 is the
+// lead base, parties 1..N-1 are participant shares. Every party must provide the
+// same index set.
+func CombineEvalKeyRound1PerIndex(params ContractParams, publicKeys [][]byte, evalMultShares [][]byte, evalSumSharesByParty [][]IndexedEvalSumKey) (EvalKeyRound1Combined, error) {
+	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumSharesByParty) {
+		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-mult/eval-sum party counts must match and be non-empty")
+	}
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+	return combineEvalKeyRound1PerIndex(ctx, publicKeys, evalMultShares, evalSumSharesByParty)
+}
+
+func combineEvalKeyRound1PerIndex(ctx C.CryptoContextHandle, publicKeys [][]byte, evalMultShares [][]byte, evalSumSharesByParty [][]IndexedEvalSumKey) (EvalKeyRound1Combined, error) {
+	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumSharesByParty) {
+		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-mult/eval-sum party counts must match and be non-empty")
+	}
+	pks, freePKs, err := deserializePublicKeys(ctx, publicKeys)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer freePKs()
+	multShares, freeMultShares, err := deserializeEvalMultKeys(ctx, evalMultShares)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer freeMultShares()
+
+	var joined C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultSwitchShares(ctx, &pks[0], &multShares[0], C.int(len(multShares)), &joined); rc != 0 {
+		return EvalKeyRound1Combined{}, fmt.Errorf("eval-mult switch-share combination failed")
+	}
+	defer C.FreeEvalMultKey(joined)
+	joinedBytes, err := serializeEvalMultKey(joined)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+
+	sumFinalBytes, err := combineEvalSumPerIndex(ctx, publicKeys, evalSumSharesByParty)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	return EvalKeyRound1Combined{EvalMultJoined: joinedBytes, EvalSumFinal: sumFinalBytes}, nil
 }
 
 // combineEvalSumIncremental folds shares into a live accumulator one at a time, so
@@ -62,6 +119,116 @@ func combineEvalSumIncremental(ctx C.CryptoContextHandle, pkBytes, shareBytes []
 		}
 	}
 	return serializeRotKey(accum)
+}
+
+func combineEvalSumPerIndex(ctx C.CryptoContextHandle, publicKeys [][]byte, byParty [][]IndexedEvalSumKey) ([]byte, error) {
+	indices, keyedByParty, err := validateIndexedEvalSumShares(byParty)
+	if err != nil {
+		return nil, err
+	}
+	var final C.RotKeyHandle
+	defer func() {
+		if final != nil {
+			C.FreeRotKey(final)
+		}
+	}()
+
+	for _, index := range indices {
+		seed, err := deserializeRotKey(ctx, keyedByParty[0][index])
+		if err != nil {
+			return nil, fmt.Errorf("deserialize lead eval-sum index %d: %w", index, err)
+		}
+		accum := C.EvalSumCombineStart(seed)
+		C.FreeRotKey(seed)
+		if accum == nil {
+			return nil, fmt.Errorf("eval-sum combine start index %d failed", index)
+		}
+
+		for party := 1; party < len(keyedByParty); party++ {
+			pk, err := deserializePublicKey(ctx, publicKeys[party])
+			if err != nil {
+				C.FreeRotKey(accum)
+				return nil, fmt.Errorf("deserialize public key party %d: %w", party, err)
+			}
+			share, err := deserializeRotKey(ctx, keyedByParty[party][index])
+			if err != nil {
+				C.FreePublicKey(pk)
+				C.FreeRotKey(accum)
+				return nil, fmt.Errorf("deserialize eval-sum party %d index %d: %w", party, index, err)
+			}
+			rc := C.EvalSumCombineFold(ctx, accum, pk, share)
+			C.FreeRotKey(share)
+			C.FreePublicKey(pk)
+			if rc != 0 {
+				C.FreeRotKey(accum)
+				return nil, fmt.Errorf("eval-sum combine fold party %d index %d failed", party, index)
+			}
+		}
+
+		if final == nil {
+			final = accum
+			continue
+		}
+		if rc := C.MergeEvalSumKeyMaps(final, accum); rc != 0 {
+			C.FreeRotKey(accum)
+			return nil, fmt.Errorf("merge eval-sum index %d failed", index)
+		}
+		C.FreeRotKey(accum)
+	}
+
+	if final == nil {
+		return nil, fmt.Errorf("no per-index eval-sum keys to combine")
+	}
+	return serializeRotKey(final)
+}
+
+func validateIndexedEvalSumShares(byParty [][]IndexedEvalSumKey) ([]int, []map[int][]byte, error) {
+	if len(byParty) == 0 {
+		return nil, nil, fmt.Errorf("at least one eval-sum party is required")
+	}
+	indices := make([]int, 0, len(byParty[0]))
+	keyedByParty := make([]map[int][]byte, len(byParty))
+	var required map[int]struct{}
+	for party, shares := range byParty {
+		if len(shares) == 0 {
+			return nil, nil, fmt.Errorf("eval-sum party %d submitted no per-index keys", party)
+		}
+		keyed := make(map[int][]byte, len(shares))
+		for _, share := range shares {
+			if len(share.Key) == 0 {
+				return nil, nil, fmt.Errorf("eval-sum party %d index %d has empty key", party, share.Index)
+			}
+			if _, exists := keyed[share.Index]; exists {
+				return nil, nil, fmt.Errorf("eval-sum party %d duplicated index %d", party, share.Index)
+			}
+			keyed[share.Index] = share.Key
+			if party == 0 {
+				indices = append(indices, share.Index)
+			}
+		}
+		if party == 0 {
+			required = make(map[int]struct{}, len(keyed))
+			for idx := range keyed {
+				required[idx] = struct{}{}
+			}
+		} else {
+			if len(keyed) != len(required) {
+				return nil, nil, fmt.Errorf("eval-sum party %d submitted %d indices, want %d", party, len(keyed), len(required))
+			}
+			for idx := range required {
+				if _, ok := keyed[idx]; !ok {
+					return nil, nil, fmt.Errorf("eval-sum party %d missing index %d", party, idx)
+				}
+			}
+			for idx := range keyed {
+				if _, ok := required[idx]; !ok {
+					return nil, nil, fmt.Errorf("eval-sum party %d submitted unexpected index %d", party, idx)
+				}
+			}
+		}
+		keyedByParty[party] = keyed
+	}
+	return indices, keyedByParty, nil
 }
 
 // combineEvalSumAllAtOnce is the resident reference path (every share deserialized

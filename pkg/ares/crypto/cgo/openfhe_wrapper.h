@@ -89,6 +89,9 @@ int StreamedEvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
 // individually; it never holds a merged accumulator.
 int GeneratePerIndexEvalSumKey(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     int32_t index, RotKeyHandle* out_key);
+int GeneratePerIndexEvalSumShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    RotKeyHandle single_index_base, PublicKeyHandle own_pk,
+    int32_t index, RotKeyHandle* out_share);
 
 // GetMinimalRotationIndices writes the context's minimal rotation index set
 // into out (up to *count entries) and sets *count to the total.
@@ -123,6 +126,7 @@ int CombineEvalSumKeys(CryptoContextHandle ctx,
 // each participant share; the result matches CombineEvalSumKeys.
 RotKeyHandle EvalSumCombineStart(RotKeyHandle seed);
 int EvalSumCombineFold(CryptoContextHandle ctx, RotKeyHandle accum, PublicKeyHandle pk, RotKeyHandle share);
+int MergeEvalSumKeyMaps(RotKeyHandle accum, RotKeyHandle next);
 int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key);
 
 // Encrypt/Decrypt

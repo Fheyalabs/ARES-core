@@ -565,7 +565,7 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 	var outLen C.size_t
 	var errBuf [512]C.char
 	if rc := C.ARESFullFusePayloadCKKS(
-			nil, // ctx_handle: NULL = create fresh context
+		nil, // ctx_handle: NULL = create fresh context
 		C.uint32_t(params.RingDim),
 		C.double(params.ScalingFactor),
 		C.uint32_t(params.Depth),
@@ -1548,7 +1548,11 @@ func SingleKeySoftArgmin(scores []float64, degree int) ([]float64, int, error) {
 			return nil, -1, fmt.Errorf("encrypt[%d] failed", i)
 		}
 	}
-	defer func() { for _, ct := range cts { C.FreeCiphertext(ct) } }()
+	defer func() {
+		for _, ct := range cts {
+			C.FreeCiphertext(ct)
+		}
+	}()
 
 	sharp := []C.double{0.5, 0.75, 0, -0.25}
 	if degree == 1 {
@@ -1559,7 +1563,11 @@ func SingleKeySoftArgmin(scores []float64, degree int) ([]float64, int, error) {
 	if rc != 0 {
 		return nil, -1, fmt.Errorf("argmax failed (depth %d insufficient for n=%d)", params.Depth, n)
 	}
-	defer func() { for _, m := range masks { C.FreeCiphertext(m) } }()
+	defer func() {
+		for _, m := range masks {
+			C.FreeCiphertext(m)
+		}
+	}()
 
 	result := make([]float64, n)
 	best, bestVal := -1, 0.0
@@ -1651,7 +1659,9 @@ type AuctionWeights struct{ K, WStar, WDist float64 }
 // SingleKeyAuctionDecrypt locally to learn the winner.
 //
 // Each driver's bid must be signed with their long-term identity key:
-//   sig_i = Sign(sk_driver_i, H(enc_bid_i || nonce_i || session_id))
+//
+//	sig_i = Sign(sk_driver_i, H(enc_bid_i || nonce_i || session_id))
+//
 // The rider verifies the winning driver's signature after decryption.
 // This prevents server-spawned ghost drivers from winning without detection.
 func SingleKeyAuctionServer(
@@ -1664,66 +1674,96 @@ func SingleKeyAuctionServer(
 	degree int,
 ) (encryptedMasks [][]byte, err error) {
 	n := len(priceCents)
-	if n < 2 { return nil, fmt.Errorf("need >= 2 bids, got %d", n) }
+	if n < 2 {
+		return nil, fmt.Errorf("need >= 2 bids, got %d", n)
+	}
 	if len(starNorms) != n || len(distSqs) != n || len(nonces) != n {
 		return nil, fmt.Errorf("mismatched input lengths")
 	}
-	if pk == nil || len(pk) == 0 { return nil, fmt.Errorf("pk required") }
+	if pk == nil || len(pk) == 0 {
+		return nil, fmt.Errorf("pk required")
+	}
 
 	ctx, err := createContractContext(params)
-	if err != nil { return nil, err }
+	if err != nil {
+		return nil, err
+	}
 	defer C.FreeCryptoContext(ctx)
 
 	cPk, err := deserializePublicKey(ctx, pk)
-	if err != nil { return nil, fmt.Errorf("deserialize pk: %w", err) }
+	if err != nil {
+		return nil, fmt.Errorf("deserialize pk: %w", err)
+	}
 	defer C.FreePublicKey(cPk)
 
 	span := float64(capCents - floorCents)
-	if span <= 0 { span = 1 }
+	if span <= 0 {
+		span = 1
+	}
 	floor := float64(floorCents)
 	Kc, wsc, wdc := C.double(w.K), C.double(w.WStar), C.double(w.WDist)
 
 	maxKeySpan := w.K + w.WStar*5.0
 	for _, d := range distSqs {
-		if w.WDist*d > maxKeySpan { maxKeySpan = w.WDist * d }
+		if w.WDist*d > maxKeySpan {
+			maxKeySpan = w.WDist * d
+		}
 	}
 	scale := C.double(0.9 / maxKeySpan)
 
 	scores := make([]C.CiphertextHandle, n)
 	for i := 0; i < n; i++ {
 		fullOffset := -scale * (wsc*C.double(5.0-starNorms[i]) + wdc*C.double(distSqs[i]) - Kc*C.double(floor)/C.double(span))
-		offVals := make([]C.double, 4); offVals[0] = fullOffset
+		offVals := make([]C.double, 4)
+		offVals[0] = fullOffset
 		offCt := C.Encrypt(ctx, cPk, &offVals[0], 4)
-		if offCt == nil { return nil, fmt.Errorf("encrypt offset[%d] failed", i) }
+		if offCt == nil {
+			return nil, fmt.Errorf("encrypt offset[%d] failed", i)
+		}
 		defer C.FreeCiphertext(offCt)
 
-		pVals := make([]C.double, 4); pVals[0] = C.double(priceCents[i])
+		pVals := make([]C.double, 4)
+		pVals[0] = C.double(priceCents[i])
 		pCt := C.Encrypt(ctx, cPk, &pVals[0], 4)
-		if pCt == nil { return nil, fmt.Errorf("encrypt price[%d] failed", i) }
+		if pCt == nil {
+			return nil, fmt.Errorf("encrypt price[%d] failed", i)
+		}
 		defer C.FreeCiphertext(pCt)
 
 		scaledPrice := C.EvalMultConst(ctx, pCt, -scale*Kc/C.double(span))
-		if scaledPrice == nil { return nil, fmt.Errorf("scale price[%d] failed", i) }
+		if scaledPrice == nil {
+			return nil, fmt.Errorf("scale price[%d] failed", i)
+		}
 		score := C.EvalAdd(ctx, scaledPrice, offCt)
 		C.FreeCiphertext(scaledPrice)
-		if score == nil { return nil, fmt.Errorf("assemble score[%d] failed", i) }
+		if score == nil {
+			return nil, fmt.Errorf("assemble score[%d] failed", i)
+		}
 		defer C.FreeCiphertext(score)
 		scores[i] = score
 	}
 
 	sharp := []C.double{0.5, 0.75, 0, -0.25}
-	if degree == 1 { sharp = []C.double{0.5, 0.5} }
+	if degree == 1 {
+		sharp = []C.double{0.5, 0.5}
+	}
 	cMasks := make([]C.CiphertextHandle, n)
 	rc := C.EvalArgmax(ctx, &scores[0], C.int(n), &sharp[0], C.int(len(sharp)), &cMasks[0])
 	if rc != 0 {
 		return nil, fmt.Errorf("argmax failed (depth %d insufficient for n=%d)", params.Depth, n)
 	}
-	defer func() { for _, m := range cMasks { C.FreeCiphertext(m) } }()
+	defer func() {
+		for _, m := range cMasks {
+			C.FreeCiphertext(m)
+		}
+	}()
 
 	encryptedMasks = make([][]byte, n)
 	for i := 0; i < n; i++ {
 		encryptedMasks[i], err = serializeCiphertext(cMasks[i])
-		if err != nil { return nil, fmt.Errorf("serialize mask[%d]: %w", i, err) }
+		if err != nil {
+			return nil, fmt.Errorf("serialize mask[%d]: %w", i, err)
+		}
 	}
 	return encryptedMasks, nil
 }
@@ -1882,34 +1922,46 @@ func SingleKeyAuctionDecrypt(
 	encryptedMasks [][]byte,
 ) (masks []float64, winnerIdx int, err error) {
 	n := len(encryptedMasks)
-	if n < 2 { return nil, -1, fmt.Errorf("need >= 2 masks") }
-	if sk == nil || len(sk) == 0 { return nil, -1, fmt.Errorf("sk required") }
+	if n < 2 {
+		return nil, -1, fmt.Errorf("need >= 2 masks")
+	}
+	if sk == nil || len(sk) == 0 {
+		return nil, -1, fmt.Errorf("sk required")
+	}
 
 	ctx, err := createContractContext(params)
-	if err != nil { return nil, -1, err }
+	if err != nil {
+		return nil, -1, err
+	}
 	defer C.FreeCryptoContext(ctx)
 
 	cSk, err := deserializeSecretKeyShare(ctx, sk, true)
-	if err != nil { return nil, -1, fmt.Errorf("deserialize sk: %w", err) }
+	if err != nil {
+		return nil, -1, fmt.Errorf("deserialize sk: %w", err)
+	}
 	defer C.FreeSecretKeyShare(cSk)
 
 	masks = make([]float64, n)
 	best, bestVal := -1, 0.0
 	for i := 0; i < n; i++ {
 		cCt, err := deserializeCiphertext(ctx, encryptedMasks[i])
-		if err != nil { return nil, -1, fmt.Errorf("deserialize mask[%d]: %w", i, err) }
-		var v C.double; nOut := C.int(1)
+		if err != nil {
+			return nil, -1, fmt.Errorf("deserialize mask[%d]: %w", i, err)
+		}
+		var v C.double
+		nOut := C.int(1)
 		if C.DecryptSingle(ctx, cCt, cSk, &v, &nOut) != 0 {
 			C.FreeCiphertext(cCt)
 			return nil, -1, fmt.Errorf("decrypt mask[%d] failed", i)
 		}
 		C.FreeCiphertext(cCt)
 		masks[i] = float64(v)
-		if best < 0 || masks[i] > bestVal { best, bestVal = i, masks[i] }
+		if best < 0 || masks[i] > bestVal {
+			best, bestVal = i, masks[i]
+		}
 	}
 	return masks, best, nil
 }
-
 
 // --- Shared context (context-reuse) variants -----------------------------------
 
@@ -1971,6 +2023,39 @@ func evalKeyRound1LeadWithContext(ctx *CryptoContext, secretKeyShare []byte) (Ev
 // shared context instead of creating a new one.
 func EvalKeyRound1LeadWithContext(ctx *CryptoContext, secretKeyShare []byte) (EvalKeyRound1LeadShare, error) {
 	return evalKeyRound1LeadWithContext(ctx, secretKeyShare)
+}
+
+func EvalMultKeyGenLeadWithContext(ctx *CryptoContext, secretKeyShare []byte) ([]byte, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, true)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	var mult C.EvalMultKeyHandle
+	if rc := C.EvalMultKeyGenLead(ctx.handle, sk, &mult); rc != 0 {
+		return nil, fmt.Errorf("eval-mult lead key generation failed")
+	}
+	defer C.FreeEvalMultKey(mult)
+	return serializeEvalMultKey(mult)
+}
+
+func EvalMultKeySwitchShareWithContext(ctx *CryptoContext, secretKeyShare, evalMultBase []byte) ([]byte, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, false)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	multBase, err := deserializeEvalMultKey(ctx.handle, evalMultBase)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeEvalMultKey(multBase)
+	var multShare C.EvalMultKeyHandle
+	if rc := C.EvalMultKeySwitchShare(ctx.handle, sk, multBase, &multShare); rc != 0 {
+		return nil, fmt.Errorf("eval-mult switch-share generation failed")
+	}
+	defer C.FreeEvalMultKey(multShare)
+	return serializeEvalMultKey(multShare)
 }
 
 // EvalKeyRound1ParticipantWithContext is like EvalKeyRound1Participant but uses the
@@ -2171,6 +2256,103 @@ func StreamedEvalSumKeyShareWithContext(ctx *CryptoContext, secretKeyShare, eval
 	return serializeRotKey(sumShare)
 }
 
+// MinimalRotationIndicesWithContext returns the rotation-index set configured on
+// the context. For MinimalRotationKeys contexts this is the profile/payload set;
+// otherwise it is the broadcast set.
+func MinimalRotationIndicesWithContext(ctx *CryptoContext) ([]int32, error) {
+	var count C.int32_t
+	if rc := C.GetMinimalRotationIndices(ctx.handle, nil, &count); rc != 0 {
+		return nil, fmt.Errorf("get minimal rotation index count failed")
+	}
+	if count <= 0 {
+		return nil, nil
+	}
+	buf := make([]C.int32_t, int(count))
+	if rc := C.GetMinimalRotationIndices(ctx.handle, &buf[0], &count); rc != 0 {
+		return nil, fmt.Errorf("get minimal rotation indices failed")
+	}
+	out := make([]int32, int(count))
+	for i := range out {
+		out[i] = int32(buf[i])
+	}
+	return out, nil
+}
+
+func GeneratePerIndexEvalSumKeyWithContext(ctx *CryptoContext, secretKeyShare []byte, index int32) ([]byte, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, true)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	var key C.RotKeyHandle
+	if rc := C.GeneratePerIndexEvalSumKey(ctx.handle, sk, C.int32_t(index), &key); rc != 0 {
+		return nil, fmt.Errorf("per-index eval-sum lead key generation failed for index %d", index)
+	}
+	defer C.FreeRotKey(key)
+	return serializeRotKey(key)
+}
+
+func GeneratePerIndexEvalSumKeysWithContext(ctx *CryptoContext, secretKeyShare []byte) ([]IndexedEvalSumKey, error) {
+	indices, err := MinimalRotationIndicesWithContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]IndexedEvalSumKey, 0, len(indices))
+	for _, index := range indices {
+		key, err := GeneratePerIndexEvalSumKeyWithContext(ctx, secretKeyShare, index)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, IndexedEvalSumKey{Index: int(index), Key: key})
+	}
+	return out, nil
+}
+
+func GeneratePerIndexEvalSumShareWithContext(ctx *CryptoContext, secretKeyShare, singleIndexBase, ownPublicKey []byte, index int32) ([]byte, error) {
+	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, false)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	base, err := deserializeRotKey(ctx.handle, singleIndexBase)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeRotKey(base)
+	ownPK, err := deserializePublicKey(ctx.handle, ownPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreePublicKey(ownPK)
+	var share C.RotKeyHandle
+	if rc := C.GeneratePerIndexEvalSumShare(ctx.handle, sk, base, ownPK, C.int32_t(index), &share); rc != 0 {
+		return nil, fmt.Errorf("per-index eval-sum share generation failed for index %d", index)
+	}
+	defer C.FreeRotKey(share)
+	return serializeRotKey(share)
+}
+
+func GeneratePerIndexEvalSumSharesWithContext(ctx *CryptoContext, secretKeyShare []byte, baseKeys []IndexedEvalSumKey, ownPublicKey []byte) ([]IndexedEvalSumKey, error) {
+	if len(baseKeys) == 0 {
+		return nil, fmt.Errorf("per-index eval-sum base keys are required")
+	}
+	out := make([]IndexedEvalSumKey, 0, len(baseKeys))
+	for _, base := range baseKeys {
+		key, err := GeneratePerIndexEvalSumShareWithContext(ctx, secretKeyShare, base.Key, ownPublicKey, int32(base.Index))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, IndexedEvalSumKey{Index: base.Index, Key: key})
+	}
+	return out, nil
+}
+
+// CombineEvalKeyRound1PerIndexWithContext is the context-reusing variant of
+// CombineEvalKeyRound1PerIndex.
+func CombineEvalKeyRound1PerIndexWithContext(ctx *CryptoContext, publicKeys [][]byte, evalMultShares [][]byte, evalSumSharesByParty [][]IndexedEvalSumKey) (EvalKeyRound1Combined, error) {
+	return combineEvalKeyRound1PerIndex(ctx.handle, publicKeys, evalMultShares, evalSumSharesByParty)
+}
+
 // FullFusePayloadCKKSWithContext is like FullFusePayloadCKKS but reuses the
 // provided CKKS context instead of creating a new one — eliminates ~4 GB of
 // duplicate context memory at ring 2^16.
@@ -2210,7 +2392,7 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 	var outLen C.size_t
 	var errBuf [512]C.char
 	if rc := C.ARESFullFusePayloadCKKS(
-		ctx.handle, // reuse caller's context
+		ctx.handle,                                // reuse caller's context
 		C.uint32_t(0), C.double(0), C.uint32_t(0), // ring/scaling/depth: unused when ctx set
 		(*C.uint8_t)(unsafe.Pointer(&req.InitiatorCiphertext[0])), C.size_t(len(req.InitiatorCiphertext)),
 		(*C.uint8_t)(unsafe.Pointer(&candidateBlob[0])), (*C.size_t)(unsafe.Pointer(&candidateLens[0])),
