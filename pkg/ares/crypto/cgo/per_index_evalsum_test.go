@@ -5,6 +5,7 @@
 package cgo
 
 import (
+	"fmt"
 	"math"
 	"testing"
 )
@@ -69,6 +70,30 @@ func TestPerIndexEvalKeyRound1SupportsDotProduct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("per-index combine: %v", err)
 	}
+	refsByParty := make([][]IndexedEvalSumKeyRef, len(perIndex))
+	blobs := make(map[string][]byte)
+	for party := range perIndex {
+		refsByParty[party] = make([]IndexedEvalSumKeyRef, len(perIndex[party]))
+		for j, key := range perIndex[party] {
+			ref := fmt.Sprintf("party-%d-index-%d", party, key.Index)
+			blobs[ref] = append([]byte(nil), key.Key...)
+			refsByParty[party][j] = IndexedEvalSumKeyRef{Index: key.Index, Ref: ref}
+		}
+	}
+	lazy, err := CombineEvalKeyRound1PerIndexLazy(params, publicKeys, multRound1, refsByParty, func(ref string) ([]byte, error) {
+		blob, ok := blobs[ref]
+		if !ok {
+			return nil, fmt.Errorf("missing ref %s", ref)
+		}
+		return append([]byte(nil), blob...), nil
+	})
+	if err != nil {
+		t.Fatalf("lazy per-index combine: %v", err)
+	}
+	if len(lazy.EvalMultJoined) == 0 || len(lazy.EvalSumFinal) == 0 {
+		t.Fatal("lazy per-index combine returned empty eval keys")
+	}
+	indexed = lazy
 
 	finalPK := shares[len(shares)-1].PublicKey
 	finalShares := make([][]byte, len(shares))

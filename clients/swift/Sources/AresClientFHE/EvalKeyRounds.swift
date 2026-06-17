@@ -122,25 +122,39 @@ extension CryptoContext {
 
     // MARK: – Per-index (never-merged) eval-sum keygen
 
-    public func generatePerIndexEvalSumKey(for sk: SecretKeyShare, index: Int32) throws -> String {
+    public func generatePerIndexEvalSumKeyData(for sk: SecretKeyShare, index: Int32) throws -> Data {
         var out: UnsafeMutableRawPointer?
         guard GeneratePerIndexEvalSumKey(raw, sk.raw, index, &out) == 0, let out else {
             throw FHEError.evalKeyFailed
         }
         let key = RotKey(out)
-        return try serializeBase64(key)
+        return try serialize(key)
+    }
+
+    public func generatePerIndexEvalSumKey(for sk: SecretKeyShare, index: Int32) throws -> String {
+        try generatePerIndexEvalSumKeyData(for: sk, index: index).base64EncodedString()
+    }
+
+    public func generatePerIndexEvalSumShareData(for sk: SecretKeyShare,
+                                                 singleIndexBase: RotKey,
+                                                 ownPK: PublicKey,
+                                                 index: Int32) throws -> Data {
+        var out: UnsafeMutableRawPointer?
+        guard GeneratePerIndexEvalSumShare(raw, sk.raw, singleIndexBase.raw, ownPK.raw, index, &out) == 0, let out else {
+            throw FHEError.evalKeyFailed
+        }
+        let key = RotKey(out)
+        return try serialize(key)
     }
 
     public func generatePerIndexEvalSumShare(for sk: SecretKeyShare,
                                              singleIndexBase: RotKey,
                                              ownPK: PublicKey,
                                              index: Int32) throws -> String {
-        var out: UnsafeMutableRawPointer?
-        guard GeneratePerIndexEvalSumShare(raw, sk.raw, singleIndexBase.raw, ownPK.raw, index, &out) == 0, let out else {
-            throw FHEError.evalKeyFailed
-        }
-        let key = RotKey(out)
-        return try serializeBase64(key)
+        try generatePerIndexEvalSumShareData(for: sk,
+                                             singleIndexBase: singleIndexBase,
+                                             ownPK: ownPK,
+                                             index: index).base64EncodedString()
     }
 
     public func minimalRotationIndices() -> [Int32] {
