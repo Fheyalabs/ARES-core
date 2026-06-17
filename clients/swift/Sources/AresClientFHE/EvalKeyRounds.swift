@@ -99,4 +99,36 @@ extension CryptoContext {
     public func insertEvalSumKey(_ key: RotKey) throws {
         guard InsertEvalSumKey(raw, key.raw) == 0 else { throw FHEError.evalKeyFailed }
     }
+
+    // MARK: – Per-index (never-merged) eval-sum keygen
+
+    public func generatePerIndexEvalSumKey(for sk: SecretKeyShare, index: Int32) throws -> String {
+        var out: UnsafeMutableRawPointer?
+        guard GeneratePerIndexEvalSumKey(raw, sk.raw, index, &out) == 0, let out else {
+            throw FHEError.evalKeyFailed
+        }
+        let key = RotKey(out)
+        return try serializeBase64(key)
+    }
+
+    public func minimalRotationIndices() -> [Int32] {
+        var count: Int32 = 0
+        guard GetMinimalRotationIndices(raw, nil, &count) == 0, count > 0 else { return [] }
+        var buf = [Int32](repeating: 0, count: Int(count))
+        guard buf.withUnsafeMutableBufferPointer({ ptr in
+            GetMinimalRotationIndices(raw, ptr.baseAddress, &count)
+        }) == 0 else { return [] }
+        return Array(buf.prefix(Int(count)))
+    }
+
+    public func generatePerIndexEvalSumKeys(for sk: SecretKeyShare) throws -> [(Int32, String)] {
+        let indices = minimalRotationIndices()
+        var result: [(Int32, String)] = []
+        result.reserveCapacity(indices.count)
+        for idx in indices {
+            let b64 = try generatePerIndexEvalSumKey(for: sk, index: idx)
+            result.append((idx, b64))
+        }
+        return result
+    }
 }

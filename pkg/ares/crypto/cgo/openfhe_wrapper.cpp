@@ -2128,3 +2128,40 @@ int StreamedEvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
         return 0;
     } catch (...) { return 1; }
 }
+
+// --- Per-index (never-merged) rotation key generation ----------------------
+// Generate a single-index rotation key, clone it out of the context, and clear
+// the context's automorphism map so the next call starts fresh. Peak memory is
+// bounded to one key (~90 MB at ring=2^16). The caller loops over the index set
+// and sends each key individually — the accumulator never grows on the client.
+
+int GeneratePerIndexEvalSumKey(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    int32_t index, RotKeyHandle* out_key) {
+    try {
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        std::vector<int32_t> one{index};
+        c->cc->EvalAtIndexKeyGen(s->sk, one);
+        auto keys = clone_key_map(
+            c->cc->GetEvalAutomorphismKeyMap(s->sk->GetKeyTag()));
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(
+            s->sk->GetKeyTag());
+        *out_key = reinterpret_cast<RotKeyHandle>(new ARESRotKey{keys});
+        return 0;
+    } catch (...) { return 1; }
+}
+
+int GetMinimalRotationIndices(CryptoContextHandle ctx, int32_t* out, int32_t* count) {
+    auto* c = as_ctx(ctx);
+    auto idx_set = c->minimal_rotation_keys
+        ? minimal_rotation_indices(c->profile_dim, c->payload_slot_count)
+        : broadcast_rotation_indices(c->batch_size);
+    if (out == nullptr) {
+        *count = static_cast<int32_t>(idx_set.size());
+        return 0;
+    }
+    int32_t n = std::min(*count, static_cast<int32_t>(idx_set.size()));
+    for (int32_t i = 0; i < n; i++) out[i] = idx_set[i];
+    *count = static_cast<int32_t>(idx_set.size());
+    return 0;
+}

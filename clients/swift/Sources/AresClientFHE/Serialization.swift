@@ -15,6 +15,16 @@ func copyAndFree(_ ptr: UnsafeMutablePointer<UInt8>?, _ len: Int) -> Data {
     return Data(bytes: ptr, count: len)
 }
 
+func base64AndFree(_ ptr: UnsafeMutablePointer<UInt8>?, _ len: Int) -> String {
+    guard let ptr else { return "" }
+    guard len > 0 else {
+        free(ptr)
+        return ""
+    }
+    let data = Data(bytesNoCopy: UnsafeMutableRawPointer(ptr), count: len, deallocator: .free)
+    return data.base64EncodedString()
+}
+
 extension CryptoContext {
 
     // MARK: – Ciphertext
@@ -49,6 +59,15 @@ extension CryptoContext {
             throw FHEError.serializationFailed
         }
         return copyAndFree(buf, len)
+    }
+
+    public func serializeBase64(_ pk: PublicKey) throws -> String {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializePublicKey(pk.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return base64AndFree(buf, len)
     }
 
     public func deserializePublicKey(_ data: Data) throws -> PublicKey {
@@ -98,6 +117,15 @@ extension CryptoContext {
         return copyAndFree(buf, len)
     }
 
+    public func serializeBase64(_ key: EvalMultKey) throws -> String {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializeEvalMultKey(key.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return base64AndFree(buf, len)
+    }
+
     public func deserializeEvalMultKey(_ data: Data) throws -> EvalMultKey {
         var d = data
         let h: UnsafeMutableRawPointer? = d.withUnsafeMutableBytes { raw in
@@ -118,6 +146,15 @@ extension CryptoContext {
             throw FHEError.serializationFailed
         }
         return copyAndFree(buf, len)
+    }
+
+    public func serializeBase64(_ key: RotKey) throws -> String {
+        var buf: UnsafeMutablePointer<UInt8>?
+        var len: Int = 0
+        guard SerializeRotKey(key.raw, &buf, &len) == 0 else {
+            throw FHEError.serializationFailed
+        }
+        return base64AndFree(buf, len)
     }
 
     public func deserializeRotKey(_ data: Data) throws -> RotKey {

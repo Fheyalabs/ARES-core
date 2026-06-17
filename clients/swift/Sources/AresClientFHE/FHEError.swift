@@ -9,6 +9,7 @@ public enum FHEError: Error, Equatable {
     case contextCreationFailed
     case keygenFailed
     case evalKeyFailed
+    case foldAlreadyFinalized
     case encryptFailed
     case decryptFailed
     case evalFailed

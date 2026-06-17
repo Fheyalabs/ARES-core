@@ -82,9 +82,19 @@ int StreamedEvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
 int StreamedEvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle base, PublicKeyHandle own_pk,
     RotKeyHandle* out_share);
-// Memory-bounded rotation-key share generation: generates each rotation index's
-// share, serializes it, and frees it before the next, so peak RAM is one key
-// rather than the whole map. Returns total serialized bytes (shares not retained).
+// Per-index (never-merged) keygen for client-side memory bounding.
+// Per-index (never-merged) rotation key generation. Generate one index at a
+// time, serialise it, and free before the next — peak memory is one key
+// (~90 MB at ring=2^16). The client calls this in a loop and sends each key
+// individually; it never holds a merged accumulator.
+int GeneratePerIndexEvalSumKey(CryptoContextHandle ctx, SecretKeyShareHandle sk,
+    int32_t index, RotKeyHandle* out_key);
+
+// GetMinimalRotationIndices writes the context's minimal rotation index set
+// into out (up to *count entries) and sets *count to the total.
+// Pass out=NULL to query the count only.
+int GetMinimalRotationIndices(CryptoContextHandle ctx, int32_t* out, int32_t* count);
+
 int StreamedRotShareBytes(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle base, PublicKeyHandle own_pk, unsigned long long* out_total_bytes);
 // Fully-streamed 2-party rotation keygen: lead base + participant share per index,

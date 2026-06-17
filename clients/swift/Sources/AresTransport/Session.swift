@@ -12,6 +12,7 @@ public enum TransportError: Error, Equatable {
 public actor Session {
     public let pseudonym: String
     public let sessionID: String
+    private var activeSessionID: String
     private let serverURL: String
     private let task: URLSessionWebSocketTask
     private var inbox: [InboundFrame] = []
@@ -27,7 +28,7 @@ public actor Session {
 
     private init(pseudonym: String, sessionID: String, serverURL: String,
                  task: URLSessionWebSocketTask, defaultTimeout: TimeInterval) {
-        self.pseudonym = pseudonym; self.sessionID = sessionID
+        self.pseudonym = pseudonym; self.sessionID = sessionID; self.activeSessionID = sessionID
         self.serverURL = serverURL; self.task = task; self.defaultTimeout = defaultTimeout
     }
 
@@ -40,6 +41,7 @@ public actor Session {
     init(_testPseudonym: String) {
         self.pseudonym = _testPseudonym
         self.sessionID = "test"
+        self.activeSessionID = "test"
         self.serverURL = ""
         // URLSession.shared.webSocketTask(with:) is the only public factory;
         // we create a dummy task to a local URL — it will never be resumed.
@@ -65,12 +67,15 @@ public actor Session {
     #endif
 
     public static func connect(serverURL: String, pseudonym: String, sessionID: String,
-                               authSecret: String = "", defaultTimeout: TimeInterval = 30) async throws -> Session {
+                               authSecret: String = "", authToken: String = "",
+                               defaultTimeout: TimeInterval = 30) async throws -> Session {
         guard var comps = URLComponents(string: serverURL) else { throw TransportError.dialFailed(serverURL) }
         comps.scheme = (comps.scheme == "https") ? "wss" : "ws"
         comps.path = "/v2/ws"
         var items = [URLQueryItem(name: "pseudonym", value: pseudonym)]
-        if !authSecret.isEmpty {
+        if !authToken.isEmpty {
+            items.append(URLQueryItem(name: "auth", value: authToken))
+        } else if !authSecret.isEmpty {
             items.append(URLQueryItem(name: "auth", value: deriveAuthToken(secret: authSecret, pseudonym: pseudonym)))
         }
         comps.queryItems = items
@@ -83,6 +88,13 @@ public actor Session {
                         task: task, defaultTimeout: defaultTimeout)
         await s.startReceiveLoop()
         return s
+    }
+
+    /// Update the session id used for outbound frames and admin-state polling.
+    /// This supports queue-created sessions where the websocket is opened before
+    /// the server-generated session id arrives in `session_invitation`.
+    public func updateSessionID(_ sessionID: String) {
+        activeSessionID = sessionID
     }
 
     private func startReceiveLoop() {
@@ -130,9 +142,19 @@ public actor Session {
 
     public func send(_ type: String, payloadJSON: Data? = nil, lineage: DAGNode? = nil, seq: Int = 0) async throws {
         if closed { throw TransportError.closed(pseudonym) }
-        let frame = try WSFrame.encodeOutbound(type: type, sessionID: sessionID, seq: seq,
+        let frame = try WSFrame.encodeOutbound(type: type, sessionID: activeSessionID, seq: seq,
                                                payloadJSON: payloadJSON, lineage: lineage)
         try await task.send(.data(frame))
+    }
+
+    /// Send a device-signed protocol message. `fields` are the top-level
+    /// (key, exact-JSON-value) pairs; the wire label is the message `type`
+    /// (matches the server's `signedEventLabels`). See ``SignedPayload``.
+    public func sendSigned(_ type: String, fields: [SignedPayload.Field],
+                           identity: DeviceIdentity, seq: Int = 0) async throws {
+        let wire = try SignedPayload.signed(label: type, sessionID: activeSessionID,
+                                            fields: fields, identity: identity)
+        try await send(type, payloadJSON: wire, seq: seq)
     }
 
     private func nextFrame(id: UUID) async throws -> InboundFrame {
@@ -187,6 +209,7 @@ public actor Session {
 
     public func awaitPhase(_ targetState: String, timeout: TimeInterval = 30) async throws {
         let deadline = Date().addingTimeInterval(timeout)
+        let sessionID = activeSessionID
         let url = URL(string: "\(serverURL)/admin/sessions/\(sessionID)")!
         while Date() < deadline {
             if let (data, resp) = try? await URLSession.shared.data(from: url),
