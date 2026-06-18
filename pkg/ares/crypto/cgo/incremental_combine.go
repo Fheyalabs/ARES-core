@@ -259,8 +259,70 @@ func combineEvalSumPerIndexLazy(ctx C.CryptoContextHandle, publicKeys [][]byte, 
 		}
 	}()
 
+	// A-vector cache: the a-vectors are byte-identical across parties (proven by
+	// bonly_keygen_prototype). Cache both the resolved bytes (eliminates redundant
+	// artifact downloads) and the deserialized C++ handle (eliminates redundant
+	// ~45 MB DCRTPoly deserializations). For 6 parties × 17 indices this avoids
+	// 85 redundant downloads + 85 redundant deserializations.
+	type aCacheEntry struct {
+		bytes  []byte
+		handle C.AVectorsHandle
+	}
+	aCache := make(map[string]*aCacheEntry)
+	defer func() {
+		for _, e := range aCache {
+			if e.handle != nil {
+				freeAVectors(e.handle)
+			}
+		}
+	}()
+
+	resolveKeyRefCached := func(ref IndexedEvalSumKeyRef) (C.RotKeyHandle, error) {
+		switch {
+		case ref.Ref != "" && ref.ARef == "" && ref.BRef == "":
+			raw, err := resolve(ref.Ref)
+			if err != nil {
+				return nil, fmt.Errorf("resolve full key ref: %w", err)
+			}
+			key, err := deserializeRotKey(ctx, raw)
+			raw = nil
+			if err != nil {
+				return nil, fmt.Errorf("deserialize full key ref: %w", err)
+			}
+			return key, nil
+		case ref.Ref == "" && ref.ARef != "" && ref.BRef != "":
+			// Resolve and deserialize A once per ARef, reuse across parties.
+			entry, ok := aCache[ref.ARef]
+			if !ok {
+				a, err := resolve(ref.ARef)
+				if err != nil {
+					return nil, fmt.Errorf("resolve a-vector ref: %w", err)
+				}
+				h, err := deserializeAVectors(a)
+				a = nil
+				if err != nil {
+					return nil, fmt.Errorf("deserialize a-vectors: %w", err)
+				}
+				entry = &aCacheEntry{handle: h}
+				aCache[ref.ARef] = entry
+			}
+			b, err := resolve(ref.BRef)
+			if err != nil {
+				return nil, fmt.Errorf("resolve b-vector ref: %w", err)
+			}
+			key, err := reconstructRotKeyFromAVectors(ctx, entry.handle, b)
+			b = nil
+			if err != nil {
+				return nil, err
+			}
+			return key, nil
+		default:
+			return nil, fmt.Errorf("eval-sum ref must contain either full ref or a/b refs")
+		}
+	}
+
 	for _, index := range indices {
-		seed, err := resolveIndexedEvalSumKeyRef(ctx, keyedByParty[0][index], resolve)
+		seed, err := resolveKeyRefCached(keyedByParty[0][index])
 		if err != nil {
 			return nil, fmt.Errorf("load lead eval-sum index %d: %w", index, err)
 		}
@@ -276,7 +338,7 @@ func combineEvalSumPerIndexLazy(ctx C.CryptoContextHandle, publicKeys [][]byte, 
 				C.FreeRotKey(accum)
 				return nil, fmt.Errorf("deserialize public key party %d: %w", party, err)
 			}
-			share, err := resolveIndexedEvalSumKeyRef(ctx, keyedByParty[party][index], resolve)
+			share, err := resolveKeyRefCached(keyedByParty[party][index])
 			if err != nil {
 				C.FreePublicKey(pk)
 				C.FreeRotKey(accum)

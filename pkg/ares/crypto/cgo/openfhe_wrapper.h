@@ -118,6 +118,16 @@ int SerializeRotKeyBVectors(RotKeyHandle share, uint8_t** out_data, size_t* out_
 int SerializeRotKeyAVectors(RotKeyHandle share, uint8_t** out_data, size_t* out_len);
 RotKeyHandle ReconstructRotKeyFromAB(CryptoContextHandle ctx,
     const uint8_t* a_data, size_t a_len, const uint8_t* b_data, size_t b_len);
+
+// Pre-deserialized A-vectors: the a-vectors are byte-identical across parties,
+// so deserialize them ONCE per index and reuse for all N parties. This avoids
+// ~85 redundant 45 MB C++ deserializations during a 6-party × 17-index combine.
+typedef struct ARESAVectors ARESAVectors;
+typedef ARESAVectors* AVectorsHandle;
+AVectorsHandle DeserializeAVectors(const uint8_t* a_data, size_t a_len);
+void FreeAVectors(AVectorsHandle h);
+RotKeyHandle ReconstructRotKeyFromAVectors(CryptoContextHandle ctx,
+    AVectorsHandle a, const uint8_t* b_data, size_t b_len);
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final);

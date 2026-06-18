@@ -57,6 +57,38 @@ func reconstructRotKeyFromAB(ctx C.CryptoContextHandle, a, b []byte) (C.RotKeyHa
 	return key, nil
 }
 
+// deserializeAVectors deserializes the shared a-vectors into a reusable handle.
+// The a-vectors are byte-identical across parties, so deserialize ONCE per index
+// and reuse for all N party reconstructions. Caller frees with freeAVectors.
+func deserializeAVectors(a []byte) (C.AVectorsHandle, error) {
+	if len(a) == 0 {
+		return nil, fmt.Errorf("a-vectors are required")
+	}
+	h := C.DeserializeAVectors((*C.uint8_t)(unsafe.Pointer(&a[0])), C.size_t(len(a)))
+	if h == nil {
+		return nil, fmt.Errorf("a-vector deserialization failed")
+	}
+	return h, nil
+}
+
+func freeAVectors(h C.AVectorsHandle) {
+	C.FreeAVectors(h)
+}
+
+// reconstructRotKeyFromAVectors rebuilds a rotation-key share from a pre-deserialized
+// a-vector handle and a party's b-vectors. Avoids re-deserializing the shared a per party.
+func reconstructRotKeyFromAVectors(ctx C.CryptoContextHandle, a C.AVectorsHandle, b []byte) (C.RotKeyHandle, error) {
+	if len(b) == 0 {
+		return nil, fmt.Errorf("b-vectors are required")
+	}
+	key := C.ReconstructRotKeyFromAVectors(ctx, a,
+		(*C.uint8_t)(unsafe.Pointer(&b[0])), C.size_t(len(b)))
+	if key == nil {
+		return nil, fmt.Errorf("b-only rotation-key reconstruction from cached a failed")
+	}
+	return key, nil
+}
+
 // SplitRotShareAB splits a serialized rotation/eval-sum key share into its shared
 // a-vectors and its per-party b-vectors. A participant uploads only b; the shared a
 // is transmitted once per epoch (or seeded from a CRS) and the combiner rebuilds the

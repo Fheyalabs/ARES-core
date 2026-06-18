@@ -1069,6 +1069,55 @@ RotKeyHandle ReconstructRotKeyFromAB(CryptoContextHandle ctx,
     }
 }
 
+// Pre-deserialized A-vectors for cached b-only reconstruction.
+struct ARESAVectors {
+    std::map<usint, std::vector<DCRTPoly>> amap;
+};
+
+AVectorsHandle DeserializeAVectors(const uint8_t* a_data, size_t a_len) {
+    try {
+        if (a_data == nullptr || a_len == 0) return nullptr;
+        auto* av = new ARESAVectors();
+        std::string raw(reinterpret_cast<const char*>(a_data), a_len);
+        std::stringstream is(raw);
+        Serial::Deserialize(av->amap, is, SerType::BINARY);
+        return av;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void FreeAVectors(AVectorsHandle h) {
+    delete h;
+}
+
+RotKeyHandle ReconstructRotKeyFromAVectors(CryptoContextHandle ctx,
+    AVectorsHandle a, const uint8_t* b_data, size_t b_len) {
+    try {
+        auto* c = as_ctx(ctx);
+        if (a == nullptr || b_data == nullptr || b_len == 0) return nullptr;
+        std::map<usint, std::vector<DCRTPoly>> bmap;
+        {
+            std::string raw(reinterpret_cast<const char*>(b_data), b_len);
+            std::stringstream is(raw);
+            Serial::Deserialize(bmap, is, SerType::BINARY);
+        }
+        auto keys = std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>();
+        for (const auto& kv : bmap) {
+            usint idx = kv.first;
+            auto a_it = a->amap.find(idx);
+            if (a_it == a->amap.end()) return nullptr;
+            auto k = std::make_shared<EvalKeyRelinImpl<DCRTPoly>>(c->cc);
+            k->SetAVector(a_it->second);
+            k->SetBVector(kv.second);
+            (*keys)[idx] = k;
+        }
+        return reinterpret_cast<RotKeyHandle>(new ARESRotKey{keys});
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 int CombineEvalSumKeys(CryptoContextHandle ctx,
     PublicKeyHandle* pks, RotKeyHandle* shares, int n_shares,
     RotKeyHandle* out_final) {
