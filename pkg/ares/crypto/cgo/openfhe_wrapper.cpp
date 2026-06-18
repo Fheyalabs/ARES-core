@@ -1197,6 +1197,26 @@ int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key) {
     }
 }
 
+int ClearEvalSumKeysForContext(CryptoContextHandle ctx) {
+    try {
+        auto* c = as_ctx(ctx);
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalSumKeys(c->cc);
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
+int InsertEvalSumKeyAppend(CryptoContextHandle ctx, RotKeyHandle key) {
+    try {
+        auto* c = as_ctx(ctx);
+        c->cc->InsertEvalSumKey(as_rot(key)->keys);
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
 CiphertextHandle Encrypt(CryptoContextHandle ctx, PublicKeyHandle pk, double* values, int n_values) {
     try {
         if (values == nullptr || n_values <= 0) {
@@ -1915,11 +1935,13 @@ int ARESFullFusePayloadCKKS(
     size_t err_len
 ) {
     try {
+        const bool eval_sum_preinserted =
+            ctx_handle != nullptr && (eval_sum_key == nullptr || eval_sum_key_len == 0);
         if (initiator_ct == nullptr || initiator_ct_len == 0 ||
             candidate_ct_blob == nullptr || candidate_ct_lens == nullptr ||
             candidate_lat_q == nullptr || candidate_lon_q == nullptr || candidate_brownies == nullptr ||
             eval_mult_key == nullptr || eval_mult_key_len == 0 ||
-            eval_sum_key == nullptr || eval_sum_key_len == 0 ||
+            (!eval_sum_preinserted && (eval_sum_key == nullptr || eval_sum_key_len == 0)) ||
             candidate_packages == nullptr || out_ct == nullptr || out_ct_len == nullptr) {
             set_error(err, err_len, "null pointer passed to ARESFullFusePayloadCKKS");
             return 1;
@@ -1948,13 +1970,15 @@ int ARESFullFusePayloadCKKS(
             Serial::Deserialize(mult_key, is, SerType::BINARY);
         }
         cc->InsertEvalMultKey({mult_key});
-        std::map<usint, EvalKey<DCRTPoly>> sum_keys;
-        {
-            std::string raw(reinterpret_cast<const char*>(eval_sum_key), eval_sum_key_len);
-            std::stringstream is(raw);
-            Serial::Deserialize(sum_keys, is, SerType::BINARY);
+        if (!eval_sum_preinserted) {
+            std::map<usint, EvalKey<DCRTPoly>> sum_keys;
+            {
+                std::string raw(reinterpret_cast<const char*>(eval_sum_key), eval_sum_key_len);
+                std::stringstream is(raw);
+                Serial::Deserialize(sum_keys, is, SerType::BINARY);
+            }
+            cc->InsertEvalSumKey(std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>(sum_keys));
         }
-        cc->InsertEvalSumKey(std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>(sum_keys));
 
         Ciphertext<DCRTPoly> init;
         {

@@ -370,6 +370,130 @@ func combineEvalSumPerIndexLazy(ctx C.CryptoContextHandle, publicKeys [][]byte, 
 	return serializeRotKey(final)
 }
 
+// InsertEvalSumKeysPerIndexLazyWithContext combines one rotation index at a time
+// and appends each resulting key map directly into ctx. It avoids materializing a
+// single merged RotKey handle or serialized eval-sum blob in Go.
+func InsertEvalSumKeysPerIndexLazyWithContext(ctx *CryptoContext, publicKeys [][]byte, byParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) error {
+	if ctx == nil || ctx.handle == nil {
+		return fmt.Errorf("crypto context is required")
+	}
+	return insertEvalSumPerIndexLazy(ctx.handle, publicKeys, byParty, resolve)
+}
+
+func insertEvalSumPerIndexLazy(ctx C.CryptoContextHandle, publicKeys [][]byte, byParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) error {
+	indices, keyedByParty, err := validateIndexedEvalSumShareRefs(byParty)
+	if err != nil {
+		return err
+	}
+	if len(publicKeys) != len(keyedByParty) {
+		return fmt.Errorf("public key count must match eval-sum party count")
+	}
+	if resolve == nil {
+		return fmt.Errorf("eval-sum key resolver is required")
+	}
+
+	if rc := C.ClearEvalSumKeysForContext(ctx); rc != 0 {
+		return fmt.Errorf("clear eval-sum key cache failed")
+	}
+
+	// Keep the shared a-vector deserializations cached across indices. The cache
+	// is bounded by the number of rotation indices, not party count.
+	type aCacheEntry struct {
+		handle C.AVectorsHandle
+	}
+	aCache := make(map[string]*aCacheEntry)
+	defer func() {
+		for _, e := range aCache {
+			if e.handle != nil {
+				freeAVectors(e.handle)
+			}
+		}
+	}()
+
+	resolveKeyRefCached := func(ref IndexedEvalSumKeyRef) (C.RotKeyHandle, error) {
+		switch {
+		case ref.Ref != "" && ref.ARef == "" && ref.BRef == "":
+			raw, err := resolve(ref.Ref)
+			if err != nil {
+				return nil, fmt.Errorf("resolve full key ref: %w", err)
+			}
+			key, err := deserializeRotKey(ctx, raw)
+			raw = nil
+			if err != nil {
+				return nil, fmt.Errorf("deserialize full key ref: %w", err)
+			}
+			return key, nil
+		case ref.Ref == "" && ref.ARef != "" && ref.BRef != "":
+			entry, ok := aCache[ref.ARef]
+			if !ok {
+				a, err := resolve(ref.ARef)
+				if err != nil {
+					return nil, fmt.Errorf("resolve a-vector ref: %w", err)
+				}
+				h, err := deserializeAVectors(a)
+				a = nil
+				if err != nil {
+					return nil, fmt.Errorf("deserialize a-vectors: %w", err)
+				}
+				entry = &aCacheEntry{handle: h}
+				aCache[ref.ARef] = entry
+			}
+			b, err := resolve(ref.BRef)
+			if err != nil {
+				return nil, fmt.Errorf("resolve b-vector ref: %w", err)
+			}
+			key, err := reconstructRotKeyFromAVectors(ctx, entry.handle, b)
+			b = nil
+			if err != nil {
+				return nil, err
+			}
+			return key, nil
+		default:
+			return nil, fmt.Errorf("eval-sum ref must contain either full ref or a/b refs")
+		}
+	}
+
+	for _, index := range indices {
+		seed, err := resolveKeyRefCached(keyedByParty[0][index])
+		if err != nil {
+			return fmt.Errorf("load lead eval-sum index %d: %w", index, err)
+		}
+		accum := C.EvalSumCombineStart(seed)
+		C.FreeRotKey(seed)
+		if accum == nil {
+			return fmt.Errorf("eval-sum combine start index %d failed", index)
+		}
+
+		for party := 1; party < len(keyedByParty); party++ {
+			pk, err := deserializePublicKey(ctx, publicKeys[party])
+			if err != nil {
+				C.FreeRotKey(accum)
+				return fmt.Errorf("deserialize public key party %d: %w", party, err)
+			}
+			share, err := resolveKeyRefCached(keyedByParty[party][index])
+			if err != nil {
+				C.FreePublicKey(pk)
+				C.FreeRotKey(accum)
+				return fmt.Errorf("load eval-sum party %d index %d: %w", party, index, err)
+			}
+			rc := C.EvalSumCombineFold(ctx, accum, pk, share)
+			C.FreeRotKey(share)
+			C.FreePublicKey(pk)
+			if rc != 0 {
+				C.FreeRotKey(accum)
+				return fmt.Errorf("eval-sum combine fold party %d index %d failed", party, index)
+			}
+		}
+
+		if rc := C.InsertEvalSumKeyAppend(ctx, accum); rc != 0 {
+			C.FreeRotKey(accum)
+			return fmt.Errorf("insert eval-sum index %d failed", index)
+		}
+		C.FreeRotKey(accum)
+	}
+	return nil
+}
+
 func resolveIndexedEvalSumKeyRef(ctx C.CryptoContextHandle, ref IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) (C.RotKeyHandle, error) {
 	switch {
 	case ref.Ref != "" && ref.ARef == "" && ref.BRef == "":

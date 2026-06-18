@@ -138,6 +138,8 @@ RotKeyHandle EvalSumCombineStart(RotKeyHandle seed);
 int EvalSumCombineFold(CryptoContextHandle ctx, RotKeyHandle accum, PublicKeyHandle pk, RotKeyHandle share);
 int MergeEvalSumKeyMaps(RotKeyHandle accum, RotKeyHandle next);
 int InsertEvalSumKey(CryptoContextHandle ctx, RotKeyHandle key);
+int ClearEvalSumKeysForContext(CryptoContextHandle ctx);
+int InsertEvalSumKeyAppend(CryptoContextHandle ctx, RotKeyHandle key);
 
 // Encrypt/Decrypt
 CiphertextHandle Encrypt(CryptoContextHandle ctx, PublicKeyHandle pk,

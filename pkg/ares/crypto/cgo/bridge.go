@@ -2357,12 +2357,18 @@ func CombineEvalKeyRound1PerIndexWithContext(ctx *CryptoContext, publicKeys [][]
 // provided CKKS context instead of creating a new one — eliminates ~4 GB of
 // duplicate context memory at ring 2^16.
 func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]byte, error) {
+	if ctx == nil || ctx.handle == nil {
+		return nil, fmt.Errorf("crypto context is required")
+	}
 	n := len(req.CandidateCiphertexts)
 	if n == 0 || len(req.InitiatorCiphertext) == 0 {
 		return nil, fmt.Errorf("initiator and at least one candidate ciphertext required")
 	}
 	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n || len(req.CandidatePackages) != n {
 		return nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
+	}
+	if len(req.EvalKeys.EvalMultFinal) == 0 {
+		return nil, fmt.Errorf("final eval-mult key is required")
 	}
 	pkgBytes := req.PackageBytes
 	if pkgBytes <= 0 {
@@ -2388,6 +2394,12 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 	if req.MinimalRotationKeys {
 		minimalFlag = 1
 	}
+	var evalSumPtr *C.uint8_t
+	var evalSumLen C.size_t
+	if len(req.EvalKeys.EvalSumFinal) > 0 {
+		evalSumPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0]))
+		evalSumLen = C.size_t(len(req.EvalKeys.EvalSumFinal))
+	}
 	var out *C.uint8_t
 	var outLen C.size_t
 	var errBuf [512]C.char
@@ -2403,7 +2415,7 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
 		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
 		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0])), C.size_t(len(req.EvalKeys.EvalMultFinal)),
-		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0])), C.size_t(len(req.EvalKeys.EvalSumFinal)),
+		evalSumPtr, evalSumLen,
 		(*C.int)(unsafe.Pointer(&packages[0])), C.int(pkgBytes), C.int(payloadSlots),
 		minimalFlag, &out, &outLen, &errBuf[0], C.size_t(len(errBuf)),
 	); rc != 0 {
@@ -2412,6 +2424,26 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 	result := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
 	C.free(unsafe.Pointer(out))
 	return result, nil
+}
+
+// FullFusePayloadCKKSWithEvalSumRefs streams per-index eval-sum shares into a
+// native context before running fused scoring. It avoids constructing or passing a
+// monolithic serialized eval-sum key blob through Go.
+func FullFusePayloadCKKSWithEvalSumRefs(params ContractParams, req FullFuseRequest, publicKeys [][]byte, evalSumRefsByParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) ([]byte, error) {
+	if len(req.EvalKeys.EvalMultFinal) == 0 {
+		return nil, fmt.Errorf("final eval-mult key is required")
+	}
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer ctx.Close()
+	if err := insertEvalSumPerIndexLazy(ctx.handle, publicKeys, evalSumRefsByParty, resolve); err != nil {
+		return nil, err
+	}
+	streamReq := req
+	streamReq.EvalKeys.EvalSumFinal = nil
+	return FullFusePayloadCKKSWithContext(ctx, streamReq)
 }
 
 // concatCandidateCiphertexts flattens candidate ciphertexts into one blob with length array.
