@@ -122,39 +122,40 @@ extension CryptoContext {
 
     // MARK: – Per-index (never-merged) eval-sum keygen
 
-    public func generatePerIndexEvalSumKeyData(for sk: SecretKeyShare, index: Int32) throws -> Data {
+    /// Generate the lead's per-index eval-sum key as a RotKey handle (no serialize→deserialize
+    /// roundtrip). Use `serializeAVectors` / `serializeBVectors` on the result for upload.
+    public func generatePerIndexEvalSumKey(for sk: SecretKeyShare, index: Int32) throws -> RotKey {
         var out: UnsafeMutableRawPointer?
         guard GeneratePerIndexEvalSumKey(raw, sk.raw, index, &out) == 0, let out else {
             throw FHEError.evalKeyFailed
         }
-        let key = RotKey(out)
-        return try serialize(key)
+        return RotKey(out)
     }
 
-    public func generatePerIndexEvalSumKey(for sk: SecretKeyShare, index: Int32) throws -> String {
-        try generatePerIndexEvalSumKeyData(for: sk, index: index).base64EncodedString()
+    /// Generate a party's per-index eval-sum share as a RotKey handle (no roundtrip).
+    /// Use `serializeBVectors` on the result for b-only upload.
+    public func generatePerIndexEvalSumShare(for sk: SecretKeyShare,
+                                             singleIndexBase: RotKey,
+                                             ownPK: PublicKey,
+                                             index: Int32) throws -> RotKey {
+        var out: UnsafeMutableRawPointer?
+        guard GeneratePerIndexEvalSumShare(raw, sk.raw, singleIndexBase.raw, ownPK.raw, index, &out) == 0, let out else {
+            throw FHEError.evalKeyFailed
+        }
+        return RotKey(out)
+    }
+
+    public func generatePerIndexEvalSumKeyData(for sk: SecretKeyShare, index: Int32) throws -> Data {
+        let key = try generatePerIndexEvalSumKey(for: sk, index: index)
+        return try serialize(key)
     }
 
     public func generatePerIndexEvalSumShareData(for sk: SecretKeyShare,
                                                  singleIndexBase: RotKey,
                                                  ownPK: PublicKey,
                                                  index: Int32) throws -> Data {
-        var out: UnsafeMutableRawPointer?
-        guard GeneratePerIndexEvalSumShare(raw, sk.raw, singleIndexBase.raw, ownPK.raw, index, &out) == 0, let out else {
-            throw FHEError.evalKeyFailed
-        }
-        let key = RotKey(out)
+        let key = try generatePerIndexEvalSumShare(for: sk, singleIndexBase: singleIndexBase, ownPK: ownPK, index: index)
         return try serialize(key)
-    }
-
-    public func generatePerIndexEvalSumShare(for sk: SecretKeyShare,
-                                             singleIndexBase: RotKey,
-                                             ownPK: PublicKey,
-                                             index: Int32) throws -> String {
-        try generatePerIndexEvalSumShareData(for: sk,
-                                             singleIndexBase: singleIndexBase,
-                                             ownPK: ownPK,
-                                             index: index).base64EncodedString()
     }
 
     public func minimalRotationIndices() -> [Int32] {
@@ -172,7 +173,8 @@ extension CryptoContext {
         var result: [(Int32, String)] = []
         result.reserveCapacity(indices.count)
         for idx in indices {
-            let b64 = try generatePerIndexEvalSumKey(for: sk, index: idx)
+            let key = try generatePerIndexEvalSumKey(for: sk, index: idx)
+            let b64 = try serialize(key).base64EncodedString()
             result.append((idx, b64))
         }
         return result
@@ -192,7 +194,8 @@ extension CryptoContext {
                                                          singleIndexBase: base,
                                                          ownPK: ownPK,
                                                          index: idx)
-            result.append((idx, share))
+            let b64 = try serialize(share).base64EncodedString()
+            result.append((idx, b64))
         }
         return result
     }
