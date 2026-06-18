@@ -5,6 +5,7 @@
 package cgo
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"testing"
@@ -93,7 +94,58 @@ func TestPerIndexEvalKeyRound1SupportsDotProduct(t *testing.T) {
 	if len(lazy.EvalMultJoined) == 0 || len(lazy.EvalSumFinal) == 0 {
 		t.Fatal("lazy per-index combine returned empty eval keys")
 	}
-	indexed = lazy
+	bOnlyRefsByParty := make([][]IndexedEvalSumKeyRef, len(perIndex))
+	bOnlyBlobs := make(map[string][]byte)
+	sharedAByIndex := make(map[int][]byte)
+	sharedARefByIndex := make(map[int]string)
+	for party := range perIndex {
+		bOnlyRefsByParty[party] = make([]IndexedEvalSumKeyRef, len(perIndex[party]))
+	}
+	for j, key := range perIndex[0] {
+		a, b, err := SplitRotShareAB(params, key.Key)
+		if err != nil {
+			t.Fatalf("split lead index %d: %v", key.Index, err)
+		}
+		aRef := fmt.Sprintf("index-%d-a", key.Index)
+		bRef := fmt.Sprintf("party-0-index-%d-b", key.Index)
+		bOnlyBlobs[aRef] = append([]byte(nil), a...)
+		bOnlyBlobs[bRef] = append([]byte(nil), b...)
+		sharedAByIndex[key.Index] = append([]byte(nil), a...)
+		sharedARefByIndex[key.Index] = aRef
+		bOnlyRefsByParty[0][j] = IndexedEvalSumKeyRef{Index: key.Index, ARef: aRef, BRef: bRef}
+	}
+	for party := 1; party < len(perIndex); party++ {
+		for j, key := range perIndex[party] {
+			a, b, err := SplitRotShareAB(params, key.Key)
+			if err != nil {
+				t.Fatalf("split party %d index %d: %v", party, key.Index, err)
+			}
+			aRef, ok := sharedARefByIndex[key.Index]
+			if !ok {
+				t.Fatalf("missing shared a-vector ref for index %d", key.Index)
+			}
+			if !bytes.Equal(a, sharedAByIndex[key.Index]) {
+				t.Fatalf("a-vectors differ for party %d index %d", party, key.Index)
+			}
+			bRef := fmt.Sprintf("party-%d-index-%d-b", party, key.Index)
+			bOnlyBlobs[bRef] = append([]byte(nil), b...)
+			bOnlyRefsByParty[party][j] = IndexedEvalSumKeyRef{Index: key.Index, ARef: aRef, BRef: bRef}
+		}
+	}
+	bOnly, err := CombineEvalKeyRound1PerIndexLazy(params, publicKeys, multRound1, bOnlyRefsByParty, func(ref string) ([]byte, error) {
+		blob, ok := bOnlyBlobs[ref]
+		if !ok {
+			return nil, fmt.Errorf("missing b-only ref %s", ref)
+		}
+		return append([]byte(nil), blob...), nil
+	})
+	if err != nil {
+		t.Fatalf("lazy b-only per-index combine: %v", err)
+	}
+	if len(bOnly.EvalMultJoined) == 0 || len(bOnly.EvalSumFinal) == 0 {
+		t.Fatal("lazy b-only per-index combine returned empty eval keys")
+	}
+	indexed = bOnly
 
 	finalPK := shares[len(shares)-1].PublicKey
 	finalShares := make([][]byte, len(shares))
