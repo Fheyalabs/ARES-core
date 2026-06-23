@@ -53,23 +53,6 @@ func CombineEvalSumSharesIncremental(params ContractParams, publicKeys [][]byte,
 	return combineEvalSumIncremental(ctx, publicKeys, evalSumShares)
 }
 
-// CombineEvalKeyRound1PerIndex combines the normal one-per-party eval-mult
-// round-1 shares with eval-sum shares supplied as one RotKey per rotation index.
-// evalSumSharesByParty is ordered like publicKeys/evalMultShares: party 0 is the
-// lead base, parties 1..N-1 are participant shares. Every party must provide the
-// same index set.
-func CombineEvalKeyRound1PerIndex(params ContractParams, publicKeys [][]byte, evalMultShares [][]byte, evalSumSharesByParty [][]IndexedEvalSumKey) (EvalKeyRound1Combined, error) {
-	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumSharesByParty) {
-		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-mult/eval-sum party counts must match and be non-empty")
-	}
-	ctx, err := createContractContext(params)
-	if err != nil {
-		return EvalKeyRound1Combined{}, err
-	}
-	defer C.FreeCryptoContext(ctx)
-	return combineEvalKeyRound1PerIndex(ctx, publicKeys, evalMultShares, evalSumSharesByParty)
-}
-
 // CombineEvalKeyRound1PerIndexLazy is the artifact-friendly variant of
 // CombineEvalKeyRound1PerIndex. It combines the eval-mult round normally, then
 // resolves eval-sum shares one index/share at a time during folding, avoiding a

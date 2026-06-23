@@ -17,28 +17,38 @@ import (
 )
 
 type contractParamsJSON struct {
+	Scheme         string  `json:"scheme,omitempty"`
 	RingDim        uint32  `json:"ring_dim"`
 	ScalingFactor  float64 `json:"scaling_factor,omitempty"`
 	ScalingModSize int     `json:"scaling_mod_size,omitempty"`
 	Depth          uint32  `json:"depth"`
 }
 
+type bfvContractParamsJSON struct {
+	RingDim             uint32 `json:"ring_dim"`
+	MultiplicativeDepth uint32 `json:"multiplicative_depth"`
+	PlaintextModulus    uint64 `json:"plaintext_modulus"`
+	BatchSize           int    `json:"batch_size,omitempty"`
+}
+
 type request struct {
-	Op             string             `json:"op"`
-	Params         contractParamsJSON `json:"params"`
-	PrevPublicKey  string             `json:"prev_public_key,omitempty"`
-	JointPublicKey string             `json:"joint_public_key,omitempty"`
-	OwnPublicKey   string             `json:"own_public_key,omitempty"`
-	FinalPublicKey string             `json:"final_public_key,omitempty"`
-	EvalMultBase   string             `json:"eval_mult_base,omitempty"`
-	EvalSumBase    string             `json:"eval_sum_base,omitempty"`
-	EvalMultJoined string             `json:"eval_mult_joined,omitempty"`
-	Values         []float64          `json:"values,omitempty"`
-	Ciphertext     string             `json:"ciphertext,omitempty"`
-	SecretKeyShare string             `json:"secret_key_share,omitempty"`
-	Lead           bool               `json:"lead,omitempty"`
-	Partials       []string           `json:"partials,omitempty"`
-	NSlots         int                `json:"n_slots,omitempty"`
+	Op             string                `json:"op"`
+	Params         contractParamsJSON    `json:"params"`
+	BFVParams      bfvContractParamsJSON `json:"bfv_params,omitempty"`
+	PrevPublicKey  string                `json:"prev_public_key,omitempty"`
+	JointPublicKey string                `json:"joint_public_key,omitempty"`
+	OwnPublicKey   string                `json:"own_public_key,omitempty"`
+	FinalPublicKey string                `json:"final_public_key,omitempty"`
+	EvalMultBase   string                `json:"eval_mult_base,omitempty"`
+	EvalSumBase    string                `json:"eval_sum_base,omitempty"`
+	EvalMultJoined string                `json:"eval_mult_joined,omitempty"`
+	Values         []float64             `json:"values,omitempty"`
+	IntValues      []int64               `json:"int_values,omitempty"`
+	Ciphertext     string                `json:"ciphertext,omitempty"`
+	SecretKeyShare string                `json:"secret_key_share,omitempty"`
+	Lead           bool                  `json:"lead,omitempty"`
+	Partials       []string              `json:"partials,omitempty"`
+	NSlots         int                   `json:"n_slots,omitempty"`
 
 	// combine_evalkey_round1 / combine_evalkey_round2 inputs.
 	PublicKeys           []string `json:"public_keys,omitempty"`
@@ -54,14 +64,14 @@ type request struct {
 	EvalSumShareB string `json:"eval_sum_share_b,omitempty"`
 
 	// Decomposable scoring primitives. See helperclient/scoring_ops.go.
-	EvalKeys       string             `json:"eval_keys,omitempty"`
-	CiphertextA    string             `json:"ciphertext_a,omitempty"`
-	CiphertextB    string             `json:"ciphertext_b,omitempty"`
-	Scalar         float64            `json:"scalar,omitempty"`
-	Coefficients   []float64          `json:"coefficients,omitempty"`
-	PolyLowerBound float64            `json:"poly_lower_bound,omitempty"`
-	PolyUpperBound float64            `json:"poly_upper_bound,omitempty"`
-	Ciphertexts    []string           `json:"ciphertexts,omitempty"`
+	EvalKeys       string    `json:"eval_keys,omitempty"`
+	CiphertextA    string    `json:"ciphertext_a,omitempty"`
+	CiphertextB    string    `json:"ciphertext_b,omitempty"`
+	Scalar         float64   `json:"scalar,omitempty"`
+	Coefficients   []float64 `json:"coefficients,omitempty"`
+	PolyLowerBound float64   `json:"poly_lower_bound,omitempty"`
+	PolyUpperBound float64   `json:"poly_upper_bound,omitempty"`
+	Ciphertexts    []string  `json:"ciphertexts,omitempty"`
 }
 
 type response struct {
@@ -71,6 +81,7 @@ type response struct {
 	Ciphertext         string    `json:"ciphertext,omitempty"`
 	Partial            string    `json:"partial,omitempty"`
 	Values             []float64 `json:"values,omitempty"`
+	IntValues          []int64   `json:"int_values,omitempty"`
 	EvalMultBase       string    `json:"eval_mult_base,omitempty"`
 	EvalSumBase        string    `json:"eval_sum_base,omitempty"`
 	EvalMultShare      string    `json:"eval_mult_share,omitempty"`
@@ -174,6 +185,22 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return keyShareResponse(share), nil
+	case "bfv_keygen_first":
+		share, err := openfhe.BFVDistributedKeyGenFirst(req.BFVParams.toBFVContractParams())
+		if err != nil {
+			return response{}, err
+		}
+		return keyShareResponse(share), nil
+	case "bfv_keygen_next":
+		prev, err := decodeB64("prev_public_key", req.PrevPublicKey)
+		if err != nil {
+			return response{}, err
+		}
+		share, err := openfhe.BFVDistributedKeyGenNext(req.BFVParams.toBFVContractParams(), prev)
+		if err != nil {
+			return response{}, err
+		}
+		return keyShareResponse(share), nil
 	case "encrypt_profile":
 		joint, err := decodeB64("joint_public_key", req.JointPublicKey)
 		if err != nil {
@@ -184,12 +211,35 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{Ciphertext: encodeB64(ct)}, nil
+	case "bfv_encrypt_int_vector":
+		joint, err := decodeB64("joint_public_key", req.JointPublicKey)
+		if err != nil {
+			return response{}, err
+		}
+		ct, err := openfhe.EncryptBFVForContract(req.BFVParams.toBFVContractParams(), joint, req.IntValues)
+		if err != nil {
+			return response{}, err
+		}
+		return response{Ciphertext: encodeB64(ct)}, nil
 	case "evalkey_round1_lead":
 		sk, err := decodeB64("secret_key_share", req.SecretKeyShare)
 		if err != nil {
 			return response{}, err
 		}
 		round1, err := openfhe.EvalKeyRound1Lead(params, sk)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalMultBase: encodeB64(round1.EvalMultBase),
+			EvalSumBase:  encodeB64(round1.EvalSumBase),
+		}, nil
+	case "bfv_evalkey_round1_lead":
+		sk, err := decodeB64("secret_key_share", req.SecretKeyShare)
+		if err != nil {
+			return response{}, err
+		}
+		round1, err := openfhe.BFVEvalKeyRound1Lead(req.BFVParams.toBFVContractParams(), sk)
 		if err != nil {
 			return response{}, err
 		}
@@ -222,6 +272,31 @@ func run(req request) (response, error) {
 			EvalMultShare: encodeB64(round1.EvalMultSwitchShare),
 			EvalSumShare:  encodeB64(round1.EvalSumShare),
 		}, nil
+	case "bfv_evalkey_round1_participant":
+		sk, err := decodeB64("secret_key_share", req.SecretKeyShare)
+		if err != nil {
+			return response{}, err
+		}
+		multBase, err := decodeB64("eval_mult_base", req.EvalMultBase)
+		if err != nil {
+			return response{}, err
+		}
+		sumBase, err := decodeB64("eval_sum_base", req.EvalSumBase)
+		if err != nil {
+			return response{}, err
+		}
+		ownPK, err := decodeB64("own_public_key", req.OwnPublicKey)
+		if err != nil {
+			return response{}, err
+		}
+		round1, err := openfhe.BFVEvalKeyRound1Participant(req.BFVParams.toBFVContractParams(), sk, multBase, sumBase, ownPK)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalMultShare: encodeB64(round1.EvalMultSwitchShare),
+			EvalSumShare:  encodeB64(round1.EvalSumShare),
+		}, nil
 	case "evalkey_round2_participant":
 		sk, err := decodeB64("secret_key_share", req.SecretKeyShare)
 		if err != nil {
@@ -240,6 +315,24 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{EvalMultFinalShare: encodeB64(round2.EvalMultFinalShare)}, nil
+	case "bfv_evalkey_round2_participant":
+		sk, err := decodeB64("secret_key_share", req.SecretKeyShare)
+		if err != nil {
+			return response{}, err
+		}
+		joined, err := decodeB64("eval_mult_joined", req.EvalMultJoined)
+		if err != nil {
+			return response{}, err
+		}
+		finalPK, err := decodeB64("final_public_key", req.FinalPublicKey)
+		if err != nil {
+			return response{}, err
+		}
+		round2, err := openfhe.BFVEvalKeyRound2Participant(req.BFVParams.toBFVContractParams(), sk, joined, finalPK, req.Lead)
+		if err != nil {
+			return response{}, err
+		}
+		return response{EvalMultFinalShare: encodeB64(round2.EvalMultFinalShare)}, nil
 	case "partial_decrypt":
 		ct, err := decodeB64("ciphertext", req.Ciphertext)
 		if err != nil {
@@ -250,6 +343,20 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		partial, err := openfhe.PartialDecryptCKKSForContract(params, ct, sk, req.Lead)
+		if err != nil {
+			return response{}, err
+		}
+		return response{Partial: encodeB64(partial)}, nil
+	case "bfv_partial_decrypt":
+		ct, err := decodeB64("ciphertext", req.Ciphertext)
+		if err != nil {
+			return response{}, err
+		}
+		sk, err := decodeB64("secret_key_share", req.SecretKeyShare)
+		if err != nil {
+			return response{}, err
+		}
+		partial, err := openfhe.PartialDecryptBFVForContract(req.BFVParams.toBFVContractParams(), ct, sk, req.Lead)
 		if err != nil {
 			return response{}, err
 		}
@@ -275,6 +382,27 @@ func run(req request) (response, error) {
 			EvalMultJoined: encodeB64(combined.EvalMultJoined),
 			EvalSumFinal:   encodeB64(combined.EvalSumFinal),
 		}, nil
+	case "bfv_combine_evalkey_round1":
+		pks, err := decodeB64Slice("public_keys", req.PublicKeys)
+		if err != nil {
+			return response{}, err
+		}
+		multShares, err := decodeB64Slice("eval_mult_round1_shares", req.EvalMultRound1Shares)
+		if err != nil {
+			return response{}, err
+		}
+		sumShares, err := decodeB64Slice("eval_sum_round1_shares", req.EvalSumRound1Shares)
+		if err != nil {
+			return response{}, err
+		}
+		combined, err := openfhe.BFVCombineEvalKeyRound1(req.BFVParams.toBFVContractParams(), pks, multShares, sumShares)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalMultJoined: encodeB64(combined.EvalMultJoined),
+			EvalSumFinal:   encodeB64(combined.EvalSumFinal),
+		}, nil
 	case "combine_evalkey_round2":
 		finalPK, err := decodeB64("final_public_key", req.FinalPublicKey)
 		if err != nil {
@@ -289,6 +417,27 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		final, err := openfhe.CombineEvalKeyRound2(params, finalPK, finalShares, sumFinal)
+		if err != nil {
+			return response{}, err
+		}
+		return response{
+			EvalMultFinal: encodeB64(final.EvalMultFinal),
+			EvalSumFinal:  encodeB64(final.EvalSumFinal),
+		}, nil
+	case "bfv_combine_evalkey_round2":
+		finalPK, err := decodeB64("final_public_key", req.FinalPublicKey)
+		if err != nil {
+			return response{}, err
+		}
+		finalShares, err := decodeB64Slice("eval_mult_final_shares", req.EvalMultFinalShares)
+		if err != nil {
+			return response{}, err
+		}
+		sumFinal, err := decodeB64("eval_sum_final_key", req.EvalSumFinalKey)
+		if err != nil {
+			return response{}, err
+		}
+		final, err := openfhe.BFVCombineEvalKeyRound2(req.BFVParams.toBFVContractParams(), finalPK, finalShares, sumFinal)
 		if err != nil {
 			return response{}, err
 		}
@@ -337,6 +486,45 @@ func run(req request) (response, error) {
 			return response{}, err
 		}
 		return response{Values: values}, nil
+	case "bfv_fuse_partials_int":
+		partials := make([][]byte, 0, len(req.Partials))
+		for i, raw := range req.Partials {
+			partial, err := decodeB64(fmt.Sprintf("partials[%d]", i), raw)
+			if err != nil {
+				return response{}, err
+			}
+			partials = append(partials, partial)
+		}
+		values, err := openfhe.FuseBFVPartialsForContract(req.BFVParams.toBFVContractParams(), partials, req.NSlots)
+		if err != nil {
+			return response{}, err
+		}
+		return response{IntValues: values}, nil
+	case "bfv_eval_product_sum":
+		evalMult, err := decodeB64("eval_keys", req.EvalKeys)
+		if err != nil {
+			return response{}, err
+		}
+		evalSum, err := decodeB64("eval_sum_final_key", req.EvalSumFinalKey)
+		if err != nil {
+			return response{}, err
+		}
+		ctA, err := decodeB64("ciphertext_a", req.CiphertextA)
+		if err != nil {
+			return response{}, err
+		}
+		ctB, err := decodeB64("ciphertext_b", req.CiphertextB)
+		if err != nil {
+			return response{}, err
+		}
+		out, err := openfhe.EvalProductSumBFVForContract(req.BFVParams.toBFVContractParams(), openfhe.EvalKeyFinal{
+			EvalMultFinal: evalMult,
+			EvalSumFinal:  evalSum,
+		}, ctA, ctB, req.NSlots)
+		if err != nil {
+			return response{}, err
+		}
+		return response{Ciphertext: encodeB64(out)}, nil
 	case "eval_poly":
 		evalKeys, err := decodeB64("eval_keys", req.EvalKeys)
 		if err != nil {
@@ -450,6 +638,15 @@ func (p contractParamsJSON) toContractParams() openfhe.ContractParams {
 		RingDim:       p.RingDim,
 		ScalingFactor: scalingFactor,
 		Depth:         p.Depth,
+	}
+}
+
+func (p bfvContractParamsJSON) toBFVContractParams() openfhe.BFVContractParams {
+	return openfhe.BFVContractParams{
+		RingDim:             p.RingDim,
+		MultiplicativeDepth: p.MultiplicativeDepth,
+		PlaintextModulus:    p.PlaintextModulus,
+		BatchSize:           p.BatchSize,
 	}
 }
 

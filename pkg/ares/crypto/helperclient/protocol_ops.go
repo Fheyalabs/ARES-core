@@ -241,9 +241,10 @@ func (c *Client) CombineEvalKeyRound2(
 // chain. It contains everything downstream phases need to encrypt,
 // score, and threshold-decrypt.
 type EvalKeyBundle struct {
-	PublicKey  []byte
-	EvalKeys   []byte
-	KeyShares  []KeyShare // one per participant, ordered by slot
+	PublicKey   []byte
+	EvalKeys    []byte
+	EvalSumKeys []byte
+	KeyShares   []KeyShare // one per participant, ordered by slot
 }
 
 // KeygenChain runs the full N-party distributed CKKS keygen in one
@@ -334,9 +335,10 @@ func (c *Client) KeygenChain(params ContractParams, n int) (*EvalKeyBundle, erro
 	}
 
 	return &EvalKeyBundle{
-		PublicKey: finalPublicKey,
-		EvalKeys:  evalKeys,
-		KeyShares: shares,
+		PublicKey:   finalPublicKey,
+		EvalKeys:    evalKeys,
+		EvalSumKeys: r1Combined.EvalSumFinal,
+		KeyShares:   shares,
 	}, nil
 }
 

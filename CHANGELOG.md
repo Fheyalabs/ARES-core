@@ -30,6 +30,54 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.5] — 2026-06-23
+
+### Added
+
+- **Chunked CKKS union scoring.** Added the low-RSS chunked payload
+  fusion entry point and made `ChunkedUnionScoreCKKS` the recommended
+  union helper. It reuses one context across comparator shots, uses
+  eval-sum-only payload chunks, and keeps the full-fuse API available
+  for callers that need the older single-ciphertext shape.
+- **Distribution-driven comparator tuning.** `DistributionMetadata`
+  and `TuneUnion` now derive score amplification plus per-comparator
+  input scales from caller-supplied score-margin statistics. Each
+  comparator can also carry its own `RangeMargin`, so one union can
+  deliberately cover close, middle, and wide score-difference regimes.
+- **Additive crypto profiles.** New `pkg/ares/crypto/profiles`
+  package defines named CKKS/BFV presets without replacing existing
+  configurable modes: `ckks_ring32k_union_v1`,
+  `bfv_ring32k_blind_v1`, and `bfv_light_blind_v1`.
+- **Threshold BFV packed-integer mode.** The OpenFHE bridge,
+  `openfhe-contract-helper`, and Go helperclient now expose BFV
+  context creation, threshold keygen, eval-key rounds, packed integer
+  encryption, partial decrypt/fusion, and encrypted product-sum
+  scoring.
+- **Swift BFV client surface.** `AresClientFHE` now supports
+  `BFVCryptoContext`, packed integer encryption, and packed integer
+  threshold fusion over the existing C bridge.
+- **BFV examples.** Added `examples/blind_bfv_payload_fuse` for the
+  ring-32k profile and `examples/light_bfv_payload_fuse` for fast
+  CI/local smoke use. Both examples bind BFV artifacts through SC-10
+  ciphertext lineage roles.
+
+### Fixed
+
+- Fixed `ARESFullFusePayloadCKKS` context selection so default full-fuse
+  scoring reuses the caller's submitted-ciphertext context, while compact
+  payload-sized batches remain limited to minimal-rotation mode.
+
+### Removed
+
+- Removed local homelab deployment recipes and the historical
+  app-migration note from the public framework tree. Runtime examples
+  and tested SDKs remain in the repository.
+- Pruned dead exported bridge helpers: `DefaultBFVContractParams`
+  (superseded by `profiles.BFVRing32KBlindV1`) and the eager
+  `CombineEvalKeyRound1PerIndex` (the lazy/per-index combine is the live
+  path). No callers in ARES-core, the contract helper, or the Fheya server;
+  the private `combineEvalKeyRound1PerIndex` stays for the WithContext path.
+
 ## [0.8.0] — 2026-06-14
 
 ### Added
@@ -611,7 +659,11 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.5...HEAD
+[0.9.5]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.2...v0.9.5
+[0.9.2]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.0...v0.9.2
+[0.9.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.5...v0.8.0
 [0.7.5]: https://github.com/Fheyalabs/ARES-core/compare/v0.7.0...v0.7.5
 [0.7.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.5.2...v0.6.0

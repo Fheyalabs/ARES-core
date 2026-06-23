@@ -80,6 +80,12 @@ struct ARESCryptoContext {
     int profile_dim = 0;
     int payload_slot_count = 0;
     bool minimal_rotation_keys = false;
+    // eval_sum_only: generate ONLY the standard EvalSumKeyGen map (which REPLICATES the
+    // batch sum across slots, batch_size = profile_dim -> 7 keys at dim 128) and NO
+    // broadcast at-index keys. This is the rotation set the chunked fusion needs
+    // (ARESChunkedFusePayloadCKKS calls EvalSum). Distinct from minimal_rotation_keys,
+    // which builds the EvalAtIndex fold-to-slot-0 + broadcast set for the broadcast fusion.
+    bool eval_sum_only = false;
 };
 
 struct ARESPublicKey {
@@ -229,6 +235,26 @@ static CryptoContext<DCRTPoly> make_ckks_context(uint32_t batch_size, uint32_t d
     cc->Enable(ADVANCEDSHE);
     cc->Enable(MULTIPARTY);
     HEAP_LOG("make_ckks_context done");
+    return cc;
+}
+
+static CryptoContext<DCRTPoly> make_bfv_context(uint32_t ring_dim, uint32_t depth,
+    uint64_t plaintext_modulus, uint32_t batch_size) {
+    HEAP_LOG("make_bfv_context start");
+    CCParams<CryptoContextBFVRNS> parameters;
+    parameters.SetMultiplicativeDepth(depth);
+    parameters.SetPlaintextModulus(plaintext_modulus);
+    parameters.SetBatchSize(batch_size);
+    parameters.SetRingDim(ring_dim);
+    parameters.SetSecurityLevel(ares_fhe_allow_insecure() ? HEStd_NotSet : HEStd_128_classic);
+
+    auto cc = GenCryptoContext(parameters);
+    cc->Enable(PKE);
+    cc->Enable(KEYSWITCH);
+    cc->Enable(LEVELEDSHE);
+    cc->Enable(ADVANCEDSHE);
+    cc->Enable(MULTIPARTY);
+    HEAP_LOG("make_bfv_context done");
     return cc;
 }
 
@@ -588,6 +614,27 @@ CryptoContextHandle CreateCKKSContext(uint32_t ring_dim, double scaling_factor, 
     }
 }
 
+CryptoContextHandle CreateBFVContext(uint32_t ring_dim, uint32_t multiplicative_depth,
+    uint64_t plaintext_modulus, uint32_t batch_size) {
+    try {
+        uint32_t rd = ring_dim > 0 ? ring_dim : 8192;
+        uint32_t depth = multiplicative_depth > 0 ? multiplicative_depth : 4;
+        uint64_t p = plaintext_modulus > 0 ? plaintext_modulus : 65537;
+        uint32_t bs = batch_size > 0 ? batch_size : (rd >= 16 ? rd / 2 : 8);
+        auto* ctx = new ARESCryptoContext{
+            make_bfv_context(rd, depth, p, bs),
+            bs,
+            {},
+            {},
+            nullptr,
+            nullptr,
+        };
+        return reinterpret_cast<CryptoContextHandle>(ctx);
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 void FreeCryptoContext(CryptoContextHandle ctx) {
     delete reinterpret_cast<ARESCryptoContext*>(ctx);
 }
@@ -600,6 +647,19 @@ void SetMinimalRotationKeys(CryptoContextHandle ctx, int profile_dim, int payloa
     c->profile_dim = profile_dim;
     c->payload_slot_count = payload_slot_count;
     c->minimal_rotation_keys = true;
+}
+
+// SetEvalSumOnlyRotationKeys selects the chunked-fusion rotation set: the threshold
+// eval-sum keygen produces ONLY the standard EvalSumKeyGen map (replicating, batch_size
+// keys) and no broadcast at-index keys. The context must have been built with
+// batch_size = next_pow2(profile_dim) so EvalSumKeyGen emits the profile_dim fold set.
+void SetEvalSumOnlyRotationKeys(CryptoContextHandle ctx, int profile_dim) {
+    if (ctx == nullptr) {
+        return;
+    }
+    auto* c = reinterpret_cast<ARESCryptoContext*>(ctx);
+    c->profile_dim = profile_dim;
+    c->eval_sum_only = true;
 }
 
 int KeyGenFirst(CryptoContextHandle ctx, PublicKeyHandle* out_pk, SecretKeyShareHandle* out_sk) {
@@ -820,7 +880,10 @@ int EvalSumKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk, RotKeyHa
         }
         auto* c = as_ctx(ctx);
         auto* s = as_sk(sk);
-        if (c->minimal_rotation_keys) {
+        if (c->eval_sum_only) {
+            // Chunked fusion: replicating EvalSum map only (batch_size = profile_dim), no broadcast.
+            c->cc->EvalSumKeyGen(s->sk);
+        } else if (c->minimal_rotation_keys) {
             c->cc->EvalAtIndexKeyGen(s->sk,
                 minimal_rotation_indices(c->profile_dim, c->payload_slot_count));
         } else {
@@ -848,7 +911,10 @@ int EvalSumKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
         auto* s = as_sk(sk);
         const std::string key_tag = as_pk(own_pk)->pk->GetKeyTag();
         std::shared_ptr<std::map<usint, EvalKey<DCRTPoly>>> share;
-        if (c->minimal_rotation_keys) {
+        if (c->eval_sum_only) {
+            // Chunked fusion: replicating EvalSum share only, no broadcast.
+            share = c->cc->MultiEvalSumKeyGen(s->sk, as_rot(base)->keys, key_tag);
+        } else if (c->minimal_rotation_keys) {
             share = c->cc->MultiEvalAtIndexKeyGen(s->sk, as_rot(base)->keys,
                 minimal_rotation_indices(c->profile_dim, c->payload_slot_count), key_tag);
         } else {
@@ -1235,6 +1301,24 @@ CiphertextHandle Encrypt(CryptoContextHandle ctx, PublicKeyHandle pk, double* va
     }
 }
 
+CiphertextHandle EncryptPackedInt(CryptoContextHandle ctx, PublicKeyHandle pk, int64_t* values, int n_values) {
+    try {
+        if (values == nullptr || n_values <= 0) {
+            return nullptr;
+        }
+        auto* c = as_ctx(ctx);
+        auto* p = as_pk(pk);
+        std::vector<int64_t> packed(c->batch_size, 0);
+        for (int i = 0; i < n_values && i < static_cast<int>(packed.size()); i++) {
+            packed[i] = values[i];
+        }
+        auto pt = c->cc->MakePackedPlaintext(packed);
+        return reinterpret_cast<CiphertextHandle>(new ARESCiphertext{c->cc->Encrypt(p->pk, pt)});
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 // DecryptSingle: direct single-key Decrypt (not threshold). For use with
 // standard (non-multiparty) key pairs from KeyGenFirst.
 int DecryptSingle(CryptoContextHandle ctx, CiphertextHandle ct, SecretKeyShareHandle sk, double* out_values, int* out_n_values) {
@@ -1309,6 +1393,39 @@ int MultiDecFusion(CryptoContextHandle ctx, CiphertextHandle* partials, int n_pa
         return 1;
     } catch (...) {
         fprintf(stderr, "[ares] MultiDecFusion unknown error\n");
+        fflush(stderr);
+        return 1;
+    }
+}
+
+int MultiDecFusionPackedInt(CryptoContextHandle ctx, CiphertextHandle* partials, int n_partials, int64_t* out_values, int* out_n_values) {
+    try {
+        if (partials == nullptr || out_values == nullptr || out_n_values == nullptr || n_partials <= 0) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        std::vector<Ciphertext<DCRTPoly>> partial_vec;
+        partial_vec.reserve(static_cast<size_t>(n_partials));
+        for (int i = 0; i < n_partials; i++) {
+            partial_vec.push_back(as_ct(partials[i])->ct);
+        }
+        Plaintext out;
+        c->cc->MultipartyDecryptFusion(partial_vec, &out);
+        int capacity = *out_n_values > 0 ? *out_n_values : static_cast<int>(c->batch_size);
+        out->SetLength(static_cast<size_t>(capacity));
+        auto slots = out->GetPackedValue();
+        int count = std::min(capacity, static_cast<int>(slots.size()));
+        for (int i = 0; i < count; i++) {
+            out_values[i] = slots[i];
+        }
+        *out_n_values = count;
+        return 0;
+    } catch (const std::exception& ex) {
+        fprintf(stderr, "[ares] MultiDecFusionPackedInt error: %s\n", ex.what());
+        fflush(stderr);
+        return 1;
+    } catch (...) {
+        fprintf(stderr, "[ares] MultiDecFusionPackedInt unknown error\n");
         fflush(stderr);
         return 1;
     }
@@ -1951,16 +2068,22 @@ int ARESFullFusePayloadCKKS(
             return 1;
         }
 
-        // batch_size from payload needs, not ring_dim/2, so ciphertexts are
-        // compact (matching C++ prototype at batch=1024 for 80-byte pkgs).
-        // ring_dim stays at the caller's value for key compatibility.
-        uint32_t batch_size = next_power_of_two(static_cast<uint32_t>(std::max(payload_slot_count, profile_dim)));
+        auto* existing_ctx = ctx_handle != nullptr ? as_ctx(ctx_handle) : nullptr;
+        // Default full-fuse must match the context used by EncryptCKKSForContract
+        // and threshold keygen. Compact payload-sized batches are valid only in
+        // minimal-rotation mode, where all submitted artifacts are generated with
+        // the same compact context.
+        uint32_t batch_size = existing_ctx != nullptr
+            ? existing_ctx->batch_size
+            : (minimal_rotation_keys
+                ? next_power_of_two(static_cast<uint32_t>(std::max(payload_slot_count, profile_dim)))
+                : (ring_dim >= 16 ? ring_dim / 2 : 8));
         if (batch_size < static_cast<uint32_t>(payload_slot_count)) {
             set_error(err, err_len, "contract batch size too small for payload slots");
             return 1;
         }
         auto cc = (ctx_handle != nullptr)
-            ? as_ctx(ctx_handle)->cc
+            ? existing_ctx->cc
             : make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60, ring_dim);
 
         EvalKey<DCRTPoly> mult_key;
@@ -2095,6 +2218,259 @@ int ARESFullFusePayloadCKKS(
         return 1;
     } catch (...) {
         set_error(err, err_len, "unknown OpenFHE full-fuse failure");
+        return 1;
+    }
+}
+
+// package_chunk_bits returns chunk_size payload bits for one candidate's package
+// starting at chunk_index*chunk_size, placed in slots [0, chunk_size). The chunked
+// fusion aligns every chunk to slots [0, chunk_size) so it multiplies the EvalSum-
+// replicated mask (also uniform across [0, chunk_size)) with no broadcast.
+static std::vector<double> package_chunk_bits(const int* candidate_packages,
+    int candidate_index, int package_bytes, int chunk_index, int chunk_size) {
+    std::vector<double> bits(static_cast<size_t>(chunk_size), 0.0);
+    const int total_bits = package_bytes * 8;
+    const int start = chunk_index * chunk_size;
+    const int* pkg = candidate_packages + (static_cast<size_t>(candidate_index) * package_bytes);
+    for (int k = 0; k < chunk_size; k++) {
+        const int bit_idx = start + k;
+        if (bit_idx >= total_bits) break;
+        const int value = pkg[bit_idx / 8];
+        const int shift = 7 - (bit_idx % 8);
+        bits[static_cast<size_t>(k)] = ((value >> shift) & 1) ? 1.0 : 0.0;
+    }
+    return bits;
+}
+
+// ARESChunkedFusePayloadCKKS is the server-blind fusion with crypto-lab's CHUNKED
+// payload recovery -- the low-RSS default. Instead of broadcasting the scalar argmax
+// mask across the whole payload in ONE ciphertext (which needs the negative broadcast
+// rotation keys), it EvalSum-replicates the score/mask across the profile_dim batch
+// (positive fold keys ONLY -- 7 vs 17 at dim 128 / 640-bit payload) and splits the
+// payload into ceil(payload_slot_count/batch_size) chunks, fusing
+// `sum_i mask_i * pkg_chunk_i` per chunk. Output: the n_chunks result ciphertexts
+// serialized and concatenated into out_cts; out_chunk_lens[c] (caller-allocated,
+// >= n_chunks) holds each chunk's serialized length; *out_n_chunks = chunk count.
+// Each chunk holds the winner's chunk_size payload bits in slots [0, chunk_size);
+// the caller threshold-decrypts each chunk and reassembles the 640-bit package.
+int ARESChunkedFusePayloadCKKS(
+    CryptoContextHandle ctx_handle,
+    uint32_t ring_dim,
+    double scaling_factor,
+    uint32_t depth,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob,
+    const size_t* candidate_ct_lens,
+    const int* candidate_lat_q,
+    const int* candidate_lon_q,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    int initiator_lat_q,
+    int initiator_lon_q,
+    double alpha,
+    double beta,
+    double gamma,
+    const char* comparator,
+    int comparator_degree,
+    double comparator_gain,
+    double comparator_input_scale,
+    double comparator_bound,
+    const char* selector_schedule,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const int* candidate_packages,
+    int package_bytes,
+    int payload_slot_count,
+    uint8_t** out_cts,
+    size_t* out_cts_len,
+    size_t* out_chunk_lens,
+    int* out_n_chunks,
+    char* err,
+    size_t err_len
+) {
+    try {
+        const bool eval_sum_preinserted =
+            ctx_handle != nullptr && (eval_sum_key == nullptr || eval_sum_key_len == 0);
+        if (initiator_ct == nullptr || initiator_ct_len == 0 ||
+            candidate_ct_blob == nullptr || candidate_ct_lens == nullptr ||
+            candidate_lat_q == nullptr || candidate_lon_q == nullptr || candidate_brownies == nullptr ||
+            eval_mult_key == nullptr || eval_mult_key_len == 0 ||
+            (!eval_sum_preinserted && (eval_sum_key == nullptr || eval_sum_key_len == 0)) ||
+            candidate_packages == nullptr || out_cts == nullptr || out_cts_len == nullptr ||
+            out_chunk_lens == nullptr || out_n_chunks == nullptr) {
+            set_error(err, err_len, "null pointer passed to ARESChunkedFusePayloadCKKS");
+            return 1;
+        }
+        if (n_candidates <= 0 || profile_dim <= 0 || package_bytes <= 0 || payload_slot_count < package_bytes * 8) {
+            set_error(err, err_len, "invalid chunked-fuse dimensions");
+            return 1;
+        }
+
+        // Chunked: the scoring/payload batch is profile_dim-sized (matches the fold-only
+        // 7-key rotation set), NOT max(payload, profile). The payload is split into chunks
+        // of this batch instead of living in one wide ciphertext.
+        const uint32_t batch_size = next_power_of_two(static_cast<uint32_t>(profile_dim));
+        const int chunk_size = static_cast<int>(batch_size);
+        const int n_chunks = (payload_slot_count + chunk_size - 1) / chunk_size;
+
+        auto cc = (ctx_handle != nullptr)
+            ? as_ctx(ctx_handle)->cc
+            : make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60, ring_dim);
+
+        EvalKey<DCRTPoly> mult_key;
+        {
+            std::string raw(reinterpret_cast<const char*>(eval_mult_key), eval_mult_key_len);
+            std::stringstream is(raw);
+            Serial::Deserialize(mult_key, is, SerType::BINARY);
+        }
+        // Idempotent insert: OpenFHE caches eval-keys in a global map keyed by context
+        // ID, so the same params across union-comparator calls collide. Clear first.
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalMultKeys(cc);
+        cc->InsertEvalMultKey({mult_key});
+        if (!eval_sum_preinserted) {
+            std::map<usint, EvalKey<DCRTPoly>> sum_keys;
+            {
+                std::string raw(reinterpret_cast<const char*>(eval_sum_key), eval_sum_key_len);
+                std::stringstream is(raw);
+                Serial::Deserialize(sum_keys, is, SerType::BINARY);
+            }
+            lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalSumKeys(cc);
+            cc->InsertEvalSumKey(std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>(sum_keys));
+        }
+
+        Ciphertext<DCRTPoly> init;
+        {
+            std::string raw(reinterpret_cast<const char*>(initiator_ct), initiator_ct_len);
+            std::stringstream is(raw);
+            Serial::Deserialize(init, is, SerType::BINARY);
+        }
+        std::vector<Ciphertext<DCRTPoly>> candidates;
+        candidates.reserve(static_cast<size_t>(n_candidates));
+        size_t offset = 0;
+        for (int i = 0; i < n_candidates; i++) {
+            size_t n = candidate_ct_lens[i];
+            if (n == 0) {
+                set_error(err, err_len, "candidate ciphertext length is zero");
+                return 1;
+            }
+            Ciphertext<DCRTPoly> ct;
+            std::string raw(reinterpret_cast<const char*>(candidate_ct_blob + offset), n);
+            std::stringstream is(raw);
+            Serial::Deserialize(ct, is, SerType::BINARY);
+            candidates.push_back(ct);
+            offset += n;
+        }
+
+        std::string comparator_value = comparator == nullptr ? "tanh_chebyshev" : std::string(comparator);
+        if (comparator_value.empty()) comparator_value = "tanh_chebyshev";
+        if (comparator_value != "tanh_chebyshev" && comparator_value != "logistic" && comparator_value != "selector") {
+            set_error(err, err_len, "chunked scorer supports tanh_chebyshev, logistic, or selector comparators");
+            return 1;
+        }
+        if (comparator_degree <= 0) comparator_degree = 27;
+        if (comparator_gain == 0.0) comparator_gain = 100.0;
+        if (comparator_input_scale == 0.0) comparator_input_scale = 0.5;
+        if (comparator_bound == 0.0) comparator_bound = 0.5;
+
+        // Score: EvalMult + EvalSum REPLICATES the dot product across the batch (fold keys
+        // only) -- the chunked alternative to fold-to-slot-0 + broadcast. No broadcast keys.
+        std::vector<Ciphertext<DCRTPoly>> ct_scores;
+        ct_scores.reserve(static_cast<size_t>(n_candidates));
+        for (int i = 0; i < n_candidates; i++) {
+            auto prod = cc->EvalMult(init, candidates[i]);
+            auto sim = cc->EvalSum(prod, profile_dim);
+            double dlat = static_cast<double>(initiator_lat_q - candidate_lat_q[i]);
+            double dlon = static_cast<double>(initiator_lon_q - candidate_lon_q[i]);
+            double dist = dlat * dlat + dlon * dlon;
+            auto score = cc->EvalMult(sim, beta / 2.0);
+            score = cc->EvalAdd(score, (beta / 2.0) - alpha * dist + gamma * static_cast<double>(candidate_brownies[i]));
+            ct_scores.push_back(score);
+        }
+
+        auto schedule = split_schedule(selector_schedule);
+        std::vector<std::vector<Ciphertext<DCRTPoly>>> selectors(
+            static_cast<size_t>(n_candidates),
+            std::vector<Ciphertext<DCRTPoly>>(static_cast<size_t>(n_candidates))
+        );
+        for (int i = 0; i < n_candidates; i++) {
+            selectors[i][i] = cc->EvalAdd(cc->EvalSub(ct_scores[i], ct_scores[i]), 1.0);
+        }
+        for (int i = 0; i < n_candidates; i++) {
+            for (int j = i + 1; j < n_candidates; j++) {
+                auto diff = cc->EvalSub(ct_scores[i], ct_scores[j]);
+                Ciphertext<DCRTPoly> sel_ij;
+                if (comparator_value == "logistic") {
+                    sel_ij = eval_logistic_chebyshev(cc, diff, comparator_input_scale, comparator_gain, comparator_bound, comparator_degree);
+                } else if (comparator_value == "selector") {
+                    // soft selector polynomial f(x)=0.5+0.1125x-0.00084375x^3 (crypto-lab ss base),
+                    // with input_scale range control so large score margins stay in the poly's
+                    // useful range (else the cubic saturates/inverts on big diffs).
+                    auto sdiff = (std::fabs(comparator_input_scale - 1.0) > 1e-12)
+                        ? cc->EvalMult(diff, comparator_input_scale) : diff;
+                    auto x2 = cc->EvalMult(sdiff, sdiff);
+                    auto inner = cc->EvalMult(x2, -0.00084375);
+                    inner = cc->EvalAdd(inner, 0.1125);
+                    auto prod = cc->EvalMult(inner, sdiff);
+                    sel_ij = cc->EvalAdd(prod, 0.5);
+                } else {
+                    sel_ij = eval_tanh_chebyshev(cc, diff, comparator_input_scale, comparator_gain, comparator_bound, comparator_degree);
+                }
+                sel_ij = apply_selector_schedule(cc, sel_ij, schedule);
+                auto one = cc->EvalAdd(cc->EvalSub(ct_scores[i], ct_scores[i]), 1.0);
+                selectors[i][j] = sel_ij;
+                selectors[j][i] = cc->EvalSub(one, sel_ij);
+            }
+        }
+
+        // Per-candidate product mask (uniform across the batch, like the scores).
+        std::vector<Ciphertext<DCRTPoly>> masks;
+        masks.reserve(static_cast<size_t>(n_candidates));
+        for (int i = 0; i < n_candidates; i++) {
+            std::vector<Ciphertext<DCRTPoly>> factors;
+            for (int j = 0; j < n_candidates; j++) {
+                if (i != j) factors.push_back(selectors[i][j]);
+            }
+            masks.push_back(product_tree(cc, factors));
+        }
+
+        // Per-chunk fusion: every chunk reuses the SAME masks against that chunk's bits
+        // (aligned to slots [0, chunk_size)). n_chunks result ciphertexts.
+        std::string concat;
+        for (int c = 0; c < n_chunks; c++) {
+            Ciphertext<DCRTPoly> fused_chunk;
+            bool have = false;
+            for (int i = 0; i < n_candidates; i++) {
+                auto bits = package_chunk_bits(candidate_packages, i, package_bytes, c, chunk_size);
+                auto bits_pt = cc->MakeCKKSPackedPlaintext(bits);
+                auto weighted = cc->EvalMult(masks[i], bits_pt);
+                fused_chunk = have ? cc->EvalAdd(fused_chunk, weighted) : weighted;
+                have = true;
+            }
+            std::stringstream os;
+            Serial::Serialize(fused_chunk, os, SerType::BINARY);
+            std::string chunk_bytes = os.str();
+            out_chunk_lens[c] = chunk_bytes.size();
+            concat += chunk_bytes;
+        }
+
+        *out_n_chunks = n_chunks;
+        *out_cts_len = concat.size();
+        *out_cts = static_cast<uint8_t*>(malloc(concat.size()));
+        if (*out_cts == nullptr) {
+            set_error(err, err_len, "out-of-memory serializing chunked fused payload");
+            return 1;
+        }
+        memcpy(*out_cts, concat.data(), concat.size());
+        return 0;
+    } catch (const std::exception& ex) {
+        set_error(err, err_len, ex.what());
+        return 1;
+    } catch (...) {
+        set_error(err, err_len, "unknown OpenFHE chunked-fuse failure");
         return 1;
     }
 }

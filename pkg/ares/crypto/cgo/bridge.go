@@ -28,6 +28,7 @@ import "C"
 import (
 	"fmt"
 	"math"
+	"sort"
 	"unsafe"
 )
 
@@ -61,6 +62,18 @@ type ContractParams struct {
 	MinimalRotationKeys bool
 	ProfileDim          int
 	PayloadSlotCount    int
+	// EvalSumOnlyRotationKeys opts into the chunked-fusion rotation set: the context is
+	// built with batch_size = next_pow2(ProfileDim) and the threshold eval-sum keygen
+	// produces only the replicating EvalSumKeyGen map (7 keys at dim 128), no broadcast.
+	// Use with ChunkedFusePayloadCKKS. Mutually exclusive with MinimalRotationKeys.
+	EvalSumOnlyRotationKeys bool
+}
+
+type BFVContractParams struct {
+	RingDim             uint32
+	MultiplicativeDepth uint32
+	PlaintextModulus    uint64
+	BatchSize           int
 }
 
 type DistributedKeyShare struct {
@@ -196,6 +209,67 @@ func DistributedKeyGenFirst(params ContractParams) (DistributedKeyShare, error) 
 		return DistributedKeyShare{}, err
 	}
 	return DistributedKeyShare{PublicKey: pkBytes, SecretKeyShare: skBytes, Lead: true}, nil
+}
+
+func BFVDistributedKeyGenFirst(params BFVContractParams) (DistributedKeyShare, error) {
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	var pk C.PublicKeyHandle
+	var sk C.SecretKeyShareHandle
+	if rc := C.KeyGenFirst(ctx, &pk, &sk); rc != 0 {
+		return DistributedKeyShare{}, fmt.Errorf("BFV distributed keygen first failed")
+	}
+	defer C.FreePublicKey(pk)
+	defer C.FreeSecretKeyShare(sk)
+
+	pkBytes, err := serializePublicKey(pk)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	skBytes, err := serializeSecretKeyShare(sk)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	return DistributedKeyShare{PublicKey: pkBytes, SecretKeyShare: skBytes, Lead: true}, nil
+}
+
+func BFVDistributedKeyGenNext(params BFVContractParams, prevPublicKey []byte) (DistributedKeyShare, error) {
+	if len(prevPublicKey) == 0 {
+		return DistributedKeyShare{}, fmt.Errorf("previous public key is required")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	prev, err := deserializePublicKey(ctx, prevPublicKey)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	defer C.FreePublicKey(prev)
+
+	var pk C.PublicKeyHandle
+	var sk C.SecretKeyShareHandle
+	if rc := C.KeyGenNext(ctx, prev, &pk, &sk); rc != 0 {
+		return DistributedKeyShare{}, fmt.Errorf("BFV distributed keygen next failed")
+	}
+	defer C.FreePublicKey(pk)
+	defer C.FreeSecretKeyShare(sk)
+
+	pkBytes, err := serializePublicKey(pk)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	skBytes, err := serializeSecretKeyShare(sk)
+	if err != nil {
+		return DistributedKeyShare{}, err
+	}
+	return DistributedKeyShare{PublicKey: pkBytes, SecretKeyShare: skBytes, Lead: false}, nil
 }
 
 func DistributedKeyGenNext(params ContractParams, prevPublicKey []byte) (DistributedKeyShare, error) {
@@ -460,6 +534,196 @@ func CombineEvalKeyRound2(params ContractParams, finalPublicKey []byte, evalMult
 	return EvalKeyFinal{EvalMultFinal: finalBytes, EvalSumFinal: append([]byte(nil), evalSumFinal...)}, nil
 }
 
+func BFVEvalKeyRound1Lead(params BFVContractParams, secretKeyShare []byte) (EvalKeyRound1LeadShare, error) {
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	sk, err := deserializeSecretKeyShare(ctx, secretKeyShare, true)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+
+	var mult C.EvalMultKeyHandle
+	if rc := C.EvalMultKeyGenLead(ctx, sk, &mult); rc != 0 {
+		return EvalKeyRound1LeadShare{}, fmt.Errorf("BFV eval-mult lead key generation failed")
+	}
+	defer C.FreeEvalMultKey(mult)
+	multBytes, err := serializeEvalMultKey(mult)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+
+	var sum C.RotKeyHandle
+	if rc := C.EvalSumKeyGenLead(ctx, sk, &sum); rc != 0 {
+		return EvalKeyRound1LeadShare{}, fmt.Errorf("BFV eval-sum lead key generation failed")
+	}
+	defer C.FreeRotKey(sum)
+	sumBytes, err := serializeRotKey(sum)
+	if err != nil {
+		return EvalKeyRound1LeadShare{}, err
+	}
+	return EvalKeyRound1LeadShare{EvalMultBase: multBytes, EvalSumBase: sumBytes}, nil
+}
+
+func BFVEvalKeyRound1Participant(params BFVContractParams, secretKeyShare, evalMultBase, evalSumBase, ownPublicKey []byte) (EvalKeyRound1ParticipantShare, error) {
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	sk, err := deserializeSecretKeyShare(ctx, secretKeyShare, false)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	multBase, err := deserializeEvalMultKey(ctx, evalMultBase)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeEvalMultKey(multBase)
+	sumBase, err := deserializeRotKey(ctx, evalSumBase)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreeRotKey(sumBase)
+	ownPK, err := deserializePublicKey(ctx, ownPublicKey)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	defer C.FreePublicKey(ownPK)
+
+	var multShare C.EvalMultKeyHandle
+	if rc := C.EvalMultKeySwitchShare(ctx, sk, multBase, &multShare); rc != 0 {
+		return EvalKeyRound1ParticipantShare{}, fmt.Errorf("BFV eval-mult switch-share generation failed")
+	}
+	defer C.FreeEvalMultKey(multShare)
+	multBytes, err := serializeEvalMultKey(multShare)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+
+	var sumShare C.RotKeyHandle
+	if rc := C.EvalSumKeyShare(ctx, sk, sumBase, ownPK, &sumShare); rc != 0 {
+		return EvalKeyRound1ParticipantShare{}, fmt.Errorf("BFV eval-sum share generation failed")
+	}
+	defer C.FreeRotKey(sumShare)
+	sumBytes, err := serializeRotKey(sumShare)
+	if err != nil {
+		return EvalKeyRound1ParticipantShare{}, err
+	}
+	return EvalKeyRound1ParticipantShare{EvalMultSwitchShare: multBytes, EvalSumShare: sumBytes}, nil
+}
+
+func BFVCombineEvalKeyRound1(params BFVContractParams, publicKeys [][]byte, evalMultShares [][]byte, evalSumShares [][]byte) (EvalKeyRound1Combined, error) {
+	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumShares) {
+		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-key share counts must match and be non-empty")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	pks, freePKs, err := deserializePublicKeys(ctx, publicKeys)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer freePKs()
+	multShares, freeMultShares, err := deserializeEvalMultKeys(ctx, evalMultShares)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer freeMultShares()
+
+	var joined C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultSwitchShares(ctx, (*C.PublicKeyHandle)(unsafe.Pointer(&pks[0])), (*C.EvalMultKeyHandle)(unsafe.Pointer(&multShares[0])), C.int(len(multShares)), &joined); rc != 0 {
+		return EvalKeyRound1Combined{}, fmt.Errorf("BFV eval-mult switch-share combination failed")
+	}
+	defer C.FreeEvalMultKey(joined)
+	joinedBytes, err := serializeEvalMultKey(joined)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	sumFinalBytes, err := combineEvalSumIncremental(ctx, publicKeys, evalSumShares)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	return EvalKeyRound1Combined{EvalMultJoined: joinedBytes, EvalSumFinal: sumFinalBytes}, nil
+}
+
+func BFVEvalKeyRound2Participant(params BFVContractParams, secretKeyShare, evalMultJoined, finalPublicKey []byte, lead bool) (EvalKeyRound2ParticipantShare, error) {
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	sk, err := deserializeSecretKeyShare(ctx, secretKeyShare, lead)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+	joined, err := deserializeEvalMultKey(ctx, evalMultJoined)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreeEvalMultKey(joined)
+	finalPK, err := deserializePublicKey(ctx, finalPublicKey)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	defer C.FreePublicKey(finalPK)
+
+	var finalShare C.EvalMultKeyHandle
+	if rc := C.EvalMultKeyFinalShare(ctx, sk, joined, finalPK, &finalShare); rc != 0 {
+		return EvalKeyRound2ParticipantShare{}, fmt.Errorf("BFV eval-mult final-share generation failed")
+	}
+	defer C.FreeEvalMultKey(finalShare)
+	finalBytes, err := serializeEvalMultKey(finalShare)
+	if err != nil {
+		return EvalKeyRound2ParticipantShare{}, err
+	}
+	return EvalKeyRound2ParticipantShare{EvalMultFinalShare: finalBytes}, nil
+}
+
+func BFVCombineEvalKeyRound2(params BFVContractParams, finalPublicKey []byte, evalMultFinalShares [][]byte, evalSumFinal []byte) (EvalKeyFinal, error) {
+	if len(evalMultFinalShares) == 0 {
+		return EvalKeyFinal{}, fmt.Errorf("at least one eval-mult final share is required")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	finalPK, err := deserializePublicKey(ctx, finalPublicKey)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	defer C.FreePublicKey(finalPK)
+	finalShares, freeFinalShares, err := deserializeEvalMultKeys(ctx, evalMultFinalShares)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	defer freeFinalShares()
+
+	var final C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultFinalShares(ctx, finalPK, (*C.EvalMultKeyHandle)(unsafe.Pointer(&finalShares[0])), C.int(len(finalShares)), &final); rc != 0 {
+		return EvalKeyFinal{}, fmt.Errorf("BFV eval-mult final-share combination failed")
+	}
+	defer C.FreeEvalMultKey(final)
+	finalBytes, err := serializeEvalMultKey(final)
+	if err != nil {
+		return EvalKeyFinal{}, err
+	}
+	return EvalKeyFinal{EvalMultFinal: finalBytes, EvalSumFinal: append([]byte(nil), evalSumFinal...)}, nil
+}
+
 func EvalProductSumForContract(params ContractParams, evalKeys EvalKeyFinal, leftCiphertext, rightCiphertext []byte, nSlots int) ([]byte, error) {
 	if len(evalKeys.EvalMultFinal) == 0 || len(evalKeys.EvalSumFinal) == 0 {
 		return nil, fmt.Errorf("eval-mult and eval-sum keys are required")
@@ -508,6 +772,59 @@ func EvalProductSumForContract(params ContractParams, evalKeys EvalKeyFinal, lef
 	sum := C.EvalSum(ctx, product, C.int(nSlots))
 	if sum == nil {
 		return nil, fmt.Errorf("eval-sum failed")
+	}
+	defer C.FreeCiphertext(sum)
+	return serializeCiphertext(sum)
+}
+
+func EvalProductSumBFVForContract(params BFVContractParams, evalKeys EvalKeyFinal, leftCiphertext, rightCiphertext []byte, nSlots int) ([]byte, error) {
+	if len(evalKeys.EvalMultFinal) == 0 || len(evalKeys.EvalSumFinal) == 0 {
+		return nil, fmt.Errorf("eval-mult and eval-sum keys are required")
+	}
+	if nSlots <= 0 {
+		return nil, fmt.Errorf("nSlots must be positive")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	multKey, err := deserializeEvalMultKey(ctx, evalKeys.EvalMultFinal)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(ctx, multKey); rc != 0 {
+		return nil, fmt.Errorf("insert BFV eval-mult key failed")
+	}
+	sumKey, err := deserializeRotKey(ctx, evalKeys.EvalSumFinal)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeRotKey(sumKey)
+	if rc := C.InsertEvalSumKey(ctx, sumKey); rc != 0 {
+		return nil, fmt.Errorf("insert BFV eval-sum key failed")
+	}
+
+	left, err := deserializeCiphertext(ctx, leftCiphertext)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(left)
+	right, err := deserializeCiphertext(ctx, rightCiphertext)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(right)
+	product := C.EvalMult(ctx, left, right)
+	if product == nil {
+		return nil, fmt.Errorf("BFV eval-mult failed")
+	}
+	defer C.FreeCiphertext(product)
+	sum := C.EvalSum(ctx, product, C.int(nSlots))
+	if sum == nil {
+		return nil, fmt.Errorf("BFV eval-sum failed")
 	}
 	defer C.FreeCiphertext(sum)
 	return serializeCiphertext(sum)
@@ -910,6 +1227,33 @@ func EncryptCKKSForContract(params ContractParams, jointPublicKey []byte, values
 	return serializeCiphertext(ct)
 }
 
+func EncryptBFVForContract(params BFVContractParams, jointPublicKey []byte, values []int64) ([]byte, error) {
+	if len(jointPublicKey) == 0 {
+		return nil, fmt.Errorf("joint public key is required")
+	}
+	if len(values) == 0 {
+		return nil, fmt.Errorf("values are required")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	pk, err := deserializePublicKey(ctx, jointPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreePublicKey(pk)
+
+	ct := C.EncryptPackedInt(ctx, pk, (*C.int64_t)(unsafe.Pointer(&values[0])), C.int(len(values)))
+	if ct == nil {
+		return nil, fmt.Errorf("BFV contract encryption failed")
+	}
+	defer C.FreeCiphertext(ct)
+	return serializeCiphertext(ct)
+}
+
 func PartialDecryptCKKSForContract(params ContractParams, ciphertext []byte, secretKeyShare []byte, lead bool) ([]byte, error) {
 	if len(ciphertext) == 0 {
 		return nil, fmt.Errorf("ciphertext is required")
@@ -938,6 +1282,39 @@ func PartialDecryptCKKSForContract(params ContractParams, ciphertext []byte, sec
 	var partial C.CiphertextHandle
 	if rc := C.MultiDecMain(ctx, ct, sk, &partial); rc != 0 {
 		return nil, fmt.Errorf("contract partial decrypt failed")
+	}
+	defer C.FreeCiphertext(partial)
+	return serializeCiphertext(partial)
+}
+
+func PartialDecryptBFVForContract(params BFVContractParams, ciphertext []byte, secretKeyShare []byte, lead bool) ([]byte, error) {
+	if len(ciphertext) == 0 {
+		return nil, fmt.Errorf("ciphertext is required")
+	}
+	if len(secretKeyShare) == 0 {
+		return nil, fmt.Errorf("secret key share is required")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	ct, err := deserializeCiphertext(ctx, ciphertext)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCiphertext(ct)
+
+	sk, err := deserializeSecretKeyShare(ctx, secretKeyShare, lead)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeSecretKeyShare(sk)
+
+	var partial C.CiphertextHandle
+	if rc := C.MultiDecMain(ctx, ct, sk, &partial); rc != 0 {
+		return nil, fmt.Errorf("BFV contract partial decrypt failed")
 	}
 	defer C.FreeCiphertext(partial)
 	return serializeCiphertext(partial)
@@ -989,6 +1366,52 @@ func FuseCKKSPartialsForContract(params ContractParams, partials [][]byte, nSlot
 	return values, nil
 }
 
+func FuseBFVPartialsForContract(params BFVContractParams, partials [][]byte, nSlots int) ([]int64, error) {
+	if len(partials) == 0 {
+		return nil, fmt.Errorf("at least one partial decrypt share is required")
+	}
+	if nSlots <= 0 {
+		return nil, fmt.Errorf("nSlots must be positive")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	handles := make([]C.CiphertextHandle, len(partials))
+	for i, raw := range partials {
+		ct, err := deserializeCiphertext(ctx, raw)
+		if err != nil {
+			for _, h := range handles {
+				if h != nil {
+					C.FreeCiphertext(h)
+				}
+			}
+			return nil, fmt.Errorf("deserialize BFV partial %d: %w", i, err)
+		}
+		handles[i] = ct
+	}
+	defer func() {
+		for _, h := range handles {
+			if h != nil {
+				C.FreeCiphertext(h)
+			}
+		}
+	}()
+
+	out := make([]C.int64_t, nSlots)
+	outN := C.int(len(out))
+	if rc := C.MultiDecFusionPackedInt(ctx, (*C.CiphertextHandle)(unsafe.Pointer(&handles[0])), C.int(len(handles)), (*C.int64_t)(unsafe.Pointer(&out[0])), &outN); rc != 0 {
+		return nil, fmt.Errorf("BFV contract partial fusion failed")
+	}
+	values := make([]int64, int(outN))
+	for i := range values {
+		values[i] = int64(out[i])
+	}
+	return values, nil
+}
+
 func SmokeCKKS() error {
 	var errBuf [512]C.char
 	if rc := C.ARESOpenFHESmoke(&errBuf[0], C.size_t(len(errBuf))); rc != 0 {
@@ -1020,6 +1443,13 @@ func createContractContext(params ContractParams) (C.CryptoContextHandle, error)
 		for bs < C.uint32_t(need) {
 			bs <<= 1
 		}
+	} else if params.EvalSumOnlyRotationKeys && params.ProfileDim > 0 {
+		// Chunked fusion: batch = next_pow2(profile_dim) so EvalSumKeyGen emits the
+		// profile_dim fold set (replicating across the batch), no broadcast keys.
+		bs = C.uint32_t(1)
+		for bs < C.uint32_t(params.ProfileDim) {
+			bs <<= 1
+		}
 	}
 	ctx := C.CreateCKKSContext(C.uint32_t(params.RingDim), C.double(params.ScalingFactor), C.uint32_t(params.Depth), bs)
 	if ctx == nil {
@@ -1027,6 +1457,33 @@ func createContractContext(params ContractParams) (C.CryptoContextHandle, error)
 	}
 	if params.MinimalRotationKeys {
 		C.SetMinimalRotationKeys(ctx, C.int(params.ProfileDim), C.int(params.PayloadSlotCount))
+	} else if params.EvalSumOnlyRotationKeys {
+		C.SetEvalSumOnlyRotationKeys(ctx, C.int(params.ProfileDim))
+	}
+	return ctx, nil
+}
+
+func createBFVContractContext(params BFVContractParams) (C.CryptoContextHandle, error) {
+	if params.RingDim == 0 {
+		params.RingDim = 32768
+	}
+	if params.MultiplicativeDepth == 0 {
+		params.MultiplicativeDepth = 20
+	}
+	if params.PlaintextModulus == 0 {
+		params.PlaintextModulus = 65537
+	}
+	if params.BatchSize <= 0 {
+		params.BatchSize = int(params.RingDim / 2)
+	}
+	ctx := C.CreateBFVContext(
+		C.uint32_t(params.RingDim),
+		C.uint32_t(params.MultiplicativeDepth),
+		C.uint64_t(params.PlaintextModulus),
+		C.uint32_t(params.BatchSize),
+	)
+	if ctx == nil {
+		return nil, fmt.Errorf("failed to create OpenFHE BFV contract context")
 	}
 	return ctx, nil
 }
@@ -2424,6 +2881,335 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 	result := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
 	C.free(unsafe.Pointer(out))
 	return result, nil
+}
+
+// ChunkedFusePayloadCKKS builds a fresh CKKS context from params (batch =
+// next_pow2(ProfileDim)) and runs the server-blind CHUNKED fusion, returning the
+// per-chunk winner-package ciphertexts. req.EvalKeys.EvalSumFinal must be the
+// EvalSum-replicate (eval-sum-only) key set generated at batch = next_pow2(ProfileDim).
+func ChunkedFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	n := len(req.CandidateCiphertexts)
+	if len(req.InitiatorCiphertext) == 0 {
+		return nil, fmt.Errorf("initiator ciphertext is required")
+	}
+	if n == 0 {
+		return nil, fmt.Errorf("at least one candidate ciphertext is required")
+	}
+	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n || len(req.CandidatePackages) != n {
+		return nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
+	}
+	if len(req.EvalKeys.EvalMultFinal) == 0 || len(req.EvalKeys.EvalSumFinal) == 0 {
+		return nil, fmt.Errorf("final eval-mult and eval-sum keys are required")
+	}
+	packageBytes := req.PackageBytes
+	if packageBytes <= 0 {
+		return nil, fmt.Errorf("packageBytes must be positive")
+	}
+	payloadSlots := req.PayloadSlotCount
+	if payloadSlots <= 0 {
+		return nil, fmt.Errorf("payloadSlotCount must be positive")
+	}
+	candidateBlob, candidateLens := concatCandidateCiphertexts(req.CandidateCiphertexts)
+	latQ := intsToCInts(req.CandidateLatQ)
+	lonQ := intsToCInts(req.CandidateLonQ)
+	brownies := intsToCInts(req.CandidateBrownies)
+	packages, err := flattenCandidatePackages(req.CandidatePackages, packageBytes)
+	if err != nil {
+		return nil, err
+	}
+	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
+	defer C.free(unsafe.Pointer(comparator))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	defer C.free(unsafe.Pointer(schedule))
+	const maxChunks = 256
+	chunkLens := make([]C.size_t, maxChunks)
+	var out *C.uint8_t
+	var outLen C.size_t
+	var nChunks C.int
+	var errBuf [512]C.char
+	if rc := C.ARESChunkedFusePayloadCKKS(
+		nil, // ctx_handle: NULL = create fresh context at batch next_pow2(profile_dim)
+		C.uint32_t(params.RingDim), C.double(params.ScalingFactor), C.uint32_t(params.Depth),
+		(*C.uint8_t)(unsafe.Pointer(&req.InitiatorCiphertext[0])), C.size_t(len(req.InitiatorCiphertext)),
+		(*C.uint8_t)(unsafe.Pointer(&candidateBlob[0])), (*C.size_t)(unsafe.Pointer(&candidateLens[0])),
+		(*C.int)(unsafe.Pointer(&latQ[0])), (*C.int)(unsafe.Pointer(&lonQ[0])), (*C.int)(unsafe.Pointer(&brownies[0])),
+		C.int(n), C.int(req.ProfileDim),
+		C.int(req.InitiatorLatQ), C.int(req.InitiatorLonQ),
+		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
+		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
+		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
+		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0])), C.size_t(len(req.EvalKeys.EvalMultFinal)),
+		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0])), C.size_t(len(req.EvalKeys.EvalSumFinal)),
+		(*C.int)(unsafe.Pointer(&packages[0])), C.int(packageBytes), C.int(payloadSlots),
+		&out, &outLen, (*C.size_t)(unsafe.Pointer(&chunkLens[0])), &nChunks,
+		&errBuf[0], C.size_t(len(errBuf)),
+	); rc != 0 {
+		return nil, fmt.Errorf("chunked fuse payload: %s", C.GoString(&errBuf[0]))
+	}
+	if int(nChunks) > maxChunks {
+		C.free(unsafe.Pointer(out))
+		return nil, fmt.Errorf("chunked fuse produced %d chunks > cap %d", int(nChunks), maxChunks)
+	}
+	blob := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+	C.free(unsafe.Pointer(out))
+	chunks := make([][]byte, int(nChunks))
+	off := 0
+	for c := 0; c < int(nChunks); c++ {
+		l := int(chunkLens[c])
+		chunks[c] = blob[off : off+l]
+		off += l
+	}
+	return chunks, nil
+}
+
+// ChunkedFusePayloadCKKSWithContext is the CHUNKED, low-RSS counterpart of
+// FullFusePayloadCKKSWithContext: it EvalSum-replicates the mask across the
+// profile_dim batch (fold rotation keys only — no broadcast set) and splits the
+// payload into ceil(payloadSlots/batch) chunks. Returns the per-chunk winner-package
+// ciphertexts; each holds the winner's chunk_size payload bits in slots [0,chunk_size).
+// The caller threshold-decrypts each chunk and reassembles the payload. This is the
+// server-blind path that runs on the fold-only 7-key rotation set (vs broadcast's 17).
+func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([][]byte, error) {
+	if ctx == nil || ctx.handle == nil {
+		return nil, fmt.Errorf("crypto context is required")
+	}
+	n := len(req.CandidateCiphertexts)
+	if n == 0 || len(req.InitiatorCiphertext) == 0 {
+		return nil, fmt.Errorf("initiator and at least one candidate ciphertext required")
+	}
+	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n || len(req.CandidatePackages) != n {
+		return nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
+	}
+	if len(req.EvalKeys.EvalMultFinal) == 0 {
+		return nil, fmt.Errorf("final eval-mult key is required")
+	}
+	pkgBytes := req.PackageBytes
+	if pkgBytes <= 0 {
+		return nil, fmt.Errorf("packageBytes must be positive")
+	}
+	payloadSlots := req.PayloadSlotCount
+	if payloadSlots <= 0 {
+		return nil, fmt.Errorf("payloadSlotCount must be positive")
+	}
+	candidateBlob, candidateLens := concatCandidateCiphertexts(req.CandidateCiphertexts)
+	latQ := intsToCInts(req.CandidateLatQ)
+	lonQ := intsToCInts(req.CandidateLonQ)
+	brownies := intsToCInts(req.CandidateBrownies)
+	packages, err := flattenCandidatePackages(req.CandidatePackages, pkgBytes)
+	if err != nil {
+		return nil, err
+	}
+	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
+	defer C.free(unsafe.Pointer(comparator))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	defer C.free(unsafe.Pointer(schedule))
+	var evalSumPtr *C.uint8_t
+	var evalSumLen C.size_t
+	if len(req.EvalKeys.EvalSumFinal) > 0 {
+		evalSumPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0]))
+		evalSumLen = C.size_t(len(req.EvalKeys.EvalSumFinal))
+	}
+	const maxChunks = 256 // ceil(payloadSlots/batch); 256*32 slots covers any sane payload
+	chunkLens := make([]C.size_t, maxChunks)
+	var out *C.uint8_t
+	var outLen C.size_t
+	var nChunks C.int
+	var errBuf [512]C.char
+	if rc := C.ARESChunkedFusePayloadCKKS(
+		ctx.handle,
+		C.uint32_t(0), C.double(0), C.uint32_t(0), // ring/scaling/depth unused when ctx set
+		(*C.uint8_t)(unsafe.Pointer(&req.InitiatorCiphertext[0])), C.size_t(len(req.InitiatorCiphertext)),
+		(*C.uint8_t)(unsafe.Pointer(&candidateBlob[0])), (*C.size_t)(unsafe.Pointer(&candidateLens[0])),
+		(*C.int)(unsafe.Pointer(&latQ[0])), (*C.int)(unsafe.Pointer(&lonQ[0])), (*C.int)(unsafe.Pointer(&brownies[0])),
+		C.int(n), C.int(req.ProfileDim),
+		C.int(req.InitiatorLatQ), C.int(req.InitiatorLonQ),
+		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
+		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
+		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
+		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0])), C.size_t(len(req.EvalKeys.EvalMultFinal)),
+		evalSumPtr, evalSumLen,
+		(*C.int)(unsafe.Pointer(&packages[0])), C.int(pkgBytes), C.int(payloadSlots),
+		&out, &outLen, (*C.size_t)(unsafe.Pointer(&chunkLens[0])), &nChunks,
+		&errBuf[0], C.size_t(len(errBuf)),
+	); rc != 0 {
+		return nil, fmt.Errorf("chunked fuse payload: %s", C.GoString(&errBuf[0]))
+	}
+	if int(nChunks) > maxChunks {
+		C.free(unsafe.Pointer(out))
+		return nil, fmt.Errorf("chunked fuse produced %d chunks > cap %d", int(nChunks), maxChunks)
+	}
+	blob := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+	C.free(unsafe.Pointer(out))
+	chunks := make([][]byte, int(nChunks))
+	off := 0
+	for c := 0; c < int(nChunks); c++ {
+		l := int(chunkLens[c])
+		chunks[c] = blob[off : off+l]
+		off += l
+	}
+	return chunks, nil
+}
+
+// UnionComparator is one comparator shot in a chunked union score (e.g. the
+// CKKSRing32KUnionV1 trio ss5 / logi_g4_b3_d13 / logi_g3_b6_d13). InputScale is the
+// per-comparator range control: a comparator's valid score-diff range is ±Bound/InputScale,
+// so steep logistics need InputScale < 1 to keep larger margins inside their approximation
+// interval (out-of-range eval → "approximation error too high" on decrypt).
+type UnionComparator struct {
+	ID          string
+	Comparator  string // "selector" | "logistic" | "tanh_chebyshev"
+	Schedule    string // selector-sharpen schedule, e.g. "smoothstep5" or "none"
+	Gain        float64
+	Bound       float64
+	InputScale  float64 // output
+	RangeMargin float64 // input: raw score-diff range this comparator should cover; 0 = metadata default
+	Degree      int
+}
+
+// DistributionMetadata describes the score spread a deployment expects. MedianMargin
+// is the top-2 winner margin and drives score amplification. MaxMargin is the maximum
+// observed top-2 margin. MaxPairwiseDiff is the maximum observed score gap between any
+// two candidates in a cohort and drives comparator range control. The comparators'
+// characters (gain/bound/shape — their diversity) stay fixed; only the
+// distribution-dependent score amplification and per-comparator InputScale are derived.
+// Margins are in raw score units; supply them directly or compute via
+// MarginStatsFromCohorts for profile-only cosine cohorts.
+type DistributionMetadata struct {
+	MinMargin       float64
+	MedianMargin    float64
+	MaxMargin       float64
+	MaxPairwiseDiff float64
+}
+
+// MarginStatsFromCohorts computes DistributionMetadata from sample cohorts: each entry is
+// the initiator's unit profile followed by the candidate unit profiles. Lets a developer
+// hand ARES-core representative profile-only embeddings instead of raw stats.
+func MarginStatsFromCohorts(cohorts [][][]float64) DistributionMetadata {
+	margins := make([]float64, 0, len(cohorts))
+	maxPairwise := 0.0
+	for _, ch := range cohorts {
+		if len(ch) < 3 {
+			continue
+		}
+		init := ch[0]
+		best, second, worst := math.Inf(-1), math.Inf(-1), math.Inf(1)
+		for _, cand := range ch[1:] {
+			var d float64
+			for i := 0; i < len(init) && i < len(cand); i++ {
+				d += init[i] * cand[i]
+			}
+			if d > best {
+				second, best = best, d
+			} else if d > second {
+				second = d
+			}
+			if d < worst {
+				worst = d
+			}
+		}
+		margins = append(margins, best-second)
+		if pairwise := best - worst; pairwise > maxPairwise {
+			maxPairwise = pairwise
+		}
+	}
+	if len(margins) == 0 {
+		return DistributionMetadata{MinMargin: 0.005, MedianMargin: 0.0126, MaxMargin: 0.05, MaxPairwiseDiff: 0.05}
+	}
+	sort.Float64s(margins)
+	if maxPairwise <= 0 {
+		maxPairwise = margins[len(margins)-1]
+	}
+	return DistributionMetadata{
+		MinMargin:       margins[0],
+		MedianMargin:    margins[len(margins)/2],
+		MaxMargin:       margins[len(margins)-1],
+		MaxPairwiseDiff: maxPairwise,
+	}
+}
+
+// TuneUnion derives the score amplification (Beta) and per-comparator InputScale while
+// preserving each comparator's native gain/bound (its sharpness/width = the union's
+// diversity). Beta maps the median top-2 margin to `target` score-diff units. Each
+// comparator then covers either its own RangeMargin or the metadata's widest observed
+// range, so callers can deliberately tune one comparator for close contests and another
+// for the wide tail. Returns the tuned ScoreScale (Beta) and comparator set.
+func TuneUnion(meta DistributionMetadata, base []UnionComparator, target float64) (scoreScale float64, tuned []UnionComparator) {
+	if target <= 0 {
+		target = 4
+	}
+	med := meta.MedianMargin
+	if med <= 0 {
+		med = 0.0126
+	}
+	scoreScale = 2 * target / med
+	rangeMargin := meta.MaxMargin
+	if meta.MaxPairwiseDiff > rangeMargin {
+		rangeMargin = meta.MaxPairwiseDiff
+	}
+	tuned = make([]UnionComparator, len(base))
+	for i, c := range base {
+		c2 := c
+		compRangeMargin := rangeMargin
+		if c2.RangeMargin > 0 {
+			compRangeMargin = c2.RangeMargin
+		}
+		compMaxDiff := (scoreScale / 2) * compRangeMargin
+		if compMaxDiff <= 0 {
+			compMaxDiff = target
+		}
+		if c2.Bound > 0 {
+			c2.InputScale = c2.Bound / (compMaxDiff * 1.15) // 15% headroom past the selected range
+			if c2.InputScale > 1 {
+				c2.InputScale = 1
+			}
+		} else {
+			// selector cubic f(x)=0.5+0.1125x-0.00084375x^3 is monotonic up to x~6.7 (its peak);
+			// scale so the LARGEST margin lands near that peak, not past it (where it turns over
+			// and inverts). Over-compressing (mapping maxDiff well below the peak) flattens the
+			// selector and kills its separation -- the bug that dropped ss5 to 1/10.
+			const selectorPeak = 6.7
+			c2.InputScale = selectorPeak / (compMaxDiff * 1.05)
+			if c2.InputScale > 1 {
+				c2.InputScale = 1
+			}
+		}
+		tuned[i] = c2
+	}
+	return scoreScale, tuned
+}
+
+// ChunkedUnionScoreCKKS is the DEFAULT server-blind union scoring path. It builds ONE CKKS
+// context and reuses it across every comparator (instead of a fresh ~GB context per shot —
+// the low-RSS win) and runs each comparator's chunked fusion on it, returning the
+// per-comparator per-chunk winner-package ciphertexts: out[i] is comparator i's chunk
+// ciphertexts. The caller threshold-decrypts each comparator's chunks and accepts the cohort
+// if any comparator's reassembled package opens. Prefer this over per-call
+// ChunkedFusePayloadCKKS (which allocates a fresh context for every comparator).
+func ChunkedUnionScoreCKKS(params ContractParams, req FullFuseRequest, comparators []UnionComparator) ([][][]byte, error) {
+	if len(comparators) == 0 {
+		return nil, fmt.Errorf("at least one union comparator is required")
+	}
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer ctx.Close()
+	out := make([][][]byte, len(comparators))
+	for i, comp := range comparators {
+		r := req
+		r.Comparator = comp.Comparator
+		r.SelectorSchedule = comp.Schedule
+		r.ComparatorGain = comp.Gain
+		r.ComparatorBound = comp.Bound
+		r.ComparatorScale = comp.InputScale
+		r.ComparatorDegree = comp.Degree
+		chunks, err := ChunkedFusePayloadCKKSWithContext(ctx, r)
+		if err != nil {
+			return nil, fmt.Errorf("union comparator %s: %w", comp.ID, err)
+		}
+		out[i] = chunks
+	}
+	return out, nil
 }
 
 // FullFusePayloadCKKSWithEvalSumRefs streams per-index eval-sum shares into a

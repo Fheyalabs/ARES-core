@@ -8,7 +8,7 @@ ARES Core is a cryptographic framework for **blind ranking**,
 **sealed-bid auctions**, and **selective-reveal protocols**. It composes
 N-party cryptographic sessions from pluggable units called **phases**:
 
-- Threshold CKKS keygen, FHE scoring, and threshold decrypt — out of the box.
+- Threshold CKKS/BFV keygen, FHE scoring, and threshold decrypt — out of the box.
 - Pluggable input shapes, scoring circuits, and post-result phases.
 - Pluggable trust models — multi-party threshold, single-party trusted,
   plaintext (for testing), or pre-shared / amortized keygen.
@@ -23,7 +23,7 @@ plus their own input-submission / scoring / post-result phases.
 
 ## Reference apps
 
-Four worked examples ship under `examples/`:
+Worked examples ship under `examples/`:
 
 | App | Path | Pipeline | Depth |
 |---|---|---|---|
@@ -31,6 +31,8 @@ Four worked examples ship under `examples/`:
 | Ride share | [`examples/ride_share/`](examples/ride_share/) | 6 phases — composite score (price × proximity) | 12 |
 | Recurring cohort ranking | [`examples/recurring_cohort_ranking/`](examples/recurring_cohort_ranking/) | 10 phases across 2 runners — amortized keygen | 10 |
 | Blind voting | [`examples/voting/`](examples/voting/) | 5 phases — `PlaintextKeygen` + sum-weighted tally | n/a |
+| Ring-32k BFV payload fuse | [`examples/blind_bfv_payload_fuse/`](examples/blind_bfv_payload_fuse/) | Profile + lineage helpers for additive BFV fallback | 20 |
+| Light BFV payload fuse | [`examples/light_bfv_payload_fuse/`](examples/light_bfv_payload_fuse/) | Smaller profile + lineage helpers for local smoke use | 10 |
 
 The dating-app reference implementation built on this framework lives
 at [fheya.de](https://fheya.de) — it's not open-source, but exists as
@@ -282,9 +284,9 @@ To swap in real FHE later, replace `keygen.NewPlaintextKeygen()` with
 framework's composition guard catches the topology mismatch at
 construction time if you mix them up.
 
-The four reference apps under `examples/` are larger only because they
-add real CKKS, signed transcripts, multiple runners, or amortized
-keygen — none of which is required to *start*. See
+The reference apps under `examples/` are larger only because they add
+real FHE, signed transcripts, multiple runners, or amortized keygen —
+none of which is required to *start*. See
 [`examples/voting/`](examples/voting/) for the closest match to this
 shape with tests.
 
@@ -298,7 +300,7 @@ go get github.com/Fheyalabs/ARES-core@latest
 
 ### OpenFHE prerequisite
 
-ARES Core links the **OpenFHE 1.5.x** C++ library for its CKKS
+ARES Core links the **OpenFHE 1.5.x** C++ library for its CKKS and BFV
 primitives. Pin to 1.5.1 — earlier versions choose different cyclotomic
 primes for the same nominal parameters and ciphertexts won't
 interoperate across versions (the framework detects this and refuses to
@@ -341,7 +343,6 @@ go test -tags openfhe ./...         # full suite; requires OpenFHE
 - [Framework concepts and customizing recipes](pkg/ares/phase/README.md)
 - [Reference apps overview](#reference-apps) above
 - [Python smoke scripts](clients/python/examples/README.md)
-- [Deployment recipes for homelab](deploy/README.md)
 - [CHANGELOG.md](CHANGELOG.md)
 
 ## Contributing

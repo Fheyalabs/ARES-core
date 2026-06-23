@@ -2,36 +2,63 @@
 
 package helperclient
 
+type Scheme string
+
+const (
+	SchemeCKKS Scheme = "ckks"
+	SchemeBFV  Scheme = "bfv"
+)
+
 // ContractParams pins the CKKS scheme parameters for one call. The
 // helper recreates the CryptoContext from these on every op (until a
 // persistent-session protocol lands).
 type ContractParams struct {
+	Scheme         Scheme  `json:"scheme,omitempty"`
 	RingDim        uint32  `json:"ring_dim"`
 	ScalingFactor  float64 `json:"scaling_factor,omitempty"`
 	ScalingModSize int     `json:"scaling_mod_size,omitempty"`
 	Depth          uint32  `json:"depth"`
 }
 
+func (p ContractParams) EffectiveScheme() Scheme {
+	if p.Scheme == "" {
+		return SchemeCKKS
+	}
+	return p.Scheme
+}
+
+// BFVContractParams pins integer BFV parameters. It is intentionally
+// separate from ContractParams so CKKS float-slot calls and BFV
+// packed-integer calls cannot silently share incompatible fields.
+type BFVContractParams struct {
+	RingDim             uint32 `json:"ring_dim"`
+	MultiplicativeDepth uint32 `json:"multiplicative_depth"`
+	PlaintextModulus    uint64 `json:"plaintext_modulus"`
+	BatchSize           int    `json:"batch_size,omitempty"`
+}
+
 // Request is the union of every helper op's input. Fields are populated
 // per-op; the helper dispatches on Op.
 type Request struct {
-	Op     string         `json:"op"`
-	Params ContractParams `json:"params"`
+	Op        string            `json:"op"`
+	Params    ContractParams    `json:"params"`
+	BFVParams BFVContractParams `json:"bfv_params,omitempty"`
 
 	// Existing protocol-op fields.
-	PrevPublicKey  string   `json:"prev_public_key,omitempty"`
-	JointPublicKey string   `json:"joint_public_key,omitempty"`
-	OwnPublicKey   string   `json:"own_public_key,omitempty"`
-	FinalPublicKey string   `json:"final_public_key,omitempty"`
-	EvalMultBase   string   `json:"eval_mult_base,omitempty"`
-	EvalSumBase    string   `json:"eval_sum_base,omitempty"`
-	EvalMultJoined string   `json:"eval_mult_joined,omitempty"`
+	PrevPublicKey  string    `json:"prev_public_key,omitempty"`
+	JointPublicKey string    `json:"joint_public_key,omitempty"`
+	OwnPublicKey   string    `json:"own_public_key,omitempty"`
+	FinalPublicKey string    `json:"final_public_key,omitempty"`
+	EvalMultBase   string    `json:"eval_mult_base,omitempty"`
+	EvalSumBase    string    `json:"eval_sum_base,omitempty"`
+	EvalMultJoined string    `json:"eval_mult_joined,omitempty"`
 	Values         []float64 `json:"values,omitempty"`
-	Ciphertext     string   `json:"ciphertext,omitempty"`
-	SecretKeyShare string   `json:"secret_key_share,omitempty"`
-	Lead           bool     `json:"lead,omitempty"`
-	Partials       []string `json:"partials,omitempty"`
-	NSlots         int      `json:"n_slots,omitempty"`
+	IntValues      []int64   `json:"int_values,omitempty"`
+	Ciphertext     string    `json:"ciphertext,omitempty"`
+	SecretKeyShare string    `json:"secret_key_share,omitempty"`
+	Lead           bool      `json:"lead,omitempty"`
+	Partials       []string  `json:"partials,omitempty"`
+	NSlots         int       `json:"n_slots,omitempty"`
 
 	// Decomposable scoring primitives.
 
@@ -82,6 +109,7 @@ type Response struct {
 	Ciphertext         string    `json:"ciphertext,omitempty"`
 	Partial            string    `json:"partial,omitempty"`
 	Values             []float64 `json:"values,omitempty"`
+	IntValues          []int64   `json:"int_values,omitempty"`
 	EvalMultBase       string    `json:"eval_mult_base,omitempty"`
 	EvalSumBase        string    `json:"eval_sum_base,omitempty"`
 	EvalMultShare      string    `json:"eval_mult_share,omitempty"`

@@ -78,6 +78,146 @@ func TestArgmaxOverIPC(t *testing.T) {
 	}
 }
 
+func TestBFVPackedIntRoundTripOverIPC(t *testing.T) {
+	if err := cgo.SmokeCKKS(); err != nil {
+		t.Skipf("OpenFHE smoke unavailable: %v", err)
+	}
+	binary := buildHelperBinary(t)
+	defer os.Remove(binary)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := helperclient.Start(ctx, binary)
+	if err != nil {
+		t.Fatalf("helper start: %v", err)
+	}
+	defer client.Close()
+
+	params := helperclient.BFVContractParams{
+		RingDim:             8192,
+		MultiplicativeDepth: 4,
+		PlaintextModulus:    65537,
+		BatchSize:           8,
+	}
+	first, err := client.BFVKeygenFirst(params)
+	if err != nil {
+		t.Fatalf("bfv keygen first: %v", err)
+	}
+	second, err := client.BFVKeygenNext(params, first.PublicKey)
+	if err != nil {
+		t.Fatalf("bfv keygen next: %v", err)
+	}
+	ct, err := client.BFVEncryptIntVector(params, second.PublicKey, []int64{-3, 0, 42, -1})
+	if err != nil {
+		t.Fatalf("bfv encrypt: %v", err)
+	}
+	p0, err := client.BFVPartialDecrypt(params, ct, first.SecretKeyShare, true)
+	if err != nil {
+		t.Fatalf("bfv partial 0: %v", err)
+	}
+	p1, err := client.BFVPartialDecrypt(params, ct, second.SecretKeyShare, false)
+	if err != nil {
+		t.Fatalf("bfv partial 1: %v", err)
+	}
+	got, err := client.BFVFusePartials(params, [][]byte{p0, p1}, 4)
+	if err != nil {
+		t.Fatalf("bfv fuse: %v", err)
+	}
+	want := []int64{-3, 0, 42, -1}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("slot %d = %d, want %d (all slots %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestBFVKeygenChainOverIPC(t *testing.T) {
+	if err := cgo.SmokeCKKS(); err != nil {
+		t.Skipf("OpenFHE smoke unavailable: %v", err)
+	}
+	binary := buildHelperBinary(t)
+	defer os.Remove(binary)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := helperclient.Start(ctx, binary)
+	if err != nil {
+		t.Fatalf("helper start: %v", err)
+	}
+	defer client.Close()
+
+	params := helperclient.BFVContractParams{
+		RingDim:             8192,
+		MultiplicativeDepth: 4,
+		PlaintextModulus:    65537,
+		BatchSize:           8,
+	}
+	bundle, err := client.BFVKeygenChain(params, 2)
+	if err != nil {
+		t.Fatalf("BFVKeygenChain: %v", err)
+	}
+	if len(bundle.PublicKey) == 0 || len(bundle.EvalKeys) == 0 || len(bundle.EvalSumKeys) == 0 {
+		t.Fatalf("incomplete BFV key bundle: pk=%d eval=%d sum=%d", len(bundle.PublicKey), len(bundle.EvalKeys), len(bundle.EvalSumKeys))
+	}
+	if len(bundle.KeyShares) != 2 {
+		t.Fatalf("KeyShares = %d, want 2", len(bundle.KeyShares))
+	}
+}
+
+func TestBFVEvalProductSumOverIPC(t *testing.T) {
+	if err := cgo.SmokeCKKS(); err != nil {
+		t.Skipf("OpenFHE smoke unavailable: %v", err)
+	}
+	binary := buildHelperBinary(t)
+	defer os.Remove(binary)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	client, err := helperclient.Start(ctx, binary)
+	if err != nil {
+		t.Fatalf("helper start: %v", err)
+	}
+	defer client.Close()
+
+	params := helperclient.BFVContractParams{
+		RingDim:             8192,
+		MultiplicativeDepth: 4,
+		PlaintextModulus:    65537,
+		BatchSize:           8,
+	}
+	bundle, err := client.BFVKeygenChain(params, 2)
+	if err != nil {
+		t.Fatalf("BFVKeygenChain: %v", err)
+	}
+	left, err := client.BFVEncryptIntVector(params, bundle.PublicKey, []int64{1, 2, 3, 4})
+	if err != nil {
+		t.Fatalf("encrypt left: %v", err)
+	}
+	right, err := client.BFVEncryptIntVector(params, bundle.PublicKey, []int64{5, 6, 7, 8})
+	if err != nil {
+		t.Fatalf("encrypt right: %v", err)
+	}
+	dot, err := client.BFVEvalProductSum(params, bundle.EvalKeys, bundle.EvalSumKeys, left, right, 4)
+	if err != nil {
+		t.Fatalf("BFVEvalProductSum: %v", err)
+	}
+	p0, err := client.BFVPartialDecrypt(params, dot, bundle.KeyShares[0].SecretKeyShare, true)
+	if err != nil {
+		t.Fatalf("partial 0: %v", err)
+	}
+	p1, err := client.BFVPartialDecrypt(params, dot, bundle.KeyShares[1].SecretKeyShare, false)
+	if err != nil {
+		t.Fatalf("partial 1: %v", err)
+	}
+	got, err := client.BFVFusePartials(params, [][]byte{p0, p1}, 1)
+	if err != nil {
+		t.Fatalf("fuse: %v", err)
+	}
+	if got[0] != 70 {
+		t.Fatalf("dot = %d, want 70", got[0])
+	}
+}
+
 func buildHelperBinary(t *testing.T) string {
 	t.Helper()
 	// helperclient/ is at pkg/ares/crypto/helperclient → root is ../../../..

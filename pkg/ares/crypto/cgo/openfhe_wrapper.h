@@ -26,12 +26,24 @@ CryptoContextHandle CreateCKKSContext(
     uint32_t depth,        // 12
     uint32_t batch_size    // 0 = ring_dim/2 (default), >0 = explicit batch
 );
+CryptoContextHandle CreateBFVContext(
+    uint32_t ring_dim,
+    uint32_t multiplicative_depth,
+    uint64_t plaintext_modulus,
+    uint32_t batch_size
+);
 void FreeCryptoContext(CryptoContextHandle ctx);
 // SetMinimalRotationKeys opts a context into dimension-parameterized rotation-key
 // generation: EvalSumKeyGenLead/Share emit only the at-index keys a profile_dim
 // dot-product fold + a payload_slot_count broadcast need, instead of the full ring/2
 // batch. Default (unset) keeps full-batch EvalSum + broadcast keygen.
 void SetMinimalRotationKeys(CryptoContextHandle ctx, int profile_dim, int payload_slot_count);
+
+// SetEvalSumOnlyRotationKeys opts a context into the chunked-fusion rotation set:
+// the threshold eval-sum keygen produces ONLY the replicating EvalSumKeyGen map
+// (batch_size = next_pow2(profile_dim) keys) and no broadcast at-index keys. Use with
+// ARESChunkedFusePayloadCKKS, which folds via EvalSum (replicate), not broadcast.
+void SetEvalSumOnlyRotationKeys(CryptoContextHandle ctx, int profile_dim);
 
 // Threshold keygen (N-party)
 int KeyGenFirst(CryptoContextHandle ctx,
@@ -144,6 +156,8 @@ int InsertEvalSumKeyAppend(CryptoContextHandle ctx, RotKeyHandle key);
 // Encrypt/Decrypt
 CiphertextHandle Encrypt(CryptoContextHandle ctx, PublicKeyHandle pk,
     double* values, int n_values);
+CiphertextHandle EncryptPackedInt(CryptoContextHandle ctx, PublicKeyHandle pk,
+    int64_t* values, int n_values);
 int DecryptSingle(CryptoContextHandle ctx, CiphertextHandle ct,
     SecretKeyShareHandle sk, double* out_values, int* out_n_values);
 int MultiDecMain(CryptoContextHandle ctx, CiphertextHandle ct,
@@ -151,6 +165,9 @@ int MultiDecMain(CryptoContextHandle ctx, CiphertextHandle ct,
 int MultiDecFusion(CryptoContextHandle ctx,
     CiphertextHandle* partials, int n_partials,
     double* out_values, int* out_n_values);
+int MultiDecFusionPackedInt(CryptoContextHandle ctx,
+    CiphertextHandle* partials, int n_partials,
+    int64_t* out_values, int* out_n_values);
 
 // Homomorphic operations
 CiphertextHandle EvalAdd(CryptoContextHandle ctx,
@@ -257,6 +274,54 @@ int ARESFullFusePayloadCKKS(
     int minimal_rotation_keys,
     uint8_t** out_ct,
     size_t* out_ct_len,
+    char* err,
+    size_t err_len
+);
+
+// ARESChunkedFusePayloadCKKS: server-blind fusion with crypto-lab CHUNKED payload
+// recovery (the low-RSS default). EvalSum-replicates the mask across the profile_dim
+// batch (fold keys only, no broadcast set) and splits the payload into
+// ceil(payload_slot_count/batch_size) chunks. The n_chunks result ciphertexts are
+// serialized and concatenated into *out_cts (length *out_cts_len); out_chunk_lens
+// (caller-allocated, capacity >= max chunks) receives each chunk's serialized length;
+// *out_n_chunks is the chunk count. Each chunk holds the winner's chunk_size payload
+// bits in slots [0, chunk_size); the caller threshold-decrypts each and reassembles.
+int ARESChunkedFusePayloadCKKS(
+    CryptoContextHandle ctx_handle,
+    uint32_t ring_dim,
+    double scaling_factor,
+    uint32_t depth,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob,
+    const size_t* candidate_ct_lens,
+    const int* candidate_lat_q,
+    const int* candidate_lon_q,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    int initiator_lat_q,
+    int initiator_lon_q,
+    double alpha,
+    double beta,
+    double gamma,
+    const char* comparator,
+    int comparator_degree,
+    double comparator_gain,
+    double comparator_input_scale,
+    double comparator_bound,
+    const char* selector_schedule,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const int* candidate_packages,
+    int package_bytes,
+    int payload_slot_count,
+    uint8_t** out_cts,
+    size_t* out_cts_len,
+    size_t* out_chunk_lens,
+    int* out_n_chunks,
     char* err,
     size_t err_len
 );

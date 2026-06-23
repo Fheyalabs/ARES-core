@@ -23,5 +23,15 @@ public final class CryptoContext {
             SetMinimalRotationKeys(h, Int32(profileDim), Int32(payloadSlotCount))
         }
     }
+    public init(ringDim: UInt32, multiplicativeDepth: UInt32,
+                plaintextModulus: UInt64,
+                batchSize: UInt32 = 0) throws {
+        guard let h = CreateBFVContext(ringDim, multiplicativeDepth, plaintextModulus, batchSize) else {
+            throw FHEError.contextCreationFailed
+        }
+        self.raw = h
+    }
     deinit { FreeCryptoContext(raw) }
 }
+
+public typealias BFVCryptoContext = CryptoContext

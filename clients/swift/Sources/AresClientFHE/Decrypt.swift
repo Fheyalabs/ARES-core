@@ -23,6 +23,19 @@ extension CryptoContext {
         return Array(out.prefix(Int(n)))
     }
 
+    public func fuseInt(_ partials: [Ciphertext], slotCapacity: Int) throws -> [Int64] {
+        var ptrs: [UnsafeMutableRawPointer?] = partials.map { $0.raw }
+        var out = [Int64](repeating: 0, count: slotCapacity)
+        var n = Int32(slotCapacity)
+        let rc = ptrs.withUnsafeMutableBufferPointer { pbuf in
+            out.withUnsafeMutableBufferPointer { obuf in
+                MultiDecFusionPackedInt(raw, pbuf.baseAddress, Int32(partials.count), obuf.baseAddress, &n)
+            }
+        }
+        guard rc == 0 else { throw FHEError.decryptFailed }
+        return Array(out.prefix(Int(n)))
+    }
+
     public func decryptSingle(_ ct: Ciphertext, with sk: SecretKeyShare, slots: Int) throws -> [Double] {
         var out = [Double](repeating: 0, count: slots)
         var n = Int32(slots)

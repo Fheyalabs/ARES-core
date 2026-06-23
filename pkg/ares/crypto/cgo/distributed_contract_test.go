@@ -234,6 +234,113 @@ func TestFullFusePayloadMinimalRotationKeys(t *testing.T) {
 	}
 }
 
+// TestChunkedFusePayloadEvalSumOnly validates the chunked server-blind fusion on the
+// eval-sum-only (7-fold-key, no broadcast) rotation set at n=6 parties: EvalSum-replicate
+// scoring + per-chunk Σ mask·pkg recovers the winner's package across all chunks.
+// Run with ARES_FHE_ALLOW_INSECURE=1 (small test ring).
+func TestChunkedFusePayloadEvalSumOnly(t *testing.T) {
+	const profileDim = 8
+	const nParties = 6
+	params := DefaultContractParams(profileDim, 12)
+	params.EvalSumOnlyRotationKeys = true
+	params.ProfileDim = profileDim
+
+	shares := distributedSharesForTest(t, params, nParties)
+	evalKeys := distributedEvalKeysForTest(t, params, shares)
+	jointPK := shares[len(shares)-1].PublicKey
+
+	// Seeded cohort: candidate 2 == initiator (cosine 1, clear winner); others orthogonal.
+	initProfile := []float64{1, 0, 0, 0, 0, 0, 0, 0}
+	candProfiles := [][]float64{
+		{0, 1, 0, 0, 0, 0, 0, 0},
+		{0, 0, 1, 0, 0, 0, 0, 0},
+		{1, 0, 0, 0, 0, 0, 0, 0},
+	}
+	const winnerIdx = 2
+	nCands := len(candProfiles)
+
+	initCT, err := EncryptCKKSForContract(params, jointPK, initProfile)
+	if err != nil {
+		t.Fatalf("encrypt initiator: %v", err)
+	}
+	candCTs := make([][]byte, nCands)
+	for i := range candProfiles {
+		candCTs[i], err = EncryptCKKSForContract(params, jointPK, candProfiles[i])
+		if err != nil {
+			t.Fatalf("encrypt candidate %d: %v", i, err)
+		}
+	}
+
+	packages := [][]int{
+		{0x11, 0x22, 0x33, 0x44},
+		{0x55, 0x66, 0x77, 0x88},
+		{0xA5, 0x5A, 0xC3, 0x3C}, // winner package
+	}
+	packageBytes := len(packages[0])
+	payloadSlots := packageBytes * 8
+
+	chunks, err := ChunkedFusePayloadCKKS(params, FullFuseRequest{
+		InitiatorCiphertext:  initCT,
+		CandidateCiphertexts: candCTs,
+		CandidateLatQ:        make([]int, nCands),
+		CandidateLonQ:        make([]int, nCands),
+		CandidateBrownies:    make([]int, nCands),
+		CandidatePackages:    packages,
+		ProfileDim:           profileDim,
+		Alpha:                0,
+		Beta:                 1,
+		Gamma:                0,
+		Comparator:           "tanh_chebyshev",
+		ComparatorDegree:     7,
+		ComparatorGain:       40,
+		ComparatorScale:      1,
+		ComparatorBound:      1,
+		SelectorSchedule:     "none",
+		EvalKeys:             evalKeys,
+		PackageBytes:         packageBytes,
+		PayloadSlotCount:     payloadSlots,
+	})
+	if err != nil {
+		t.Fatalf("chunked fuse payload: %v", err)
+	}
+
+	chunkSize := 1
+	for chunkSize < profileDim {
+		chunkSize <<= 1
+	}
+	wantChunks := (payloadSlots + chunkSize - 1) / chunkSize
+	if len(chunks) != wantChunks {
+		t.Fatalf("got %d chunks, want %d (chunkSize=%d)", len(chunks), wantChunks, chunkSize)
+	}
+
+	// Threshold-decrypt each chunk and reassemble its chunk_size bits in order.
+	allBits := make([]float64, 0, len(chunks)*chunkSize)
+	for c, chunk := range chunks {
+		partials := make([][]byte, 0, nParties)
+		for _, share := range shares {
+			partial, err := PartialDecryptCKKSForContract(params, chunk, share.SecretKeyShare, share.Lead)
+			if err != nil {
+				t.Fatalf("partial decrypt chunk %d lead=%v: %v", c, share.Lead, err)
+			}
+			partials = append(partials, partial)
+		}
+		slots, err := FuseCKKSPartialsForContract(params, partials, chunkSize)
+		if err != nil {
+			t.Fatalf("fuse chunk %d: %v", c, err)
+		}
+		allBits = append(allBits, slots...)
+	}
+
+	recovered := slotsToBytesForTest(allBits, packageBytes)
+	want := packages[winnerIdx]
+	for i := range want {
+		if recovered[i] != byte(want[i]) {
+			t.Fatalf("chunked recovered %x, want %x (winner=%d, chunks=%d)",
+				recovered, intsToBytesForTest(want), winnerIdx, len(chunks))
+		}
+	}
+}
+
 func slotsToBytesForTest(slots []float64, n int) []byte {
 	out := make([]byte, n)
 	for bit := 0; bit < n*8 && bit < len(slots); bit++ {
