@@ -2293,12 +2293,14 @@ int ARESChunkedFusePayloadCKKS(
     size_t err_len
 ) {
     try {
+        const bool eval_mult_preinserted =
+            ctx_handle != nullptr && (eval_mult_key == nullptr || eval_mult_key_len == 0);
         const bool eval_sum_preinserted =
             ctx_handle != nullptr && (eval_sum_key == nullptr || eval_sum_key_len == 0);
         if (initiator_ct == nullptr || initiator_ct_len == 0 ||
             candidate_ct_blob == nullptr || candidate_ct_lens == nullptr ||
             candidate_lat_q == nullptr || candidate_lon_q == nullptr || candidate_brownies == nullptr ||
-            eval_mult_key == nullptr || eval_mult_key_len == 0 ||
+            (!eval_mult_preinserted && (eval_mult_key == nullptr || eval_mult_key_len == 0)) ||
             (!eval_sum_preinserted && (eval_sum_key == nullptr || eval_sum_key_len == 0)) ||
             candidate_packages == nullptr || out_cts == nullptr || out_cts_len == nullptr ||
             out_chunk_lens == nullptr || out_n_chunks == nullptr) {
@@ -2321,16 +2323,18 @@ int ARESChunkedFusePayloadCKKS(
             ? as_ctx(ctx_handle)->cc
             : make_ckks_context(batch_size, depth == 0 ? 30 : depth, infer_scaling_mod_size(scaling_factor), 60, ring_dim);
 
-        EvalKey<DCRTPoly> mult_key;
-        {
-            std::string raw(reinterpret_cast<const char*>(eval_mult_key), eval_mult_key_len);
-            std::stringstream is(raw);
-            Serial::Deserialize(mult_key, is, SerType::BINARY);
+        if (!eval_mult_preinserted) {
+            EvalKey<DCRTPoly> mult_key;
+            {
+                std::string raw(reinterpret_cast<const char*>(eval_mult_key), eval_mult_key_len);
+                std::stringstream is(raw);
+                Serial::Deserialize(mult_key, is, SerType::BINARY);
+            }
+            // Idempotent insert: OpenFHE caches eval-keys in a global map keyed by context
+            // ID, so the same params across union-comparator calls collide. Clear first.
+            lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalMultKeys(cc);
+            cc->InsertEvalMultKey({mult_key});
         }
-        // Idempotent insert: OpenFHE caches eval-keys in a global map keyed by context
-        // ID, so the same params across union-comparator calls collide. Clear first.
-        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalMultKeys(cc);
-        cc->InsertEvalMultKey({mult_key});
         if (!eval_sum_preinserted) {
             std::map<usint, EvalKey<DCRTPoly>> sum_keys;
             {

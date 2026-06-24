@@ -30,6 +30,33 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.6] — 2026-06-24
+
+### Added
+
+- **Concurrent comparator fanout.**
+  `ChunkedUnionScoreCKKSWithConcurrency` runs the union comparator lanes
+  concurrently against a single shared CKKS context.
+  `ChunkedUnionScoreCKKS` now delegates to it with concurrency 1, so
+  existing callers are unchanged. The native chunked and full-fuse entry
+  points accept preinserted eval-mult / eval-sum keys (empty serialized
+  key fields) so workers reuse context keys instead of re-serializing a
+  monolithic blob per lane.
+
+### Fixed
+
+- **Shared-context eval-key race in concurrent fusion.** When more than
+  one comparator lane ran against the same context, each call cleared and
+  reinserted eval-mult / eval-sum keys, so a concurrent `EvalSum` could
+  enter after the automorphism-key map had been cleared
+  (`EvalAutomorphism(): Input evaluation key map is empty`). Concurrent
+  union scoring now preinserts the eval-mult and eval-sum keys once into
+  the shared context before launching workers, and each worker runs with
+  empty serialized eval-key fields so the native scorer uses the
+  preinserted keys and never mutates the key maps mid-score. Validated by
+  a 200-cohort dim-128 / ring-32k full-Fheya-score sweep at
+  `CONCURRENCY=4` (union 195/200, 0 wrong openings, 0 ties).
+
 ## [0.9.5] — 2026-06-23
 
 ### Added

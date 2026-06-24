@@ -29,6 +29,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"unsafe"
 )
 
@@ -2824,7 +2825,8 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n || len(req.CandidatePackages) != n {
 		return nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
 	}
-	if len(req.EvalKeys.EvalMultFinal) == 0 {
+	evalKeysPreinserted := len(req.EvalKeys.EvalMultFinal) == 0 && len(req.EvalKeys.EvalSumFinal) == 0
+	if len(req.EvalKeys.EvalMultFinal) == 0 && !evalKeysPreinserted {
 		return nil, fmt.Errorf("final eval-mult key is required")
 	}
 	pkgBytes := req.PackageBytes
@@ -2857,6 +2859,12 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 		evalSumPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0]))
 		evalSumLen = C.size_t(len(req.EvalKeys.EvalSumFinal))
 	}
+	var evalMultPtr *C.uint8_t
+	var evalMultLen C.size_t
+	if len(req.EvalKeys.EvalMultFinal) > 0 {
+		evalMultPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0]))
+		evalMultLen = C.size_t(len(req.EvalKeys.EvalMultFinal))
+	}
 	var out *C.uint8_t
 	var outLen C.size_t
 	var errBuf [512]C.char
@@ -2871,7 +2879,7 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
 		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
 		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
-		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0])), C.size_t(len(req.EvalKeys.EvalMultFinal)),
+		evalMultPtr, evalMultLen,
 		evalSumPtr, evalSumLen,
 		(*C.int)(unsafe.Pointer(&packages[0])), C.int(pkgBytes), C.int(payloadSlots),
 		minimalFlag, &out, &outLen, &errBuf[0], C.size_t(len(errBuf)),
@@ -2980,7 +2988,8 @@ func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) 
 	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n || len(req.CandidatePackages) != n {
 		return nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
 	}
-	if len(req.EvalKeys.EvalMultFinal) == 0 {
+	evalKeysPreinserted := len(req.EvalKeys.EvalMultFinal) == 0 && len(req.EvalKeys.EvalSumFinal) == 0
+	if len(req.EvalKeys.EvalMultFinal) == 0 && !evalKeysPreinserted {
 		return nil, fmt.Errorf("final eval-mult key is required")
 	}
 	pkgBytes := req.PackageBytes
@@ -3009,6 +3018,12 @@ func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) 
 		evalSumPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0]))
 		evalSumLen = C.size_t(len(req.EvalKeys.EvalSumFinal))
 	}
+	var evalMultPtr *C.uint8_t
+	var evalMultLen C.size_t
+	if len(req.EvalKeys.EvalMultFinal) > 0 {
+		evalMultPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0]))
+		evalMultLen = C.size_t(len(req.EvalKeys.EvalMultFinal))
+	}
 	const maxChunks = 256 // ceil(payloadSlots/batch); 256*32 slots covers any sane payload
 	chunkLens := make([]C.size_t, maxChunks)
 	var out *C.uint8_t
@@ -3026,7 +3041,7 @@ func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) 
 		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
 		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
 		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
-		(*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0])), C.size_t(len(req.EvalKeys.EvalMultFinal)),
+		evalMultPtr, evalMultLen,
 		evalSumPtr, evalSumLen,
 		(*C.int)(unsafe.Pointer(&packages[0])), C.int(pkgBytes), C.int(payloadSlots),
 		&out, &outLen, (*C.size_t)(unsafe.Pointer(&chunkLens[0])), &nChunks,
@@ -3186,30 +3201,133 @@ func TuneUnion(meta DistributionMetadata, base []UnionComparator, target float64
 // if any comparator's reassembled package opens. Prefer this over per-call
 // ChunkedFusePayloadCKKS (which allocates a fresh context for every comparator).
 func ChunkedUnionScoreCKKS(params ContractParams, req FullFuseRequest, comparators []UnionComparator) ([][][]byte, error) {
+	return ChunkedUnionScoreCKKSWithConcurrency(params, req, comparators, 1)
+}
+
+// ChunkedUnionScoreCKKSWithConcurrency is the comparator-fanout variant of
+// ChunkedUnionScoreCKKS. It still creates exactly one CKKS context and reuses it across
+// all comparator lanes; concurrency only controls how many comparator fusions are in-flight
+// against that shared context.
+func ChunkedUnionScoreCKKSWithConcurrency(params ContractParams, req FullFuseRequest, comparators []UnionComparator, concurrency int) ([][][]byte, error) {
 	if len(comparators) == 0 {
 		return nil, fmt.Errorf("at least one union comparator is required")
 	}
+	concurrency = clampUnionConcurrency(concurrency, comparators)
 	ctx, err := NewCryptoContext(params)
 	if err != nil {
 		return nil, err
 	}
 	defer ctx.Close()
-	out := make([][][]byte, len(comparators))
-	for i, comp := range comparators {
-		r := req
-		r.Comparator = comp.Comparator
-		r.SelectorSchedule = comp.Schedule
-		r.ComparatorGain = comp.Gain
-		r.ComparatorBound = comp.Bound
-		r.ComparatorScale = comp.InputScale
-		r.ComparatorDegree = comp.Degree
-		chunks, err := ChunkedFusePayloadCKKSWithContext(ctx, r)
-		if err != nil {
-			return nil, fmt.Errorf("union comparator %s: %w", comp.ID, err)
+	usePreinsertedEvalKeys := concurrency > 1
+	if usePreinsertedEvalKeys {
+		if err := insertUnionEvalKeys(ctx, req.EvalKeys); err != nil {
+			return nil, err
 		}
-		out[i] = chunks
+	}
+	out := make([][][]byte, len(comparators))
+	if concurrency == 1 {
+		for i, comp := range comparators {
+			chunks, err := chunkedUnionComparatorWithContext(ctx, req, comp, usePreinsertedEvalKeys)
+			if err != nil {
+				return nil, fmt.Errorf("union comparator %s: %w", comp.ID, err)
+			}
+			out[i] = chunks
+		}
+		return out, nil
+	}
+
+	type result struct {
+		index  int
+		id     string
+		chunks [][]byte
+		err    error
+	}
+	jobs := make(chan int)
+	results := make(chan result, len(comparators))
+	var wg sync.WaitGroup
+	for w := 0; w < concurrency; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for i := range jobs {
+				chunks, err := chunkedUnionComparatorWithContext(ctx, req, comparators[i], usePreinsertedEvalKeys)
+				results <- result{index: i, id: comparators[i].ID, chunks: chunks, err: err}
+			}
+		}()
+	}
+	go func() {
+		for i := range comparators {
+			jobs <- i
+		}
+		close(jobs)
+		wg.Wait()
+		close(results)
+	}()
+
+	var firstErr error
+	for res := range results {
+		if res.err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("union comparator %s: %w", res.id, res.err)
+			continue
+		}
+		out[res.index] = res.chunks
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return out, nil
+}
+
+func clampUnionConcurrency(concurrency int, comparators []UnionComparator) int {
+	if concurrency <= 0 {
+		concurrency = 1
+	}
+	if concurrency > len(comparators) {
+		return len(comparators)
+	}
+	return concurrency
+}
+
+func insertUnionEvalKeys(ctx *CryptoContext, evalKeys EvalKeyFinal) error {
+	if len(evalKeys.EvalMultFinal) == 0 || len(evalKeys.EvalSumFinal) == 0 {
+		return fmt.Errorf("final eval-mult and eval-sum keys are required")
+	}
+	multKey, err := deserializeEvalMultKey(ctx.handle, evalKeys.EvalMultFinal)
+	if err != nil {
+		return fmt.Errorf("deserialize eval-mult key: %w", err)
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(ctx.handle, multKey); rc != 0 {
+		return fmt.Errorf("insert eval-mult key failed")
+	}
+	sumKey, err := deserializeRotKey(ctx.handle, evalKeys.EvalSumFinal)
+	if err != nil {
+		return fmt.Errorf("deserialize eval-sum key: %w", err)
+	}
+	defer C.FreeRotKey(sumKey)
+	if rc := C.InsertEvalSumKey(ctx.handle, sumKey); rc != 0 {
+		return fmt.Errorf("insert eval-sum key failed")
+	}
+	return nil
+}
+
+func unionComparatorRequest(req FullFuseRequest, comp UnionComparator, usePreinsertedEvalKeys bool) FullFuseRequest {
+	r := req
+	r.Comparator = comp.Comparator
+	r.SelectorSchedule = comp.Schedule
+	r.ComparatorGain = comp.Gain
+	r.ComparatorBound = comp.Bound
+	r.ComparatorScale = comp.InputScale
+	r.ComparatorDegree = comp.Degree
+	if usePreinsertedEvalKeys {
+		r.EvalKeys = EvalKeyFinal{}
+	}
+	return r
+}
+
+func chunkedUnionComparatorWithContext(ctx *CryptoContext, req FullFuseRequest, comp UnionComparator, usePreinsertedEvalKeys bool) ([][]byte, error) {
+	r := unionComparatorRequest(req, comp, usePreinsertedEvalKeys)
+	return ChunkedFusePayloadCKKSWithContext(ctx, r)
 }
 
 // FullFusePayloadCKKSWithEvalSumRefs streams per-index eval-sum shares into a
