@@ -30,7 +30,7 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
-## [0.9.6.1] — 2026-06-25
+## [0.9.7] — 2026-06-25
 
 ### Changed
 
