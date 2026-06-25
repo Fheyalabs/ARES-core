@@ -80,10 +80,17 @@ func CKKSRing32KUnionV1() CKKSUnionProfile {
 		// This trio {tanh_g5, logi_g4_b5, logi_g3_b6} reached union 98/100 -- equal to a
 		// 7-lane fanout and one better than the prior ss5-based trio -- with the residual
 		// 2% being an irreducible noise floor that routes to BFV fallback.
+		// SelectorSchedule MUST be "none" on the logistic/tanh lanes. An empty schedule
+		// is interpreted by the chunked scorer as "use the default 4-pass smoothstep
+		// sharpen" (smoothstep5x3 + smoothstep7 ~= 9 extra multiplicative levels), which
+		// is meant only for the soft `selector` cubic and would blow the depth-16 budget
+		// for these already-steep comparators (DropLastElement). Only a true `selector`
+		// lane should carry a real sharpen schedule.
 		Comparators: []CKKSComparator{
 			{
 				ID:               "tanh_g5_d13",
 				Comparator:       "tanh_chebyshev",
+				SelectorSchedule: "none",
 				ComparatorGain:   5,
 				ComparatorBound:  6,
 				ComparatorDegree: 13,
@@ -91,6 +98,7 @@ func CKKSRing32KUnionV1() CKKSUnionProfile {
 			{
 				ID:               "logi_g4_b5_d13",
 				Comparator:       "logistic",
+				SelectorSchedule: "none",
 				ComparatorGain:   4,
 				ComparatorBound:  5,
 				ComparatorDegree: 13,
@@ -98,6 +106,7 @@ func CKKSRing32KUnionV1() CKKSUnionProfile {
 			{
 				ID:               "logi_g3_b6_d13",
 				Comparator:       "logistic",
+				SelectorSchedule: "none",
 				ComparatorGain:   3,
 				ComparatorBound:  6,
 				ComparatorDegree: 13,

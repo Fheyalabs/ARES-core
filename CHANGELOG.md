@@ -30,6 +30,27 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.8] — 2026-06-25
+
+### Fixed
+
+- **Empty selector-sharpen schedule no longer injects a hidden 4-pass
+  smoothstep (depth-16 fix).** An unset `SelectorSchedule` was defaulted —
+  both at the Go fuse boundary (`FullFusePayloadCKKS[WithContext]`,
+  `ChunkedFusePayloadCKKS[WithContext]`) and in the native `split_schedule` —
+  to `smoothstep5,smoothstep5,smoothstep5,smoothstep7`, adding ~9
+  multiplicative levels. For the chunked union's logistic/tanh lanes (which
+  need no sharpening) this silently exhausted the depth-16 budget
+  (`DropLastElement(): Removing last element of DCRTPoly`). Selector
+  sharpening is now strictly opt-in: an empty schedule means no passes (same
+  as `"none"`), at both layers.
+- **`CKKSRing32KUnionV1` lanes now declare `SelectorSchedule: "none"`.** The
+  v0.9.7 default profile shipped its tanh/logistic lanes with an unset
+  schedule, so running it through the chunked union at depth 16 hit the bug
+  above. The shipped profile now runs the lightweight ring-2^15 / depth-16
+  circuit at `HEStd_128_classic` out of the box (validated end-to-end through
+  the Fheya server's `openfhe_union` backend: union 6/6, 0 wrong, secure).
+
 ## [0.9.7] — 2026-06-25
 
 ### Changed

@@ -871,7 +871,7 @@ func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, er
 	}
 	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
 	defer C.free(unsafe.Pointer(comparator))
-	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "none"))
 	defer C.free(unsafe.Pointer(schedule))
 
 	minimalFlag := C.int(0)
@@ -2847,7 +2847,7 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 	}
 	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
 	defer C.free(unsafe.Pointer(comparator))
-	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "none"))
 	defer C.free(unsafe.Pointer(schedule))
 	minimalFlag := C.int(0)
 	if req.MinimalRotationKeys {
@@ -2927,7 +2927,7 @@ func ChunkedFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([][]byt
 	}
 	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
 	defer C.free(unsafe.Pointer(comparator))
-	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "none"))
 	defer C.free(unsafe.Pointer(schedule))
 	const maxChunks = 256
 	chunkLens := make([]C.size_t, maxChunks)
@@ -3010,7 +3010,7 @@ func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) 
 	}
 	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
 	defer C.free(unsafe.Pointer(comparator))
-	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "smoothstep5,smoothstep5,smoothstep5,smoothstep7"))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "none"))
 	defer C.free(unsafe.Pointer(schedule))
 	var evalSumPtr *C.uint8_t
 	var evalSumLen C.size_t

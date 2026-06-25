@@ -347,9 +347,11 @@ static std::vector<std::string> split_schedule(const char* raw_schedule) {
         }
         start = end + 1;
     }
-    if (out.empty()) {
-        out = {"smoothstep5", "smoothstep5", "smoothstep5", "smoothstep7"};
-    }
+    // An empty/blank schedule means NO selector-sharpen passes (same as "none").
+    // This previously defaulted to a 4-pass smoothstep schedule
+    // (smoothstep5 x3 + smoothstep7 ~= 9 extra multiplicative levels), which silently
+    // fired for any logistic/tanh union lane that left its schedule unset -- exhausting
+    // the depth-16 budget (DropLastElement). Selector sharpening is now strictly opt-in.
     return out;
 }
 
