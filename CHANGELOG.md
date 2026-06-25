@@ -30,6 +30,23 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.6.1] — 2026-06-25
+
+### Changed
+
+- **Default CKKS union now diversifies by comparator FAMILY, not by gain.**
+  `CKKSRing32KUnionV1` swaps the `ss5` selector lane for a tanh lane: the
+  new trio is `{tanh_g5_d13, logi_g4_b5_d13, logi_g3_b6_d13}`. A 100-cohort
+  full-Fheya-score sweep (7 candidate lanes, post-hoc subset analysis)
+  showed the recovery ceiling is set by family diversity: a tanh lane
+  uniquely recovers tight near-ties that the entire logistic family —
+  including a degree-27 probe — misses, while the old `ss5` selector added
+  zero marginal union (every cohort it opened, a logistic also opened). The
+  new trio reaches union 98/100 — equal to a 7-lane fanout and one better
+  than the prior ss5 trio — with the residual ~2% an irreducible noise
+  floor that routes to BFV fallback. Same lane count (3) and
+  `ComparatorWorkers`, so this is a default retune, not an API change.
+
 ## [0.9.6] — 2026-06-24
 
 ### Added

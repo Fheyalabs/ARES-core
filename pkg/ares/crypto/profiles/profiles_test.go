@@ -21,7 +21,7 @@ func TestCKKSRing32KUnionV1(t *testing.T) {
 	if len(p.Comparators) != 3 {
 		t.Fatalf("comparators = %d, want 3", len(p.Comparators))
 	}
-	wantIDs := []string{"ss5", "logi_g4_b3_d13", "logi_g3_b6_d13"}
+	wantIDs := []string{"tanh_g5_d13", "logi_g4_b5_d13", "logi_g3_b6_d13"}
 	for i, want := range wantIDs {
 		if p.Comparators[i].ID != want {
 			t.Fatalf("comparator[%d].ID = %q, want %q", i, p.Comparators[i].ID, want)
@@ -77,7 +77,7 @@ func TestProfilesReturnCopies(t *testing.T) {
 	p := CKKSRing32KUnionV1()
 	p.Comparators[0].ID = "mutated"
 	again := CKKSRing32KUnionV1()
-	if again.Comparators[0].ID != "ss5" {
+	if again.Comparators[0].ID != "tanh_g5_d13" {
 		t.Fatalf("profile comparators are mutable across calls: got %q", again.Comparators[0].ID)
 	}
 }

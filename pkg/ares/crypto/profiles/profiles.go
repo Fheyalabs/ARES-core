@@ -71,18 +71,28 @@ func CKKSRing32KUnionV1() CKKSUnionProfile {
 		ScalingModSize:   35,
 		ProfileDim:       128,
 		PayloadSlotCount: 640,
+		// Lane set validated 2026-06-25 by a 100-cohort full-Fheya-score sweep
+		// (wiki summaries/ares-core-v0-9-5-ckks-bfv-validation.md). Key finding: the
+		// recovery ceiling comes from comparator-FAMILY diversity, not from stacking
+		// logistic gains or a selector lane. A tanh lane uniquely cracks tight near-ties
+		// that the whole logistic family (even degree 27) misses; the old `ss5` selector
+		// added zero marginal union (every cohort it opened, a logistic also opened).
+		// This trio {tanh_g5, logi_g4_b5, logi_g3_b6} reached union 98/100 -- equal to a
+		// 7-lane fanout and one better than the prior ss5-based trio -- with the residual
+		// 2% being an irreducible noise floor that routes to BFV fallback.
 		Comparators: []CKKSComparator{
 			{
-				ID:               "ss5",
-				Comparator:       "selector",
-				SharpenSelector:  true,
-				SelectorSchedule: "smoothstep5",
+				ID:               "tanh_g5_d13",
+				Comparator:       "tanh_chebyshev",
+				ComparatorGain:   5,
+				ComparatorBound:  6,
+				ComparatorDegree: 13,
 			},
 			{
-				ID:               "logi_g4_b3_d13",
+				ID:               "logi_g4_b5_d13",
 				Comparator:       "logistic",
 				ComparatorGain:   4,
-				ComparatorBound:  3,
+				ComparatorBound:  5,
 				ComparatorDegree: 13,
 			},
 			{

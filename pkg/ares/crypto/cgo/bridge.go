@@ -3066,7 +3066,7 @@ func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) 
 }
 
 // UnionComparator is one comparator shot in a chunked union score (e.g. the
-// CKKSRing32KUnionV1 trio ss5 / logi_g4_b3_d13 / logi_g3_b6_d13). InputScale is the
+// CKKSRing32KUnionV1 trio tanh_g5_d13 / logi_g4_b5_d13 / logi_g3_b6_d13). InputScale is the
 // per-comparator range control: a comparator's valid score-diff range is ±Bound/InputScale,
 // so steep logistics need InputScale < 1 to keep larger margins inside their approximation
 // interval (out-of-range eval → "approximation error too high" on decrypt).
