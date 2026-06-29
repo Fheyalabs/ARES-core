@@ -8,6 +8,7 @@ public final class CryptoContext {
     public init(ringDim: UInt32, scalingFactor: Double, depth: UInt32,
                 batchSize: UInt32 = 0,
                 minimalRotationKeys: Bool = false,
+                evalSumOnlyRotationKeys: Bool = false,
                 profileDim: Int = 0,
                 payloadSlotCount: Int = 0) throws {
         guard let h = CreateCKKSContext(ringDim, scalingFactor, depth, batchSize) else {
@@ -21,6 +22,11 @@ public final class CryptoContext {
         // existing callers (auction / voting / boundcheck).
         if minimalRotationKeys {
             SetMinimalRotationKeys(h, Int32(profileDim), Int32(payloadSlotCount))
+        } else if evalSumOnlyRotationKeys {
+            // Chunked-union fusion: only the replicating EvalSumKeyGen fold set (no
+            // broadcast at-index keys). The context MUST be built with
+            // batchSize = next_pow2(profileDim) so EvalSumKeyGen emits the profile_dim fold.
+            SetEvalSumOnlyRotationKeys(h, Int32(profileDim))
         }
     }
     public init(ringDim: UInt32, multiplicativeDepth: UInt32,

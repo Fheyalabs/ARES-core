@@ -3224,6 +3224,14 @@ func ChunkedUnionScoreCKKSWithConcurrency(params ContractParams, req FullFuseReq
 			return nil, err
 		}
 	}
+	return runUnionComparators(ctx, req, comparators, concurrency, usePreinsertedEvalKeys)
+}
+
+// runUnionComparators fuses every comparator lane against an already-built CKKS
+// context. When usePreinsertedEvalKeys is true the eval-mult/eval-sum keys are
+// assumed to already live in the context (each lane passes no key bytes), which
+// is required for concurrency > 1 so lanes don't race on per-call clear/insert.
+func runUnionComparators(ctx *CryptoContext, req FullFuseRequest, comparators []UnionComparator, concurrency int, usePreinsertedEvalKeys bool) ([][][]byte, error) {
 	out := make([][][]byte, len(comparators))
 	if concurrency == 1 {
 		for i, comp := range comparators {
@@ -3276,6 +3284,43 @@ func ChunkedUnionScoreCKKSWithConcurrency(params ContractParams, req FullFuseReq
 		return nil, firstErr
 	}
 	return out, nil
+}
+
+// ChunkedUnionScoreCKKSWithEvalSumRefs is the per-index (b-only / CRS-seeded)
+// eval-sum counterpart of ChunkedUnionScoreCKKSWithConcurrency. The threshold
+// eval-sum fold keys arrive as per-index refs (a/b vectors resolved via resolve)
+// rather than one monolithic serialized key blob, so this reconstructs them — and
+// the eval-mult key — once into a single shared context, then fuses every
+// comparator lane against that context with the keys preinserted. It is the union
+// analog of FullFusePayloadCKKSWithEvalSumRefs.
+func ChunkedUnionScoreCKKSWithEvalSumRefs(params ContractParams, req FullFuseRequest, comparators []UnionComparator, concurrency int, publicKeys [][]byte, evalSumRefsByParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) ([][][]byte, error) {
+	if len(comparators) == 0 {
+		return nil, fmt.Errorf("at least one union comparator is required")
+	}
+	if len(req.EvalKeys.EvalMultFinal) == 0 {
+		return nil, fmt.Errorf("final eval-mult key is required")
+	}
+	concurrency = clampUnionConcurrency(concurrency, comparators)
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer ctx.Close()
+	// Preinsert the eval-mult key once (every lane reuses it; per-lane clear/insert
+	// would race the shared context under concurrency).
+	multKey, err := deserializeEvalMultKey(ctx.handle, req.EvalKeys.EvalMultFinal)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(ctx.handle, multKey); rc != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
+	// Reconstruct + preinsert the per-index eval-sum fold keys (b-only / CRS path).
+	if err := insertEvalSumPerIndexLazy(ctx.handle, publicKeys, evalSumRefsByParty, resolve); err != nil {
+		return nil, err
+	}
+	return runUnionComparators(ctx, req, comparators, concurrency, true)
 }
 
 func clampUnionConcurrency(concurrency int, comparators []UnionComparator) int {

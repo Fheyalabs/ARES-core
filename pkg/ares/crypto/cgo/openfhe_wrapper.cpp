@@ -439,6 +439,20 @@ static std::vector<int32_t> minimal_rotation_indices(int profile_dim, int payloa
     return indices;
 }
 
+// eval_sum_only_indices is the chunked-union fold set: the positive power-of-two shifts
+// (< profile_dim) that fold the profile_dim-wide dot product across the batch. It is the
+// fold half of minimal_rotation_indices with no broadcast keys -- exactly the rotation
+// set EvalSum needs at batch_size = next_pow2(profile_dim). Exposing it through
+// GetMinimalRotationIndices lets the per-index b-only (CRS-seeded) keygen produce
+// eval-sum-only keys with no client code change beyond selecting the eval-sum-only context.
+static std::vector<int32_t> eval_sum_only_indices(int profile_dim) {
+    std::vector<int32_t> indices;
+    for (int s = 1; s < profile_dim; s *= 2) {
+        indices.push_back(static_cast<int32_t>(s));
+    }
+    return indices;
+}
+
 static std::shared_ptr<std::map<usint, EvalKey<DCRTPoly>>> clone_key_map(
     const std::map<usint, EvalKey<DCRTPoly>>& keys
 ) {
@@ -2665,6 +2679,14 @@ int GeneratePerIndexEvalSumKey(CryptoContextHandle ctx, SecretKeyShareHandle sk,
         auto* c = as_ctx(ctx);
         auto* s = as_sk(sk);
         std::vector<int32_t> one{index};
+        // Clear any pre-existing automorphism keys for this key tag FIRST. An earlier
+        // EvalKeyRound1Lead leaves the lead's merged EvalSumBase (all fold indices) in the
+        // global map under this same key tag; without this clear, GetEvalAutomorphismKeyMap
+        // below folds that entire base into the single-index key, so the lead's a-vectors no
+        // longer match the parties' single-index a-vectors and the b-only (shared-a)
+        // reconstruction silently produces wrong eval-sum keys -> noisy scoring.
+        lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalAutomorphismKeys(
+            s->sk->GetKeyTag());
         c->cc->EvalAtIndexKeyGen(s->sk, one);
         auto keys = clone_key_map(
             c->cc->GetEvalAutomorphismKeyMap(s->sk->GetKeyTag()));
@@ -2697,7 +2719,9 @@ int GetMinimalRotationIndices(CryptoContextHandle ctx, int32_t* out, int32_t* co
     auto* c = as_ctx(ctx);
     auto idx_set = c->minimal_rotation_keys
         ? minimal_rotation_indices(c->profile_dim, c->payload_slot_count)
-        : broadcast_rotation_indices(c->batch_size);
+        : (c->eval_sum_only
+            ? eval_sum_only_indices(c->profile_dim)
+            : broadcast_rotation_indices(c->batch_size));
     if (out == nullptr) {
         *count = static_cast<int32_t>(idx_set.size());
         return 0;
