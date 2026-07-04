@@ -2488,6 +2488,19 @@ func (c *CryptoContext) Close() {
 	}
 }
 
+// OpenFHEContextCount returns OpenFHE's process-global CryptoContextFactory
+// context count. It is primarily a diagnostic for long-lived services.
+func OpenFHEContextCount() int {
+	return int(C.OpenFHEContextCount())
+}
+
+// ReleaseOpenFHEGlobalContexts clears OpenFHE's process-global context factory.
+// Only call this at a quiescent boundary where no CryptoContext handles are in
+// use, for example after a service has evicted all terminal sessions.
+func ReleaseOpenFHEGlobalContexts() {
+	C.ReleaseAllOpenFHEContexts()
+}
+
 // evalKeyRound1LeadWithContext is the context-reusing body of EvalKeyRound1Lead.
 func evalKeyRound1LeadWithContext(ctx *CryptoContext, secretKeyShare []byte) (EvalKeyRound1LeadShare, error) {
 	sk, err := deserializeSecretKeyShare(ctx.handle, secretKeyShare, true)

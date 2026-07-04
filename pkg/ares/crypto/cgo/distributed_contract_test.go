@@ -405,6 +405,24 @@ func TestCryptoContextCloseClearsInsertedEvalKeys(t *testing.T) {
 	}
 }
 
+func TestReleaseOpenFHEGlobalContextsClearsFactoryCache(t *testing.T) {
+	const profileDim = 8
+	params := DefaultContractParams(profileDim, 6)
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		t.Fatalf("new context: %v", err)
+	}
+	ctx.Close()
+
+	if got := OpenFHEContextCount(); got == 0 {
+		t.Fatal("expected OpenFHE factory to retain the created context before explicit release")
+	}
+	ReleaseOpenFHEGlobalContexts()
+	if got := OpenFHEContextCount(); got != 0 {
+		t.Fatalf("OpenFHE context count after release = %d, want 0", got)
+	}
+}
+
 func slotsToBytesForTest(slots []float64, n int) []byte {
 	out := make([]byte, n)
 	for bit := 0; bit < n*8 && bit < len(slots); bit++ {

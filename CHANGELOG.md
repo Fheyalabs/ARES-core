@@ -30,6 +30,16 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.12] — 2026-07-04
+
+### Added
+
+- **Explicit OpenFHE global context-factory release.**
+  `ReleaseOpenFHEGlobalContexts` clears OpenFHE's process-global
+  `CryptoContextFactory` cache, and `OpenFHEContextCount` exposes the retained
+  context count for diagnostics. Long-lived services should call the release
+  only at a quiescent boundary where no CryptoContext handles are in use.
+
 ## [0.9.11] — 2026-07-04
 
 ### Fixed
@@ -746,7 +756,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.11...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.12...HEAD
+[0.9.12]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.9...v0.9.10
 [0.9.5]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.2...v0.9.5
