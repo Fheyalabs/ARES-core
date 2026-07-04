@@ -30,6 +30,16 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.11] — 2026-07-04
+
+### Fixed
+
+- **OpenFHE context close now clears inserted eval-key maps.** `CryptoContext`
+  reuse inserts eval-mult/eval-sum keys into OpenFHE's static context-keyed
+  maps. `FreeCryptoContext` now clears those maps before deleting the wrapper,
+  preventing same-parameter contexts from inheriting stale keys and reducing
+  post-session native memory residency for Fheya union scoring.
+
 ## [0.9.10] — 2026-07-04
 
 ### Added
@@ -736,7 +746,9 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.5...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.11...HEAD
+[0.9.11]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.10...v0.9.11
+[0.9.10]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.9...v0.9.10
 [0.9.5]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.2...v0.9.5
 [0.9.2]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.0...v0.9.2
 [0.9.0]: https://github.com/Fheyalabs/ARES-core/compare/v0.8.0...v0.9.0

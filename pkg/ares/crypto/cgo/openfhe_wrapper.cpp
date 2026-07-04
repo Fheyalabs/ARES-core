@@ -652,7 +652,22 @@ CryptoContextHandle CreateBFVContext(uint32_t ring_dim, uint32_t multiplicative_
 }
 
 void FreeCryptoContext(CryptoContextHandle ctx) {
-    delete reinterpret_cast<ARESCryptoContext*>(ctx);
+    if (ctx == nullptr) {
+        return;
+    }
+    auto* c = reinterpret_cast<ARESCryptoContext*>(ctx);
+    try {
+        // OpenFHE stores eval keys in static maps keyed by the context tag. A
+        // deleted wrapper does not evict those maps, so same-parameter contexts
+        // can inherit stale keys and keep native memory resident after a session.
+        if (c->cc) {
+            lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalMultKeys(c->cc);
+            lbcrypto::CryptoContextImpl<lbcrypto::DCRTPoly>::ClearEvalSumKeys(c->cc);
+        }
+    } catch (...) {
+        // Destructors must not throw across the C ABI; still delete the wrapper.
+    }
+    delete c;
 }
 
 void SetMinimalRotationKeys(CryptoContextHandle ctx, int profile_dim, int payload_slot_count) {

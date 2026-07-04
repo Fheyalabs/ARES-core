@@ -341,6 +341,70 @@ func TestChunkedFusePayloadEvalSumOnly(t *testing.T) {
 	}
 }
 
+func TestCryptoContextCloseClearsInsertedEvalKeys(t *testing.T) {
+	const profileDim = 8
+	params := DefaultContractParams(profileDim, 6)
+	params.EvalSumOnlyRotationKeys = true
+	params.ProfileDim = profileDim
+	shares := distributedSharesForTest(t, params, 2)
+	evalKeys := distributedEvalKeysForTest(t, params, shares)
+	jointPK := shares[len(shares)-1].PublicKey
+
+	initCT, err := EncryptCKKSForContract(params, jointPK, []float64{1, 0, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt initiator: %v", err)
+	}
+	candCT, err := EncryptCKKSForContract(params, jointPK, []float64{1, 0, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt candidate: %v", err)
+	}
+	otherCT, err := EncryptCKKSForContract(params, jointPK, []float64{0, 1, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt other candidate: %v", err)
+	}
+
+	req := FullFuseRequest{
+		InitiatorCiphertext:  initCT,
+		CandidateCiphertexts: [][]byte{candCT, otherCT},
+		CandidateLatQ:        []int{0, 0},
+		CandidateLonQ:        []int{0, 0},
+		CandidateBrownies:    []int{0, 0},
+		CandidatePackages:    [][]int{{0xA5}, {0x5A}},
+		ProfileDim:           profileDim,
+		Beta:                 1,
+		Comparator:           "tanh_chebyshev",
+		ComparatorDegree:     7,
+		ComparatorGain:       40,
+		ComparatorScale:      1,
+		ComparatorBound:      1,
+		SelectorSchedule:     "none",
+		EvalKeys:             evalKeys,
+		PackageBytes:         1,
+		PayloadSlotCount:     8,
+	}
+
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		t.Fatalf("new context: %v", err)
+	}
+	if _, err := ChunkedFusePayloadCKKSWithContext(ctx, req); err != nil {
+		ctx.Close()
+		t.Fatalf("priming chunked fuse: %v", err)
+	}
+	ctx.Close()
+
+	fresh, err := NewCryptoContext(params)
+	if err != nil {
+		t.Fatalf("new fresh context: %v", err)
+	}
+	defer fresh.Close()
+
+	req.EvalKeys = EvalKeyFinal{}
+	if _, err := ChunkedFusePayloadCKKSWithContext(fresh, req); err == nil {
+		t.Fatal("chunked fuse with a fresh context and no eval keys unexpectedly succeeded; Close left stale OpenFHE eval keys behind")
+	}
+}
+
 func slotsToBytesForTest(slots []float64, n int) []byte {
 	out := make([]byte, n)
 	for bit := 0; bit < n*8 && bit < len(slots); bit++ {
