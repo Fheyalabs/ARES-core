@@ -132,13 +132,14 @@ func TestPerIndexEvalKeyRound1SupportsDotProduct(t *testing.T) {
 			bOnlyRefsByParty[party][j] = IndexedEvalSumKeyRef{Index: key.Index, ARef: aRef, BRef: bRef}
 		}
 	}
-	bOnly, err := CombineEvalKeyRound1PerIndexLazy(params, publicKeys, multRound1, bOnlyRefsByParty, func(ref string) ([]byte, error) {
+	resolveBOnly := func(ref string) ([]byte, error) {
 		blob, ok := bOnlyBlobs[ref]
 		if !ok {
 			return nil, fmt.Errorf("missing b-only ref %s", ref)
 		}
 		return append([]byte(nil), blob...), nil
-	})
+	}
+	bOnly, err := CombineEvalKeyRound1PerIndexLazy(params, publicKeys, multRound1, bOnlyRefsByParty, resolveBOnly)
 	if err != nil {
 		t.Fatalf("lazy b-only per-index combine: %v", err)
 	}
@@ -193,6 +194,28 @@ func TestPerIndexEvalKeyRound1SupportsDotProduct(t *testing.T) {
 	}
 	if math.Abs(got[0]-want) > 0.05 {
 		t.Fatalf("dot product = %.6f, want %.6f", got[0], want)
+	}
+
+	dotCTFromRefs, err := EvalProductSumForContractWithEvalSumRefs(params, EvalKeyFinal{
+		EvalMultFinal: final.EvalMultFinal,
+	}, leftCT, rightCT, len(left), publicKeys, bOnlyRefsByParty, resolveBOnly)
+	if err != nil {
+		t.Fatalf("eval product sum with refs: %v", err)
+	}
+	partials = partials[:0]
+	for _, share := range shares {
+		partial, err := PartialDecryptCKKSForContract(params, dotCTFromRefs, share.SecretKeyShare, share.Lead)
+		if err != nil {
+			t.Fatalf("partial decrypt refs lead=%v: %v", share.Lead, err)
+		}
+		partials = append(partials, partial)
+	}
+	gotFromRefs, err := FuseCKKSPartialsForContract(params, partials, 1)
+	if err != nil {
+		t.Fatalf("fuse refs dot partials: %v", err)
+	}
+	if math.Abs(gotFromRefs[0]-want) > 0.05 {
+		t.Fatalf("dot product from refs = %.6f, want %.6f", gotFromRefs[0], want)
 	}
 }
 

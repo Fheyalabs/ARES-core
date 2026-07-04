@@ -755,6 +755,45 @@ func EvalProductSumForContract(params ContractParams, evalKeys EvalKeyFinal, lef
 		return nil, fmt.Errorf("insert eval-sum key failed")
 	}
 
+	return evalProductSumInContext(ctx, leftCiphertext, rightCiphertext, nSlots)
+}
+
+// EvalProductSumForContractWithEvalSumRefs is the per-index eval-sum counterpart
+// of EvalProductSumForContract. It preinserts the final eval-mult key and the
+// per-index eval-sum refs into one context, then computes EvalSum(EvalMult(left,
+// right)) without materializing a monolithic EvalSumFinal blob in Go.
+func EvalProductSumForContractWithEvalSumRefs(params ContractParams, evalKeys EvalKeyFinal, leftCiphertext, rightCiphertext []byte, nSlots int, publicKeys [][]byte, evalSumRefsByParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) ([]byte, error) {
+	if len(evalKeys.EvalMultFinal) == 0 {
+		return nil, fmt.Errorf("eval-mult key is required")
+	}
+	if nSlots <= 0 {
+		return nil, fmt.Errorf("nSlots must be positive")
+	}
+	if resolve == nil {
+		return nil, fmt.Errorf("eval-sum key resolver is required")
+	}
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	multKey, err := deserializeEvalMultKey(ctx, evalKeys.EvalMultFinal)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(ctx, multKey); rc != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
+	if err := insertEvalSumPerIndexLazy(ctx, publicKeys, evalSumRefsByParty, resolve); err != nil {
+		return nil, fmt.Errorf("insert per-index eval-sum keys: %w", err)
+	}
+
+	return evalProductSumInContext(ctx, leftCiphertext, rightCiphertext, nSlots)
+}
+
+func evalProductSumInContext(ctx C.CryptoContextHandle, leftCiphertext, rightCiphertext []byte, nSlots int) ([]byte, error) {
 	left, err := deserializeCiphertext(ctx, leftCiphertext)
 	if err != nil {
 		return nil, err
