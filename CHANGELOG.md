@@ -30,6 +30,18 @@ moving toward.
   stays on hosted runners; Fheya's CI gets a separate self-hosted
   lane.
 
+## [0.9.10] — 2026-07-04
+
+### Added
+
+- **Per-index eval-sum refs for norm-style product sums.**
+  `EvalProductSumForContractWithEvalSumRefs` lets consumers evaluate
+  encrypted dot/norm checks against the b-only / CRS-seeded eval-sum
+  key layout used by Fheya's memory-bounded union sessions. This keeps
+  server-side normcheck on the same portable per-index key path as
+  chunked union scoring instead of requiring a materialized merged
+  `EvalSumFinal` blob.
+
 ## [0.9.8] — 2026-06-25
 
 ### Fixed
