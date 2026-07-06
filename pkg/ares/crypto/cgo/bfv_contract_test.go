@@ -99,6 +99,63 @@ func TestBFVEvalKeyRounds(t *testing.T) {
 	}
 }
 
+func TestBFVEvalKeyRound1LazyRefs(t *testing.T) {
+	if err := SmokeCKKS(); err != nil {
+		t.Skipf("OpenFHE smoke unavailable: %v", err)
+	}
+	params := BFVContractParams{
+		RingDim:             8192,
+		MultiplicativeDepth: 4,
+		PlaintextModulus:    65537,
+		BatchSize:           8,
+	}
+	first, err := BFVDistributedKeyGenFirst(params)
+	if err != nil {
+		t.Fatalf("keygen first: %v", err)
+	}
+	second, err := BFVDistributedKeyGenNext(params, first.PublicKey)
+	if err != nil {
+		t.Fatalf("keygen next: %v", err)
+	}
+	r1Lead, err := BFVEvalKeyRound1Lead(params, first.SecretKeyShare)
+	if err != nil {
+		t.Fatalf("round1 lead: %v", err)
+	}
+	r1Part, err := BFVEvalKeyRound1Participant(params, second.SecretKeyShare, r1Lead.EvalMultBase, r1Lead.EvalSumBase, second.PublicKey)
+	if err != nil {
+		t.Fatalf("round1 participant: %v", err)
+	}
+
+	refs := []string{"lead", "participant"}
+	resolved := make([]string, 0, len(refs))
+	lazy, err := BFVCombineEvalKeyRound1Lazy(params,
+		[][]byte{first.PublicKey, second.PublicKey},
+		[][]byte{r1Lead.EvalMultBase, r1Part.EvalMultSwitchShare},
+		refs,
+		func(ref string) ([]byte, error) {
+			resolved = append(resolved, ref)
+			switch ref {
+			case "lead":
+				return r1Lead.EvalSumBase, nil
+			case "participant":
+				return r1Part.EvalSumShare, nil
+			default:
+				t.Fatalf("unexpected eval-sum ref %q", ref)
+				return nil, nil
+			}
+		},
+	)
+	if err != nil {
+		t.Fatalf("lazy combine round1: %v", err)
+	}
+	if len(lazy.EvalMultJoined) == 0 || len(lazy.EvalSumFinal) == 0 {
+		t.Fatalf("empty lazy round1 result: %+v", lazy)
+	}
+	if len(resolved) != 2 || resolved[0] != "lead" || resolved[1] != "participant" {
+		t.Fatalf("resolved refs = %v, want [lead participant]", resolved)
+	}
+}
+
 func TestBFVEvalProductSum(t *testing.T) {
 	if err := SmokeCKKS(); err != nil {
 		t.Skipf("OpenFHE smoke unavailable: %v", err)

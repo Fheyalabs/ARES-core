@@ -670,6 +670,14 @@ void FreeCryptoContext(CryptoContextHandle ctx) {
     delete c;
 }
 
+int OpenFHEContextCount(void) {
+    return lbcrypto::CryptoContextFactory<lbcrypto::DCRTPoly>::GetContextCount();
+}
+
+void ReleaseAllOpenFHEContexts(void) {
+    lbcrypto::CryptoContextFactory<lbcrypto::DCRTPoly>::ReleaseAllContexts();
+}
+
 void SetMinimalRotationKeys(CryptoContextHandle ctx, int profile_dim, int payload_slot_count) {
     if (ctx == nullptr) {
         return;

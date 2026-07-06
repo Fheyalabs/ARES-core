@@ -169,6 +169,54 @@ func combineEvalSumIncremental(ctx C.CryptoContextHandle, pkBytes, shareBytes []
 	return serializeRotKey(accum)
 }
 
+func combineEvalSumIncrementalLazy(ctx C.CryptoContextHandle, pkBytes [][]byte, shareRefs []string, resolve EvalSumKeyResolver) ([]byte, error) {
+	if len(pkBytes) != len(shareRefs) || len(shareRefs) == 0 {
+		return nil, fmt.Errorf("public-key and eval-sum share counts must match and be non-empty")
+	}
+	if resolve == nil {
+		return nil, fmt.Errorf("eval-sum key resolver is required")
+	}
+	seedBytes, err := resolve(shareRefs[0])
+	if err != nil {
+		return nil, fmt.Errorf("resolve eval-sum share 0: %w", err)
+	}
+	seed, err := deserializeRotKey(ctx, seedBytes)
+	seedBytes = nil
+	if err != nil {
+		return nil, err
+	}
+	accum := C.EvalSumCombineStart(seed)
+	C.FreeRotKey(seed)
+	if accum == nil {
+		return nil, fmt.Errorf("eval-sum combine start failed")
+	}
+	defer C.FreeRotKey(accum)
+	for i := 1; i < len(shareRefs); i++ {
+		pk, err := deserializePublicKey(ctx, pkBytes[i])
+		if err != nil {
+			return nil, err
+		}
+		shareBytes, err := resolve(shareRefs[i])
+		if err != nil {
+			C.FreePublicKey(pk)
+			return nil, fmt.Errorf("resolve eval-sum share %d: %w", i, err)
+		}
+		share, err := deserializeRotKey(ctx, shareBytes)
+		shareBytes = nil
+		if err != nil {
+			C.FreePublicKey(pk)
+			return nil, err
+		}
+		rc := C.EvalSumCombineFold(ctx, accum, pk, share)
+		C.FreeRotKey(share)
+		C.FreePublicKey(pk)
+		if rc != 0 {
+			return nil, fmt.Errorf("eval-sum combine fold %d failed", i)
+		}
+	}
+	return serializeRotKey(accum)
+}
+
 func combineEvalSumPerIndex(ctx C.CryptoContextHandle, publicKeys [][]byte, byParty [][]IndexedEvalSumKey) ([]byte, error) {
 	indices, keyedByParty, err := validateIndexedEvalSumShares(byParty)
 	if err != nil {

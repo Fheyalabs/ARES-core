@@ -657,6 +657,51 @@ func BFVCombineEvalKeyRound1(params BFVContractParams, publicKeys [][]byte, eval
 	return EvalKeyRound1Combined{EvalMultJoined: joinedBytes, EvalSumFinal: sumFinalBytes}, nil
 }
 
+// BFVCombineEvalKeyRound1Lazy is the artifact-friendly BFV round-one combiner.
+// It resolves eval-sum shares one at a time while folding them into the
+// accumulator, so callers do not need to retain every large eval-sum share in Go
+// memory. Eval-mult shares are still supplied directly because they are combined
+// by OpenFHE's all-party switch-share API.
+func BFVCombineEvalKeyRound1Lazy(params BFVContractParams, publicKeys [][]byte, evalMultShares [][]byte, evalSumShareRefs []string, resolve EvalSumKeyResolver) (EvalKeyRound1Combined, error) {
+	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumShareRefs) {
+		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-key share counts must match and be non-empty")
+	}
+	if resolve == nil {
+		return EvalKeyRound1Combined{}, fmt.Errorf("eval-sum key resolver is required")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	pks, freePKs, err := deserializePublicKeys(ctx, publicKeys)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer freePKs()
+	multShares, freeMultShares, err := deserializeEvalMultKeys(ctx, evalMultShares)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer freeMultShares()
+
+	var joined C.EvalMultKeyHandle
+	if rc := C.CombineEvalMultSwitchShares(ctx, (*C.PublicKeyHandle)(unsafe.Pointer(&pks[0])), (*C.EvalMultKeyHandle)(unsafe.Pointer(&multShares[0])), C.int(len(multShares)), &joined); rc != 0 {
+		return EvalKeyRound1Combined{}, fmt.Errorf("BFV eval-mult switch-share combination failed")
+	}
+	defer C.FreeEvalMultKey(joined)
+	joinedBytes, err := serializeEvalMultKey(joined)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	sumFinalBytes, err := combineEvalSumIncrementalLazy(ctx, publicKeys, evalSumShareRefs, resolve)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	return EvalKeyRound1Combined{EvalMultJoined: joinedBytes, EvalSumFinal: sumFinalBytes}, nil
+}
+
 func BFVEvalKeyRound2Participant(params BFVContractParams, secretKeyShare, evalMultJoined, finalPublicKey []byte, lead bool) (EvalKeyRound2ParticipantShare, error) {
 	ctx, err := createBFVContractContext(params)
 	if err != nil {
@@ -2486,6 +2531,19 @@ func (c *CryptoContext) Close() {
 		C.FreeCryptoContext(c.handle)
 		c.handle = nil
 	}
+}
+
+// OpenFHEContextCount returns OpenFHE's process-global CryptoContextFactory
+// context count. It is primarily a diagnostic for long-lived services.
+func OpenFHEContextCount() int {
+	return int(C.OpenFHEContextCount())
+}
+
+// ReleaseOpenFHEGlobalContexts clears OpenFHE's process-global context factory.
+// Only call this at a quiescent boundary where no CryptoContext handles are in
+// use, for example after a service has evicted all terminal sessions.
+func ReleaseOpenFHEGlobalContexts() {
+	C.ReleaseAllOpenFHEContexts()
 }
 
 // evalKeyRound1LeadWithContext is the context-reusing body of EvalKeyRound1Lead.

@@ -33,6 +33,8 @@ CryptoContextHandle CreateBFVContext(
     uint32_t batch_size
 );
 void FreeCryptoContext(CryptoContextHandle ctx);
+int OpenFHEContextCount(void);
+void ReleaseAllOpenFHEContexts(void);
 // SetMinimalRotationKeys opts a context into dimension-parameterized rotation-key
 // generation: EvalSumKeyGenLead/Share emit only the at-index keys a profile_dim
 // dot-product fold + a payload_slot_count broadcast need, instead of the full ring/2
