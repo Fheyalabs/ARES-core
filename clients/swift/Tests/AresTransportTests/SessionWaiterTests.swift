@@ -73,5 +73,44 @@ final class SessionWaiterTests: XCTestCase {
         let got = await session._testTakeWithTimeout(0.001)
         XCTAssertTrue(got, "Pre-queued frame was not drained from inbox")
     }
+
+    // MARK: - expect preserves unmatched frames
+
+    /// A typed wait must not consume adjacent control frames. If the BFV
+    /// fallback frame arrives just before normcheck.passed, expect should return
+    /// the normcheck frame and leave fallback.bfv_required available next.
+    func testExpectPreservesFallbackFrameBeforeNormcheckPassed() async throws {
+        let session = Session(_testPseudonym: "test-expect-preserve")
+
+        await session._testEnqueue(frame("fallback.bfv_required", seq: 10))
+        await session._testEnqueue(frame("normcheck.passed", seq: 11))
+
+        let norm = try await session.expect("normcheck.passed", timeout: 1)
+        XCTAssertEqual(norm.type, "normcheck.passed")
+        XCTAssertEqual(norm.seq, 11)
+
+        let fallback = try await session.receiveAny(timeout: 1)
+        XCTAssertEqual(fallback.type, "fallback.bfv_required")
+        XCTAssertEqual(fallback.seq, 10)
+    }
+
+    /// If expect times out after seeing an unrelated frame, that unrelated frame
+    /// must be put back so the caller can handle it with receiveAny.
+    func testExpectTimeoutRestoresUnmatchedFrame() async throws {
+        let session = Session(_testPseudonym: "test-expect-timeout")
+
+        await session._testEnqueue(frame("fallback.bfv_required", seq: 20))
+
+        do {
+            _ = try await session.expect("normcheck.passed", timeout: 0.05)
+            XCTFail("expect should have timed out")
+        } catch TransportError.timeout(let message) {
+            XCTAssertTrue(message.contains("normcheck.passed"))
+        }
+
+        let fallback = try await session.receiveAny(timeout: 1)
+        XCTAssertEqual(fallback.type, "fallback.bfv_required")
+        XCTAssertEqual(fallback.seq, 20)
+    }
 }
 #endif

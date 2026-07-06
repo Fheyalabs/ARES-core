@@ -199,11 +199,27 @@ public actor Session {
 
     public func expect(_ type: String, timeout: TimeInterval? = nil) async throws -> InboundFrame {
         let deadline = Date().addingTimeInterval(timeout ?? defaultTimeout)
+        var unmatched: [InboundFrame] = []
         while true {
             let remaining = deadline.timeIntervalSinceNow
-            if remaining <= 0 { throw TransportError.timeout("\(pseudonym): expect \(type)") }
-            let f = try await receiveAny(timeout: remaining)
-            if f.type == type { return f }
+            if remaining <= 0 {
+                inbox.insert(contentsOf: unmatched, at: 0)
+                throw TransportError.timeout("\(pseudonym): expect \(type)")
+            }
+            do {
+                let f = try await receiveAny(timeout: remaining)
+                if f.type == type {
+                    inbox.insert(contentsOf: unmatched, at: 0)
+                    return f
+                }
+                unmatched.append(f)
+            } catch TransportError.timeout {
+                inbox.insert(contentsOf: unmatched, at: 0)
+                throw TransportError.timeout("\(pseudonym): expect \(type)")
+            } catch {
+                inbox.insert(contentsOf: unmatched, at: 0)
+                throw error
+            }
         }
     }
 
