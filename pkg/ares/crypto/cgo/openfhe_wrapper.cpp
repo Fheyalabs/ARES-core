@@ -1647,6 +1647,46 @@ int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len
         return 1;
     }
 }
+int EncryptSerializedPayloadChunk(CryptoContextHandle ctx, PublicKeyHandle pk,
+    const uint8_t* payload, size_t payload_len,
+    size_t bit_offset, size_t chunk_size,
+    uint8_t** out_data, size_t* out_len) {
+    if (out_data == nullptr || out_len == nullptr) {
+        return 1;
+    }
+    *out_data = nullptr;
+    *out_len = 0;
+
+    std::vector<double> values;
+    try {
+        auto* c = as_ctx(ctx);
+        auto* p = as_pk(pk);
+        if (payload == nullptr || payload_len == 0 || chunk_size == 0 ||
+            chunk_size != c->batch_size || bit_offset % chunk_size != 0 ||
+            payload_len > std::numeric_limits<size_t>::max() / 8) {
+            return 1;
+        }
+        const size_t payload_bits = payload_len * 8;
+        if (bit_offset > payload_bits || chunk_size > payload_bits - bit_offset ||
+            p->pk->GetCryptoContext() != c->cc) {
+            return 1;
+        }
+
+        values.resize(chunk_size);
+        for (size_t i = 0; i < chunk_size; ++i) {
+            const size_t bit = bit_offset + i;
+            values[i] = static_cast<double>((payload[bit / 8] >> (7 - (bit % 8))) & 1U);
+        }
+        auto plaintext = c->cc->MakeCKKSPackedPlaintext(values);
+        auto ciphertext = c->cc->Encrypt(p->pk, plaintext);
+        const int rc = serialize_object(ciphertext, out_data, out_len);
+        std::fill(values.begin(), values.end(), 0.0);
+        return rc;
+    } catch (...) {
+        std::fill(values.begin(), values.end(), 0.0);
+        return 1;
+    }
+}
 int GetOpenFHEVersion(char* out_buf, int out_cap) {
     try {
         if (out_buf == nullptr || out_cap <= 0) {

@@ -40,8 +40,8 @@ JNIEXPORT jint JNICALL Java_ares_client_fhe_NativeFHE_smoke(JNIEnv*, jclass) {
 }
 
 // ── context ──
-JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContext(JNIEnv*, jclass, jint ringDim, jdouble scale, jint depth) {
-    return H(CreateCKKSContext((uint32_t)ringDim, (double)scale, (uint32_t)depth));
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContext(JNIEnv*, jclass, jint ringDim, jdouble scale, jint depth, jint batchSize) {
+    return H(CreateCKKSContext((uint32_t)ringDim, (double)scale, (uint32_t)depth, (uint32_t)batchSize));
 }
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeContext(JNIEnv*, jclass, jlong c) { FreeCryptoContext(P(c)); }
 
@@ -162,6 +162,18 @@ JNIEXPORT jlongArray JNICALL Java_ares_client_fhe_NativeFHE_evalArgmax(JNIEnv* e
 }
 
 // ── serialization ── (serialize → byte[] | null; deserialize → handle | 0)
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_encryptSerializedPayloadChunk(JNIEnv* env, jclass, jlong ctx, jlong pk, jbyteArray payload, jint bitOffset, jint chunkSize) {
+    if (payload == nullptr || bitOffset < 0 || chunkSize <= 0) return nullptr;
+    const jsize len = env->GetArrayLength(payload);
+    jbyte* data = env->GetByteArrayElements(payload, nullptr);
+    if (data == nullptr) return nullptr;
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = EncryptSerializedPayloadChunk(P(ctx), P(pk), reinterpret_cast<const uint8_t*>(data),
+        static_cast<size_t>(len), static_cast<size_t>(bitOffset), static_cast<size_t>(chunkSize), &out, &outLen);
+    env->ReleaseByteArrayElements(payload, data, JNI_ABORT);
+    return bytesAndFree(env, out, outLen, rc);
+}
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializeCiphertext(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializeCiphertext(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_deserializeCiphertext(JNIEnv* env, jclass, jlong ctx, jbyteArray d){jsize n=env->GetArrayLength(d); jbyte* p=env->GetByteArrayElements(d,nullptr); void* out=DeserializeCiphertext(P(ctx),reinterpret_cast<uint8_t*>(p),(size_t)n); env->ReleaseByteArrayElements(d,p,JNI_ABORT); return H(out);}
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializePublicKey(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializePublicKey(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
