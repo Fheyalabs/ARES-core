@@ -6,6 +6,7 @@ package cgo_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/cgo"
@@ -35,6 +36,30 @@ func trueArgmin(prices []int, starNorms, distSqs []float64,
 	return best
 }
 
+func TestSingleKeyAuctionServerRequiresSerializedEvalMultKey(t *testing.T) {
+	if err := cgo.SmokeCKKS(); err != nil {
+		t.Skipf("skip: %v", err)
+	}
+
+	params := cgo.ContractParams{
+		RingDim:       1 << 15,
+		Depth:         5,
+		ScalingFactor: float64(uint64(1) << 50),
+	}
+	pk, _, err := cgo.SingleKeyGen(params)
+	if err != nil {
+		t.Fatalf("keygen: %v", err)
+	}
+	_, err = cgo.SingleKeyAuctionServer(
+		params, pk, []int{1000, 1100}, []float64{4.5, 4.5}, []float64{0, 0},
+		[][]byte{[]byte("nonce-a"), []byte("nonce-b")}, 800, 5000,
+		cgo.AuctionWeights{K: 100, WStar: 1, WDist: 0.001}, 1,
+	)
+	if err == nil || !strings.Contains(err.Error(), "eval-mult key required") {
+		t.Fatalf("legacy evaluator error = %v, want serialized eval-mult key requirement", err)
+	}
+}
+
 func TestSingleKeyAuctionServerEnc_MatchesPlaintext(t *testing.T) {
 	if err := cgo.SmokeCKKS(); err != nil {
 		t.Skipf("skip: %v", err)
@@ -51,8 +76,9 @@ func TestSingleKeyAuctionServerEnc_MatchesPlaintext(t *testing.T) {
 	for _, n := range []int{3, 4, 5} {
 		n := n
 		t.Run(fmt.Sprintf("n%d", n), func(t *testing.T) {
-			// Keygen once per sub-test.
-			pk, sk, err := cgo.SingleKeyGen(params)
+			// The evaluator runs in a fresh context, so it must receive the
+			// relinearization key produced alongside the public key.
+			pk, sk, evalMultKey, err := cgo.SingleKeyGenWithEvalKey(params)
 			if err != nil {
 				t.Fatalf("keygen: %v", err)
 			}
@@ -73,8 +99,8 @@ func TestSingleKeyAuctionServerEnc_MatchesPlaintext(t *testing.T) {
 			}
 
 			// --- plaintext reference path ---
-			plainServerMasks, plainServerErr := cgo.SingleKeyAuctionServer(
-				params, pk, prices, starNorms, distSqs, nonces, floor, cap, w, 1)
+			plainServerMasks, plainServerErr := cgo.SingleKeyAuctionServerWithEvalKey(
+				params, pk, evalMultKey, prices, starNorms, distSqs, nonces, floor, cap, w, 1)
 			masksPlain, winPlain, err := cgo.SingleKeyAuctionDecrypt(params, sk,
 				mustMasks(t, plainServerMasks, plainServerErr))
 			if err != nil {
@@ -88,8 +114,8 @@ func TestSingleKeyAuctionServerEnc_MatchesPlaintext(t *testing.T) {
 					t.Fatalf("SingleKeyEncrypt[%d]: %v", i, err)
 				}
 			}
-			encServerMasks, encServerErr := cgo.SingleKeyAuctionServerEnc(
-				params, pk, encBids, starNorms, distSqs, nonces, floor, cap, w, 1)
+			encServerMasks, encServerErr := cgo.SingleKeyAuctionServerEncWithEvalKey(
+				params, pk, evalMultKey, encBids, starNorms, distSqs, nonces, floor, cap, w, 1)
 			masksEnc, winEnc, err := cgo.SingleKeyAuctionDecrypt(params, sk,
 				mustMasks(t, encServerMasks, encServerErr))
 			if err != nil {

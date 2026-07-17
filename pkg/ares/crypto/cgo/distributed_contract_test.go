@@ -6,6 +6,7 @@ package cgo
 
 import (
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -338,6 +339,211 @@ func TestChunkedFusePayloadEvalSumOnly(t *testing.T) {
 			t.Fatalf("chunked recovered %x, want %x (winner=%d, chunks=%d)",
 				recovered, intsToBytesForTest(want), winnerIdx, len(chunks))
 		}
+	}
+}
+
+func TestChunkedFuseEncryptedPayloadEvalSumOnly(t *testing.T) {
+	if err := SmokeCKKS(); err != nil {
+		t.Skipf("OpenFHE smoke unavailable: %v", err)
+	}
+	const profileDim = 8
+	const nParties = 3
+	params := DefaultContractParams(profileDim, 12)
+	params.EvalSumOnlyRotationKeys = true
+	params.ProfileDim = profileDim
+
+	shares := distributedSharesForTest(t, params, nParties)
+	evalKeys := distributedEvalKeysForTest(t, params, shares)
+	jointPK := shares[len(shares)-1].PublicKey
+
+	initCT, err := EncryptCKKSForContract(params, jointPK, []float64{1, 0, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt initiator: %v", err)
+	}
+	candidateProfiles := [][]float64{
+		{0, 1, 0, 0, 0, 0, 0, 0},
+		{1, 0, 0, 0, 0, 0, 0, 0}, // winner
+	}
+	candidateCTs := make([][]byte, len(candidateProfiles))
+	for i, profile := range candidateProfiles {
+		candidateCTs[i], err = EncryptCKKSForContract(params, jointPK, profile)
+		if err != nil {
+			t.Fatalf("encrypt candidate %d: %v", i, err)
+		}
+	}
+
+	packages := [][]byte{{0x11}, {0xA5}}
+	payloadCiphertexts := make([][][]byte, len(packages))
+	for i, pkg := range packages {
+		bits := make([]float64, 8)
+		for bit := 0; bit < len(bits); bit++ {
+			if pkg[bit/8]&(1<<uint(7-(bit%8))) != 0 {
+				bits[bit] = 1
+			}
+		}
+		payloadCiphertexts[i] = make([][]byte, 1)
+		payloadCiphertexts[i][0], err = EncryptCKKSForContract(params, jointPK, bits)
+		if err != nil {
+			t.Fatalf("encrypt candidate payload %d: %v", i, err)
+		}
+	}
+
+	chunks, err := ChunkedFuseEncryptedPayloadCKKS(params, FullFuseRequest{
+		InitiatorCiphertext:         initCT,
+		CandidateCiphertexts:        candidateCTs,
+		CandidateLatQ:               []int{0, 0},
+		CandidateLonQ:               []int{0, 0},
+		CandidateBrownies:           []int{0, 0},
+		CandidatePayloadCiphertexts: payloadCiphertexts,
+		ProfileDim:                  profileDim,
+		Beta:                        1,
+		Comparator:                  "tanh_chebyshev",
+		ComparatorDegree:            7,
+		ComparatorGain:              40,
+		ComparatorScale:             1,
+		ComparatorBound:             1,
+		SelectorSchedule:            "none",
+		EvalKeys:                    evalKeys,
+		PayloadSlotCount:            8,
+	})
+	if err != nil {
+		t.Fatalf("chunked encrypted payload fusion: %v", err)
+	}
+	if len(chunks) != 1 {
+		t.Fatalf("chunk count = %d, want 1", len(chunks))
+	}
+
+	partials := make([][]byte, 0, nParties)
+	for _, share := range shares {
+		partial, err := PartialDecryptCKKSForContract(params, chunks[0], share.SecretKeyShare, share.Lead)
+		if err != nil {
+			t.Fatalf("partial decrypt: %v", err)
+		}
+		partials = append(partials, partial)
+	}
+	slots, err := FuseCKKSPartialsForContract(params, partials, 8)
+	if err != nil {
+		t.Fatalf("fuse partials: %v", err)
+	}
+	if recovered := slotsToBytesForTest(slots, 1); recovered[0] != packages[1][0] {
+		t.Fatalf("recovered encrypted payload %x, want %x", recovered, packages[1])
+	}
+}
+
+func TestChunkedFuseEncryptedPayloadRejectsMixedPayloadModes(t *testing.T) {
+	_, err := ChunkedFuseEncryptedPayloadCKKS(ContractParams{}, FullFuseRequest{
+		InitiatorCiphertext:         []byte{1},
+		CandidateCiphertexts:        [][]byte{{1}},
+		CandidateLatQ:               []int{0},
+		CandidateLonQ:               []int{0},
+		CandidateBrownies:           []int{0},
+		CandidatePackages:           [][]int{{0xA5}},
+		CandidatePayloadCiphertexts: [][][]byte{{{1}}},
+		ProfileDim:                  8,
+		PayloadSlotCount:            8,
+		EvalKeys:                    EvalKeyFinal{EvalMultFinal: []byte{1}, EvalSumFinal: []byte{1}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot include plaintext") {
+		t.Fatalf("mixed payload mode error = %v, want plaintext-mode rejection", err)
+	}
+}
+
+func TestChunkedFuseEncryptedPayloadRejectsInvalidChunkShape(t *testing.T) {
+	_, err := ChunkedFuseEncryptedPayloadCKKS(ContractParams{}, FullFuseRequest{
+		InitiatorCiphertext:         []byte{1},
+		CandidateCiphertexts:        [][]byte{{1}},
+		CandidateLatQ:               []int{0},
+		CandidateLonQ:               []int{0},
+		CandidateBrownies:           []int{0},
+		CandidatePayloadCiphertexts: [][][]byte{{{1}}},
+		ProfileDim:                  8,
+		PayloadSlotCount:            16,
+		EvalKeys:                    EvalKeyFinal{EvalMultFinal: []byte{1}, EvalSumFinal: []byte{1}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "chunk count") {
+		t.Fatalf("invalid chunk shape error = %v, want chunk-count rejection", err)
+	}
+}
+
+func TestChunkedFuseEncryptedPayloadRejectsEmptyChunk(t *testing.T) {
+	_, err := ChunkedFuseEncryptedPayloadCKKS(ContractParams{}, FullFuseRequest{
+		InitiatorCiphertext:         []byte{1},
+		CandidateCiphertexts:        [][]byte{{1}},
+		CandidateLatQ:               []int{0},
+		CandidateLonQ:               []int{0},
+		CandidateBrownies:           []int{0},
+		CandidatePayloadCiphertexts: [][][]byte{{nil}},
+		ProfileDim:                  8,
+		PayloadSlotCount:            8,
+		EvalKeys:                    EvalKeyFinal{EvalMultFinal: []byte{1}, EvalSumFinal: []byte{1}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "is empty") {
+		t.Fatalf("empty chunk error = %v, want empty-chunk rejection", err)
+	}
+}
+
+func TestChunkedFusePlaintextPayloadRejectsEncryptedChunks(t *testing.T) {
+	_, err := ChunkedFusePayloadCKKS(ContractParams{}, FullFuseRequest{
+		CandidatePayloadCiphertexts: [][][]byte{{{1}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot also include encrypted") {
+		t.Fatalf("plaintext mode with encrypted chunks error = %v, want mixed-mode rejection", err)
+	}
+}
+
+func TestChunkedFuseEncryptedPayloadRejectsForeignContext(t *testing.T) {
+	if err := SmokeCKKS(); err != nil {
+		t.Skipf("OpenFHE smoke unavailable: %v", err)
+	}
+	params := DefaultContractParams(8, 12)
+	params.EvalSumOnlyRotationKeys = true
+	params.ProfileDim = 8
+	shares := distributedSharesForTest(t, params, 2)
+	evalKeys := distributedEvalKeysForTest(t, params, shares)
+	jointPK := shares[len(shares)-1].PublicKey
+
+	initCT, err := EncryptCKKSForContract(params, jointPK, []float64{1, 0, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt initiator: %v", err)
+	}
+	candidateCT, err := EncryptCKKSForContract(params, jointPK, []float64{1, 0, 0, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt candidate: %v", err)
+	}
+
+	foreignParams := params
+	foreignFirst, err := DistributedKeyGenFirst(foreignParams)
+	if err != nil {
+		t.Fatalf("foreign keygen first: %v", err)
+	}
+	foreignSecond, err := DistributedKeyGenNext(foreignParams, foreignFirst.PublicKey)
+	if err != nil {
+		t.Fatalf("foreign keygen second: %v", err)
+	}
+	foreignPayload, err := EncryptCKKSForContract(foreignParams, foreignSecond.PublicKey, []float64{1, 0, 1, 0, 0, 0, 0, 0})
+	if err != nil {
+		t.Fatalf("encrypt foreign payload: %v", err)
+	}
+
+	_, err = ChunkedFuseEncryptedPayloadCKKS(params, FullFuseRequest{
+		InitiatorCiphertext:         initCT,
+		CandidateCiphertexts:        [][]byte{candidateCT, candidateCT},
+		CandidateLatQ:               []int{0, 0},
+		CandidateLonQ:               []int{0, 0},
+		CandidateBrownies:           []int{0, 0},
+		CandidatePayloadCiphertexts: [][][]byte{{foreignPayload}, {foreignPayload}},
+		ProfileDim:                  8,
+		Beta:                        1,
+		Comparator:                  "tanh_chebyshev",
+		ComparatorDegree:            7,
+		ComparatorGain:              40,
+		ComparatorScale:             1,
+		ComparatorBound:             1,
+		EvalKeys:                    evalKeys,
+		PayloadSlotCount:            8,
+	})
+	if err == nil || !strings.Contains(err.Error(), "key tag") {
+		t.Fatalf("foreign encrypted payload key-tag error = %v, want key-tag rejection", err)
 	}
 }
 

@@ -170,20 +170,86 @@ type FullFuseRequest struct {
 	CandidateLonQ        []int
 	CandidateBrownies    []int
 	CandidatePackages    [][]int
-	ProfileDim           int
-	Alpha                float64
-	Beta                 float64
-	Gamma                float64
-	Comparator           string
-	ComparatorDegree     int
-	ComparatorGain       float64
-	ComparatorScale      float64
-	ComparatorBound      float64
-	SelectorSchedule     string
-	EvalKeys             EvalKeyFinal
-	PackageBytes         int
-	PayloadSlotCount     int
-	MinimalRotationKeys  bool
+	// CandidatePayloadCiphertexts is a candidate-major, chunk-major encrypted
+	// payload matrix. It is accepted only by ChunkedFuseEncryptedPayloadCKKS;
+	// plaintext CandidatePackages and encrypted payload chunks are mutually
+	// exclusive fusion modes.
+	CandidatePayloadCiphertexts [][][]byte
+	ProfileDim                  int
+	Alpha                       float64
+	Beta                        float64
+	Gamma                       float64
+	Comparator                  string
+	ComparatorDegree            int
+	ComparatorGain              float64
+	ComparatorScale             float64
+	ComparatorBound             float64
+	SelectorSchedule            string
+	EvalKeys                    EvalKeyFinal
+	PackageBytes                int
+	PayloadSlotCount            int
+	MinimalRotationKeys         bool
+}
+
+func requirePlainPayloadMode(req FullFuseRequest) error {
+	if len(req.CandidatePayloadCiphertexts) != 0 {
+		return fmt.Errorf("plaintext package fusion cannot also include encrypted payload chunks")
+	}
+	return nil
+}
+
+func flattenEncryptedPayloadCiphertexts(req FullFuseRequest, requireEvalKeys bool) (int, int, []byte, []C.size_t, error) {
+	n := len(req.CandidateCiphertexts)
+	if len(req.InitiatorCiphertext) == 0 {
+		return 0, 0, nil, nil, fmt.Errorf("initiator ciphertext is required")
+	}
+	if n == 0 {
+		return 0, 0, nil, nil, fmt.Errorf("at least one candidate ciphertext is required")
+	}
+	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n {
+		return 0, 0, nil, nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
+	}
+	if len(req.CandidatePackages) != 0 {
+		return 0, 0, nil, nil, fmt.Errorf("encrypted payload fusion cannot include plaintext candidate packages")
+	}
+	if req.ProfileDim <= 0 || req.PayloadSlotCount <= 0 {
+		return 0, 0, nil, nil, fmt.Errorf("profileDim and payloadSlotCount must be positive")
+	}
+	if requireEvalKeys {
+		if len(req.EvalKeys.EvalMultFinal) == 0 || len(req.EvalKeys.EvalSumFinal) == 0 {
+			return 0, 0, nil, nil, fmt.Errorf("final eval-mult and eval-sum keys are required")
+		}
+	} else if (len(req.EvalKeys.EvalMultFinal) == 0) != (len(req.EvalKeys.EvalSumFinal) == 0) {
+		return 0, 0, nil, nil, fmt.Errorf("eval-mult and eval-sum keys must be supplied together")
+	}
+
+	chunkSize := 1
+	for chunkSize < req.ProfileDim {
+		chunkSize <<= 1
+	}
+	nChunks := (req.PayloadSlotCount + chunkSize - 1) / chunkSize
+	if nChunks > 256 {
+		return 0, 0, nil, nil, fmt.Errorf("encrypted payload has %d chunks; maximum is 256", nChunks)
+	}
+	if len(req.CandidatePayloadCiphertexts) != n {
+		return 0, 0, nil, nil, fmt.Errorf("encrypted payload candidate count = %d, want %d", len(req.CandidatePayloadCiphertexts), n)
+	}
+
+	lens := make([]C.size_t, 0, n*nChunks)
+	var blob []byte
+	for candidate, chunks := range req.CandidatePayloadCiphertexts {
+		if len(chunks) != nChunks {
+			return 0, 0, nil, nil, fmt.Errorf("encrypted payload candidate %d chunk count = %d, want %d", candidate, len(chunks), nChunks)
+		}
+		for chunk, ciphertext := range chunks {
+			if len(ciphertext) == 0 {
+				return 0, 0, nil, nil, fmt.Errorf("encrypted payload candidate %d chunk %d is empty", candidate, chunk)
+			}
+			lens = append(lens, C.size_t(len(ciphertext)))
+			blob = append(blob, ciphertext...)
+		}
+	}
+	return n, nChunks, blob, lens, nil
 }
 
 func DistributedKeyGenFirst(params ContractParams) (DistributedKeyShare, error) {
@@ -871,6 +937,9 @@ func EvalProductSumBFVForContract(params BFVContractParams, evalKeys EvalKeyFina
 }
 
 func FullFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([]byte, error) {
+	if err := requirePlainPayloadMode(req); err != nil {
+		return nil, err
+	}
 	n := len(req.CandidateCiphertexts)
 	if len(req.InitiatorCiphertext) == 0 {
 		return nil, fmt.Errorf("initiator ciphertext is required")
@@ -2082,8 +2151,9 @@ func SingleKeySoftArgmin(scores []float64, degree int) ([]float64, int, error) {
 	return result, best, nil
 }
 
-// SingleKeyGen creates a single-party CKKS keypair (not threshold). Returns
-// serialized public key and secret key. Generates eval-mult key on the context.
+// SingleKeyGen creates a single-party CKKS keypair (not threshold). It
+// preserves the legacy public/secret-key return shape. Use
+// SingleKeyGenWithEvalKey when an evaluator runs in a separate context.
 func SingleKeyGen(params ContractParams) (pk, sk []byte, err error) {
 	ctx, err := createContractContext(params)
 	if err != nil {
@@ -2112,6 +2182,45 @@ func SingleKeyGen(params ContractParams) (pk, sk []byte, err error) {
 		return nil, nil, fmt.Errorf("serialize sk: %w", err)
 	}
 	return pkBytes, skBytes, nil
+}
+
+// SingleKeyGenWithEvalKey creates a single-party CKKS keypair and serializes
+// the relinearization key required by a separate evaluator context. The
+// evaluation key is public evaluation material, not a decryption key.
+func SingleKeyGenWithEvalKey(params ContractParams) (pk, sk, evalMultKey []byte, err error) {
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	var cPk C.PublicKeyHandle
+	var cSk C.SecretKeyShareHandle
+	if C.KeyGenFirst(ctx, &cPk, &cSk) != 0 {
+		return nil, nil, nil, fmt.Errorf("keygen failed")
+	}
+	defer C.FreePublicKey(cPk)
+	defer C.FreeSecretKeyShare(cSk)
+
+	var cEvalMultKey C.EvalMultKeyHandle
+	if C.SingleKeyEvalMultKeyGenWithOutput(ctx, cSk, &cEvalMultKey) != 0 {
+		return nil, nil, nil, fmt.Errorf("eval-mult keygen failed")
+	}
+	defer C.FreeEvalMultKey(cEvalMultKey)
+
+	pkBytes, err := serializePublicKey(cPk)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("serialize pk: %w", err)
+	}
+	skBytes, err := serializeSecretKeyShare(cSk)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("serialize sk: %w", err)
+	}
+	evalMultKeyBytes, err := serializeEvalMultKey(cEvalMultKey)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("serialize eval-mult key: %w", err)
+	}
+	return pkBytes, skBytes, evalMultKeyBytes, nil
 }
 
 // SingleKeyDecrypt decrypts a ciphertext with a single-party secret key
@@ -2150,7 +2259,10 @@ func SingleKeyDecrypt(params ContractParams, sk, ct []byte, nSlots int) ([]float
 // AuctionWeights parameterises the lexicographic ranking key.
 type AuctionWeights struct{ K, WStar, WDist float64 }
 
-// SingleKeyAuctionServer runs the server-side reverse auction on encrypted bids.
+// SingleKeyAuctionServer is the legacy server-side reverse-auction entry point.
+// It cannot evaluate ciphertext products in a fresh context because its
+// signature has no relinearization key parameter. Use
+// SingleKeyAuctionServerWithEvalKey instead.
 // It takes only the rider's PUBLIC key (never the secret key). Returns serialized
 // encrypted mask ciphertexts — the server CANNOT decrypt them. The rider calls
 // SingleKeyAuctionDecrypt locally to learn the winner.
@@ -2170,6 +2282,33 @@ func SingleKeyAuctionServer(
 	w AuctionWeights,
 	degree int,
 ) (encryptedMasks [][]byte, err error) {
+	return singleKeyAuctionServer(params, pk, nil, priceCents, starNorms, distSqs, nonces, floorCents, capCents, w, degree)
+}
+
+// SingleKeyAuctionServerWithEvalKey runs SingleKeyAuctionServer in a fresh
+// evaluator context using the serialized relinearization key from
+// SingleKeyGenWithEvalKey.
+func SingleKeyAuctionServerWithEvalKey(
+	params ContractParams,
+	pk, evalMultKey []byte,
+	priceCents []int, starNorms, distSqs []float64,
+	nonces [][]byte,
+	floorCents, capCents int,
+	w AuctionWeights,
+	degree int,
+) (encryptedMasks [][]byte, err error) {
+	return singleKeyAuctionServer(params, pk, evalMultKey, priceCents, starNorms, distSqs, nonces, floorCents, capCents, w, degree)
+}
+
+func singleKeyAuctionServer(
+	params ContractParams,
+	pk, evalMultKey []byte,
+	priceCents []int, starNorms, distSqs []float64,
+	nonces [][]byte,
+	floorCents, capCents int,
+	w AuctionWeights,
+	degree int,
+) (encryptedMasks [][]byte, err error) {
 	n := len(priceCents)
 	if n < 2 {
 		return nil, fmt.Errorf("need >= 2 bids, got %d", n)
@@ -2179,6 +2318,9 @@ func SingleKeyAuctionServer(
 	}
 	if pk == nil || len(pk) == 0 {
 		return nil, fmt.Errorf("pk required")
+	}
+	if len(evalMultKey) == 0 {
+		return nil, fmt.Errorf("eval-mult key required; use SingleKeyGenWithEvalKey and SingleKeyAuctionServerWithEvalKey")
 	}
 
 	ctx, err := createContractContext(params)
@@ -2192,6 +2334,15 @@ func SingleKeyAuctionServer(
 		return nil, fmt.Errorf("deserialize pk: %w", err)
 	}
 	defer C.FreePublicKey(cPk)
+
+	cEvalMultKey, err := deserializeEvalMultKey(ctx, evalMultKey)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
+	}
+	defer C.FreeEvalMultKey(cEvalMultKey)
+	if C.InsertEvalMultKey(ctx, cEvalMultKey) != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
 
 	span := float64(capCents - floorCents)
 	if span <= 0 {
@@ -2296,8 +2447,9 @@ func SingleKeyEncrypt(params ContractParams, pk []byte, value float64) ([]byte, 
 	return serializeCiphertext(ct)
 }
 
-// SingleKeyAuctionServerEnc is the privacy-preserving variant of
-// SingleKeyAuctionServer. Instead of plaintext prices, it accepts
+// SingleKeyAuctionServerEnc is the legacy encrypted-bid variant of
+// SingleKeyAuctionServer. Use SingleKeyAuctionServerEncWithEvalKey for a
+// fresh evaluator context. Instead of plaintext prices, it accepts
 // pre-encrypted bid ciphertexts produced by each bidder via
 // SingleKeyEncrypt. The server never learns plaintext prices; it only
 // manipulates ciphertexts homomorphically.
@@ -2315,6 +2467,35 @@ func SingleKeyAuctionServerEnc(
 	w AuctionWeights,
 	degree int,
 ) (encryptedMasks [][]byte, err error) {
+	return singleKeyAuctionServerEnc(params, pk, nil, encBids, starNorms, distSqs, nonces, floorCents, capCents, w, degree)
+}
+
+// SingleKeyAuctionServerEncWithEvalKey runs the encrypted-bid variant in a
+// fresh evaluator context using the relinearization key from
+// SingleKeyGenWithEvalKey.
+func SingleKeyAuctionServerEncWithEvalKey(
+	params ContractParams,
+	pk, evalMultKey []byte,
+	encBids [][]byte,
+	starNorms, distSqs []float64,
+	nonces [][]byte,
+	floorCents, capCents int,
+	w AuctionWeights,
+	degree int,
+) (encryptedMasks [][]byte, err error) {
+	return singleKeyAuctionServerEnc(params, pk, evalMultKey, encBids, starNorms, distSqs, nonces, floorCents, capCents, w, degree)
+}
+
+func singleKeyAuctionServerEnc(
+	params ContractParams,
+	pk, evalMultKey []byte,
+	encBids [][]byte,
+	starNorms, distSqs []float64,
+	nonces [][]byte,
+	floorCents, capCents int,
+	w AuctionWeights,
+	degree int,
+) (encryptedMasks [][]byte, err error) {
 	n := len(encBids)
 	if n < 2 {
 		return nil, fmt.Errorf("need >= 2 bids, got %d", n)
@@ -2324,6 +2505,9 @@ func SingleKeyAuctionServerEnc(
 	}
 	if len(pk) == 0 {
 		return nil, fmt.Errorf("pk required")
+	}
+	if len(evalMultKey) == 0 {
+		return nil, fmt.Errorf("eval-mult key required; use SingleKeyGenWithEvalKey and SingleKeyAuctionServerEncWithEvalKey")
 	}
 
 	ctx, err := createContractContext(params)
@@ -2337,6 +2521,15 @@ func SingleKeyAuctionServerEnc(
 		return nil, fmt.Errorf("deserialize pk: %w", err)
 	}
 	defer C.FreePublicKey(cPk)
+
+	cEvalMultKey, err := deserializeEvalMultKey(ctx, evalMultKey)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
+	}
+	defer C.FreeEvalMultKey(cEvalMultKey)
+	if C.InsertEvalMultKey(ctx, cEvalMultKey) != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
 
 	span := float64(capCents - floorCents)
 	if span <= 0 {
@@ -2867,6 +3060,9 @@ func CombineEvalKeyRound1PerIndexWithContext(ctx *CryptoContext, publicKeys [][]
 // provided CKKS context instead of creating a new one — eliminates ~4 GB of
 // duplicate context memory at ring 2^16.
 func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]byte, error) {
+	if err := requirePlainPayloadMode(req); err != nil {
+		return nil, err
+	}
 	if ctx == nil || ctx.handle == nil {
 		return nil, fmt.Errorf("crypto context is required")
 	}
@@ -2948,6 +3144,9 @@ func FullFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([]
 // per-chunk winner-package ciphertexts. req.EvalKeys.EvalSumFinal must be the
 // EvalSum-replicate (eval-sum-only) key set generated at batch = next_pow2(ProfileDim).
 func ChunkedFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	if err := requirePlainPayloadMode(req); err != nil {
+		return nil, err
+	}
 	n := len(req.CandidateCiphertexts)
 	if len(req.InitiatorCiphertext) == 0 {
 		return nil, fmt.Errorf("initiator ciphertext is required")
@@ -3030,6 +3229,9 @@ func ChunkedFusePayloadCKKS(params ContractParams, req FullFuseRequest) ([][]byt
 // The caller threshold-decrypts each chunk and reassembles the payload. This is the
 // server-blind path that runs on the fold-only 7-key rotation set (vs broadcast's 17).
 func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([][]byte, error) {
+	if err := requirePlainPayloadMode(req); err != nil {
+		return nil, err
+	}
 	if ctx == nil || ctx.handle == nil {
 		return nil, fmt.Errorf("crypto context is required")
 	}
@@ -3113,6 +3315,114 @@ func ChunkedFusePayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) 
 		l := int(chunkLens[c])
 		chunks[c] = blob[off : off+l]
 		off += l
+	}
+	return chunks, nil
+}
+
+// ChunkedFuseEncryptedPayloadCKKS builds a fresh CKKS context and fuses client-encrypted
+// payload chunks. CandidatePayloadCiphertexts is candidate-major and contains exactly
+// ceil(PayloadSlotCount / next_pow2(ProfileDim)) chunks for each candidate. This entry
+// point never accepts source package bytes.
+func ChunkedFuseEncryptedPayloadCKKS(params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	return chunkedFuseEncryptedPayloadCKKS(nil, params, req)
+}
+
+// ChunkedFuseEncryptedPayloadCKKSWithContext is the context-reusing encrypted-payload
+// fusion entry point. Supplying no EvalKeys uses eval keys already inserted in ctx;
+// otherwise both final eval-key blobs must be supplied together.
+func ChunkedFuseEncryptedPayloadCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([][]byte, error) {
+	if ctx == nil || ctx.handle == nil {
+		return nil, fmt.Errorf("crypto context is required")
+	}
+	return chunkedFuseEncryptedPayloadCKKS(ctx, ContractParams{}, req)
+}
+
+func chunkedFuseEncryptedPayloadCKKS(ctx *CryptoContext, params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	n, expectedChunks, payloadBlob, payloadLens, err := flattenEncryptedPayloadCiphertexts(req, ctx == nil)
+	if err != nil {
+		return nil, err
+	}
+	for i, ciphertext := range req.CandidateCiphertexts {
+		if len(ciphertext) == 0 {
+			return nil, fmt.Errorf("candidate ciphertext %d is empty", i)
+		}
+	}
+	candidateBlob, candidateLens := concatCandidateCiphertexts(req.CandidateCiphertexts)
+	latQ := intsToCInts(req.CandidateLatQ)
+	lonQ := intsToCInts(req.CandidateLonQ)
+	brownies := intsToCInts(req.CandidateBrownies)
+	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
+	defer C.free(unsafe.Pointer(comparator))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "none"))
+	defer C.free(unsafe.Pointer(schedule))
+
+	var ctxHandle C.CryptoContextHandle
+	var ringDim C.uint32_t
+	var scalingFactor C.double
+	var depth C.uint32_t
+	if ctx != nil {
+		ctxHandle = ctx.handle
+	} else {
+		ringDim = C.uint32_t(params.RingDim)
+		scalingFactor = C.double(params.ScalingFactor)
+		depth = C.uint32_t(params.Depth)
+	}
+	var evalMultPtr *C.uint8_t
+	var evalMultLen C.size_t
+	if len(req.EvalKeys.EvalMultFinal) > 0 {
+		evalMultPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0]))
+		evalMultLen = C.size_t(len(req.EvalKeys.EvalMultFinal))
+	}
+	var evalSumPtr *C.uint8_t
+	var evalSumLen C.size_t
+	if len(req.EvalKeys.EvalSumFinal) > 0 {
+		evalSumPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0]))
+		evalSumLen = C.size_t(len(req.EvalKeys.EvalSumFinal))
+	}
+
+	const maxChunks = 256
+	chunkLens := make([]C.size_t, maxChunks)
+	var out *C.uint8_t
+	var outLen C.size_t
+	var nChunks C.int
+	var errBuf [512]C.char
+	if rc := C.ARESChunkedFuseEncryptedPayloadCKKS(
+		ctxHandle, ringDim, scalingFactor, depth,
+		(*C.uint8_t)(unsafe.Pointer(&req.InitiatorCiphertext[0])), C.size_t(len(req.InitiatorCiphertext)),
+		(*C.uint8_t)(unsafe.Pointer(&candidateBlob[0])), (*C.size_t)(unsafe.Pointer(&candidateLens[0])),
+		(*C.int)(unsafe.Pointer(&latQ[0])), (*C.int)(unsafe.Pointer(&lonQ[0])), (*C.int)(unsafe.Pointer(&brownies[0])),
+		C.int(n), C.int(req.ProfileDim), C.int(req.InitiatorLatQ), C.int(req.InitiatorLonQ),
+		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
+		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
+		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
+		evalMultPtr, evalMultLen, evalSumPtr, evalSumLen,
+		(*C.uint8_t)(unsafe.Pointer(&payloadBlob[0])), C.size_t(len(payloadBlob)),
+		(*C.size_t)(unsafe.Pointer(&payloadLens[0])), C.int(len(payloadLens)),
+		C.int(req.PayloadSlotCount), &out, &outLen,
+		(*C.size_t)(unsafe.Pointer(&chunkLens[0])), &nChunks, &errBuf[0], C.size_t(len(errBuf)),
+	); rc != 0 {
+		return nil, fmt.Errorf("chunked encrypted payload fusion: %s", C.GoString(&errBuf[0]))
+	}
+	if out == nil {
+		return nil, fmt.Errorf("chunked encrypted payload fusion returned no ciphertexts")
+	}
+	defer C.free(unsafe.Pointer(out))
+	if int(nChunks) != expectedChunks {
+		return nil, fmt.Errorf("chunked encrypted payload fusion produced %d chunks, want %d", int(nChunks), expectedChunks)
+	}
+	blob := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+	chunks := make([][]byte, int(nChunks))
+	offset := 0
+	for chunk := range chunks {
+		length := int(chunkLens[chunk])
+		if length <= 0 || length > len(blob)-offset {
+			return nil, fmt.Errorf("invalid serialized encrypted payload chunk %d length", chunk)
+		}
+		chunks[chunk] = append([]byte(nil), blob[offset:offset+length]...)
+		offset += length
+	}
+	if offset != len(blob) {
+		return nil, fmt.Errorf("encrypted payload output length does not match chunk lengths")
 	}
 	return chunks, nil
 }
