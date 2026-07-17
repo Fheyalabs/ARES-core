@@ -174,6 +174,33 @@ JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_encryptSerializedPay
     env->ReleaseByteArrayElements(payload, data, JNI_ABORT);
     return bytesAndFree(env, out, outLen, rc);
 }
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_encryptSerializedRepeatedScalar(JNIEnv* env, jclass, jlong ctx, jlong pk, jdouble value) {
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = EncryptSerializedRepeatedScalarCKKS(P(ctx), P(pk), static_cast<double>(value), &out, &outLen);
+    return bytesAndFree(env, out, outLen, rc);
+}
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_computeSerializedSquaredDistance(JNIEnv* env, jclass, jlong ctx, jbyteArray originFirst, jbyteArray originSecond, jdouble localFirst, jdouble localSecond) {
+    if (originFirst == nullptr || originSecond == nullptr) return nullptr;
+    const jsize firstLen = env->GetArrayLength(originFirst);
+    const jsize secondLen = env->GetArrayLength(originSecond);
+    jbyte* first = env->GetByteArrayElements(originFirst, nullptr);
+    jbyte* second = env->GetByteArrayElements(originSecond, nullptr);
+    if (first == nullptr || second == nullptr) {
+        if (first != nullptr) env->ReleaseByteArrayElements(originFirst, first, JNI_ABORT);
+        if (second != nullptr) env->ReleaseByteArrayElements(originSecond, second, JNI_ABORT);
+        return nullptr;
+    }
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = ComputeSerializedSquaredDistanceCKKS(P(ctx),
+        reinterpret_cast<const uint8_t*>(first), static_cast<size_t>(firstLen),
+        reinterpret_cast<const uint8_t*>(second), static_cast<size_t>(secondLen),
+        static_cast<double>(localFirst), static_cast<double>(localSecond), &out, &outLen);
+    env->ReleaseByteArrayElements(originFirst, first, JNI_ABORT);
+    env->ReleaseByteArrayElements(originSecond, second, JNI_ABORT);
+    return bytesAndFree(env, out, outLen, rc);
+}
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializeCiphertext(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializeCiphertext(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_deserializeCiphertext(JNIEnv* env, jclass, jlong ctx, jbyteArray d){jsize n=env->GetArrayLength(d); jbyte* p=env->GetByteArrayElements(d,nullptr); void* out=DeserializeCiphertext(P(ctx),reinterpret_cast<uint8_t*>(p),(size_t)n); env->ReleaseByteArrayElements(d,p,JNI_ABORT); return H(out);}
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializePublicKey(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializePublicKey(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}

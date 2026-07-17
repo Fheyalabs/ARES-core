@@ -42,6 +42,24 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: 
                 ?: throw FHEException("payload chunk encryption failed")
         }
     }
+
+    /** Encrypt one scalar into every batch slot for a local encrypted distance computation. */
+    fun encryptRepeatedScalar(value: Double, under: PublicKey): ByteArray =
+        NativeFHE.encryptSerializedRepeatedScalar(raw, under.raw, value)
+            ?: throw FHEException("repeated scalar encryption failed")
+
+    /** Derive a serialized encrypted squared distance without serializing local values. */
+    fun encryptedSquaredDistance(
+        originFirst: ByteArray,
+        originSecond: ByteArray,
+        localFirst: Double,
+        localSecond: Double
+    ): ByteArray {
+        require(originFirst.isNotEmpty()) { "origin first ciphertext must not be empty" }
+        require(originSecond.isNotEmpty()) { "origin second ciphertext must not be empty" }
+        return NativeFHE.computeSerializedSquaredDistance(raw, originFirst, originSecond, localFirst, localSecond)
+            ?: throw FHEException("encrypted squared distance failed")
+    }
     /** Every party uses MultiDecMain (matches ThresholdSmokeCKKS). */
     fun partialDecrypt(ct: Ciphertext, sk: SecretKeyShare): Ciphertext {
         val h = NativeFHE.multiDecMain(raw, ct.raw, sk.raw)

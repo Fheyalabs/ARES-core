@@ -36,6 +36,8 @@ internal object NativeFHE {
     external fun evalPolynomial(ctx: Long, ct: Long, coeffs: DoubleArray): Long
     external fun evalArgmax(ctx: Long, cts: LongArray, sharp: DoubleArray): LongArray
     external fun encryptSerializedPayloadChunk(ctx: Long, pk: Long, payload: ByteArray, bitOffset: Int, chunkSize: Int): ByteArray?
+    external fun encryptSerializedRepeatedScalar(ctx: Long, pk: Long, value: Double): ByteArray?
+    external fun computeSerializedSquaredDistance(ctx: Long, originFirst: ByteArray, originSecond: ByteArray, localFirst: Double, localSecond: Double): ByteArray?
     external fun serializeCiphertext(h: Long): ByteArray?
     external fun deserializeCiphertext(ctx: Long, data: ByteArray): Long
     external fun serializePublicKey(h: Long): ByteArray?

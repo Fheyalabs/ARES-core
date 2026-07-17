@@ -55,4 +55,53 @@ extension CryptoContext {
             return copyAndFree(serialized, serializedLength)
         }
     }
+
+    /// Encrypt one scalar into every batch slot for a later local encrypted
+    /// distance computation.
+    public func encryptRepeatedScalar(_ value: Double, publicKey: PublicKey) throws -> Data {
+        var serialized: UnsafeMutablePointer<UInt8>?
+        var serializedLength = 0
+        guard EncryptSerializedRepeatedScalarCKKS(
+            raw, publicKey.raw, value, &serialized, &serializedLength
+        ) == 0, serialized != nil, serializedLength > 0 else {
+            if let serialized { free(serialized) }
+            throw FHEError.encryptFailed
+        }
+        return copyAndFree(serialized, serializedLength)
+    }
+
+    /// Derive a serialized encrypted squared distance from two encrypted origin
+    /// scalars and two local scalar values. The local values are never serialized.
+    public func encryptedSquaredDistance(
+        originFirst: Data,
+        originSecond: Data,
+        localFirst: Double,
+        localSecond: Double
+    ) throws -> Data {
+        guard !originFirst.isEmpty, !originSecond.isEmpty else { throw FHEError.encryptFailed }
+        let firstLength = originFirst.count
+        let secondLength = originSecond.count
+        var serialized: UnsafeMutablePointer<UInt8>?
+        var serializedLength = 0
+        let result = originFirst.withUnsafeBytes { firstBytes in
+            originSecond.withUnsafeBytes { secondBytes in
+                ComputeSerializedSquaredDistanceCKKS(
+                    raw,
+                    firstBytes.bindMemory(to: UInt8.self).baseAddress,
+                    firstLength,
+                    secondBytes.bindMemory(to: UInt8.self).baseAddress,
+                    secondLength,
+                    localFirst,
+                    localSecond,
+                    &serialized,
+                    &serializedLength
+                )
+            }
+        }
+        guard result == 0, serialized != nil, serializedLength > 0 else {
+            if let serialized { free(serialized) }
+            throw FHEError.encryptFailed
+        }
+        return copyAndFree(serialized, serializedLength)
+    }
 }
