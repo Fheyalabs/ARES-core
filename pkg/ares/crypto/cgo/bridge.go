@@ -168,8 +168,12 @@ type FullFuseRequest struct {
 	CandidateCiphertexts [][]byte
 	CandidateLatQ        []int
 	CandidateLonQ        []int
-	CandidateBrownies    []int
-	CandidatePackages    [][]int
+	// CandidateDistanceCiphertexts contains exactly one client-derived encrypted
+	// squared distance per candidate. It is mutually exclusive with CandidateLatQ
+	// and CandidateLonQ in ciphertext-only fusion mode.
+	CandidateDistanceCiphertexts [][]byte
+	CandidateBrownies            []int
+	CandidatePackages            [][]int
 	// CandidatePayloadCiphertexts is a candidate-major, chunk-major encrypted
 	// payload matrix. It is accepted only by ChunkedFuseEncryptedPayloadCKKS;
 	// plaintext CandidatePackages and encrypted payload chunks are mutually
@@ -206,8 +210,15 @@ func flattenEncryptedPayloadCiphertexts(req FullFuseRequest, requireEvalKeys boo
 	if n == 0 {
 		return 0, 0, nil, nil, fmt.Errorf("at least one candidate ciphertext is required")
 	}
-	if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n || len(req.CandidateBrownies) != n {
+	if len(req.CandidateBrownies) != n {
 		return 0, 0, nil, nil, fmt.Errorf("candidate metadata counts must match ciphertext count")
+	}
+	if len(req.CandidateDistanceCiphertexts) == 0 {
+		if len(req.CandidateLatQ) != n || len(req.CandidateLonQ) != n {
+			return 0, 0, nil, nil, fmt.Errorf("candidate coordinate counts must match ciphertext count")
+		}
+	} else if len(req.CandidateLatQ) != 0 || len(req.CandidateLonQ) != 0 {
+		return 0, 0, nil, nil, fmt.Errorf("encrypted distance mode cannot include candidate coordinates")
 	}
 	if len(req.CandidatePackages) != 0 {
 		return 0, 0, nil, nil, fmt.Errorf("encrypted payload fusion cannot include plaintext candidate packages")
@@ -250,6 +261,25 @@ func flattenEncryptedPayloadCiphertexts(req FullFuseRequest, requireEvalKeys boo
 		}
 	}
 	return n, nChunks, blob, lens, nil
+}
+
+func flattenEncryptedDistanceCiphertexts(req FullFuseRequest, n int) ([]byte, []C.size_t, error) {
+	if len(req.CandidateDistanceCiphertexts) != n {
+		return nil, nil, fmt.Errorf("encrypted distance candidate count = %d, want %d", len(req.CandidateDistanceCiphertexts), n)
+	}
+	if len(req.CandidateLatQ) != 0 || len(req.CandidateLonQ) != 0 {
+		return nil, nil, fmt.Errorf("encrypted distance mode cannot include candidate coordinates")
+	}
+	lens := make([]C.size_t, n)
+	var blob []byte
+	for i, ciphertext := range req.CandidateDistanceCiphertexts {
+		if len(ciphertext) == 0 {
+			return nil, nil, fmt.Errorf("encrypted distance ciphertext %d is empty", i)
+		}
+		lens[i] = C.size_t(len(ciphertext))
+		blob = append(blob, ciphertext...)
+	}
+	return blob, lens, nil
 }
 
 func DistributedKeyGenFirst(params ContractParams) (DistributedKeyShare, error) {
@@ -1379,6 +1409,89 @@ func EncryptCKKSForContract(params ContractParams, jointPublicKey []byte, values
 	}
 	defer C.FreeCiphertext(ct)
 	return serializeCiphertext(ct)
+}
+
+// EncryptRepeatedScalarCKKSForContract encrypts one scalar in every CKKS batch
+// slot under the supplied collective key. It is used as an opaque origin input
+// for client-side squared-distance derivation.
+func EncryptRepeatedScalarCKKSForContract(params ContractParams, jointPublicKey []byte, value float64) ([]byte, error) {
+	if err := requireNonEmptyBytes("joint public key", jointPublicKey); err != nil {
+		return nil, err
+	}
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	pk, err := deserializePublicKey(ctx, jointPublicKey)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreePublicKey(pk)
+
+	var out *C.uint8_t
+	var outLen C.size_t
+	if rc := C.EncryptSerializedRepeatedScalarCKKS(ctx, pk, C.double(value), &out, &outLen); rc != 0 || out == nil || outLen == 0 {
+		if out != nil {
+			C.free(unsafe.Pointer(out))
+		}
+		return nil, fmt.Errorf("repeated scalar encryption failed")
+	}
+	defer C.free(unsafe.Pointer(out))
+	return copyCBytes(out, outLen), nil
+}
+
+// EncryptedSquaredDistanceCKKSForContract derives an encrypted squared distance
+// from two serialized repeated-scalar ciphertexts. Local scalar values remain
+// process-local; only the result ciphertext is returned.
+func EncryptedSquaredDistanceCKKSForContract(
+	params ContractParams,
+	evalMultKey []byte,
+	originFirst []byte,
+	originSecond []byte,
+	localFirst float64,
+	localSecond float64,
+) ([]byte, error) {
+	if err := requireNonEmptyBytes("eval-mult key", evalMultKey); err != nil {
+		return nil, err
+	}
+	if err := requireNonEmptyBytes("origin first ciphertext", originFirst); err != nil {
+		return nil, err
+	}
+	if err := requireNonEmptyBytes("origin second ciphertext", originSecond); err != nil {
+		return nil, err
+	}
+	ctx, err := createContractContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeCryptoContext(ctx)
+
+	multKey, err := deserializeEvalMultKey(ctx, evalMultKey)
+	if err != nil {
+		return nil, err
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(ctx, multKey); rc != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
+
+	var out *C.uint8_t
+	var outLen C.size_t
+	if rc := C.ComputeSerializedSquaredDistanceCKKS(
+		ctx,
+		(*C.uint8_t)(unsafe.Pointer(&originFirst[0])), C.size_t(len(originFirst)),
+		(*C.uint8_t)(unsafe.Pointer(&originSecond[0])), C.size_t(len(originSecond)),
+		C.double(localFirst), C.double(localSecond), &out, &outLen,
+	); rc != 0 || out == nil || outLen == 0 {
+		if out != nil {
+			C.free(unsafe.Pointer(out))
+		}
+		return nil, fmt.Errorf("encrypted squared distance failed")
+	}
+	defer C.free(unsafe.Pointer(out))
+	return copyCBytes(out, outLen), nil
 }
 
 func EncryptBFVForContract(params BFVContractParams, jointPublicKey []byte, values []int64) ([]byte, error) {
@@ -3383,6 +3496,9 @@ func ChunkedFuseEncryptedPayloadCKKSWithContext(ctx *CryptoContext, req FullFuse
 }
 
 func chunkedFuseEncryptedPayloadCKKS(ctx *CryptoContext, params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	if len(req.CandidateDistanceCiphertexts) != 0 {
+		return nil, fmt.Errorf("encrypted payload fusion with raw coordinates cannot include encrypted distances")
+	}
 	n, expectedChunks, payloadBlob, payloadLens, err := flattenEncryptedPayloadCiphertexts(req, ctx == nil)
 	if err != nil {
 		return nil, err
@@ -3468,6 +3584,115 @@ func chunkedFuseEncryptedPayloadCKKS(ctx *CryptoContext, params ContractParams, 
 	}
 	if offset != len(blob) {
 		return nil, fmt.Errorf("encrypted payload output length does not match chunk lengths")
+	}
+	return chunks, nil
+}
+
+// ChunkedFuseEncryptedInputsCKKS fuses encrypted profile vectors, client-derived
+// encrypted squared distances, and encrypted payload chunks. Unlike the legacy
+// coordinate mode, this entry point accepts no raw location arrays.
+func ChunkedFuseEncryptedInputsCKKS(params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	return chunkedFuseEncryptedInputsCKKS(nil, params, req)
+}
+
+// ChunkedFuseEncryptedInputsCKKSWithContext is the context-reusing counterpart
+// for a scorer that has already inserted the distributed evaluation keys.
+func ChunkedFuseEncryptedInputsCKKSWithContext(ctx *CryptoContext, req FullFuseRequest) ([][]byte, error) {
+	if ctx == nil || ctx.handle == nil {
+		return nil, fmt.Errorf("crypto context is required")
+	}
+	return chunkedFuseEncryptedInputsCKKS(ctx, ContractParams{}, req)
+}
+
+func chunkedFuseEncryptedInputsCKKS(ctx *CryptoContext, params ContractParams, req FullFuseRequest) ([][]byte, error) {
+	n, expectedChunks, payloadBlob, payloadLens, err := flattenEncryptedPayloadCiphertexts(req, ctx == nil)
+	if err != nil {
+		return nil, err
+	}
+	distanceBlob, distanceLens, err := flattenEncryptedDistanceCiphertexts(req, n)
+	if err != nil {
+		return nil, err
+	}
+	for i, ciphertext := range req.CandidateCiphertexts {
+		if len(ciphertext) == 0 {
+			return nil, fmt.Errorf("candidate ciphertext %d is empty", i)
+		}
+	}
+	candidateBlob, candidateLens := concatCandidateCiphertexts(req.CandidateCiphertexts)
+	brownies := intsToCInts(req.CandidateBrownies)
+	comparator := C.CString(defaultStringGo(req.Comparator, "tanh_chebyshev"))
+	defer C.free(unsafe.Pointer(comparator))
+	schedule := C.CString(defaultStringGo(req.SelectorSchedule, "none"))
+	defer C.free(unsafe.Pointer(schedule))
+
+	var ctxHandle C.CryptoContextHandle
+	var ringDim C.uint32_t
+	var scalingFactor C.double
+	var depth C.uint32_t
+	if ctx != nil {
+		ctxHandle = ctx.handle
+	} else {
+		ringDim = C.uint32_t(params.RingDim)
+		scalingFactor = C.double(params.ScalingFactor)
+		depth = C.uint32_t(params.Depth)
+	}
+	var evalMultPtr *C.uint8_t
+	var evalMultLen C.size_t
+	if len(req.EvalKeys.EvalMultFinal) > 0 {
+		evalMultPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalMultFinal[0]))
+		evalMultLen = C.size_t(len(req.EvalKeys.EvalMultFinal))
+	}
+	var evalSumPtr *C.uint8_t
+	var evalSumLen C.size_t
+	if len(req.EvalKeys.EvalSumFinal) > 0 {
+		evalSumPtr = (*C.uint8_t)(unsafe.Pointer(&req.EvalKeys.EvalSumFinal[0]))
+		evalSumLen = C.size_t(len(req.EvalKeys.EvalSumFinal))
+	}
+
+	const maxChunks = 256
+	chunkLens := make([]C.size_t, maxChunks)
+	var out *C.uint8_t
+	var outLen C.size_t
+	var nChunks C.int
+	var errBuf [512]C.char
+	if rc := C.ARESChunkedFuseEncryptedInputsCKKS(
+		ctxHandle, ringDim, scalingFactor, depth,
+		(*C.uint8_t)(unsafe.Pointer(&req.InitiatorCiphertext[0])), C.size_t(len(req.InitiatorCiphertext)),
+		(*C.uint8_t)(unsafe.Pointer(&candidateBlob[0])), (*C.size_t)(unsafe.Pointer(&candidateLens[0])),
+		(*C.int)(unsafe.Pointer(&brownies[0])), C.int(n), C.int(req.ProfileDim),
+		C.double(req.Alpha), C.double(req.Beta), C.double(req.Gamma),
+		comparator, C.int(req.ComparatorDegree), C.double(req.ComparatorGain),
+		C.double(req.ComparatorScale), C.double(req.ComparatorBound), schedule,
+		evalMultPtr, evalMultLen, evalSumPtr, evalSumLen,
+		(*C.uint8_t)(unsafe.Pointer(&distanceBlob[0])), C.size_t(len(distanceBlob)),
+		(*C.size_t)(unsafe.Pointer(&distanceLens[0])), C.int(len(distanceLens)),
+		(*C.uint8_t)(unsafe.Pointer(&payloadBlob[0])), C.size_t(len(payloadBlob)),
+		(*C.size_t)(unsafe.Pointer(&payloadLens[0])), C.int(len(payloadLens)),
+		C.int(req.PayloadSlotCount), &out, &outLen,
+		(*C.size_t)(unsafe.Pointer(&chunkLens[0])), &nChunks, &errBuf[0], C.size_t(len(errBuf)),
+	); rc != 0 {
+		return nil, fmt.Errorf("chunked encrypted input fusion: %s", C.GoString(&errBuf[0]))
+	}
+	if out == nil {
+		return nil, fmt.Errorf("chunked encrypted input fusion returned no ciphertexts")
+	}
+	defer C.free(unsafe.Pointer(out))
+	if int(nChunks) != expectedChunks {
+		return nil, fmt.Errorf("chunked encrypted input fusion produced %d chunks, want %d", int(nChunks), expectedChunks)
+	}
+	blob := C.GoBytes(unsafe.Pointer(out), C.int(outLen))
+	chunks := make([][]byte, int(nChunks))
+	offset := 0
+	for chunk := range chunks {
+		length := int(chunkLens[chunk])
+		if length <= 0 || length > len(blob)-offset {
+			return nil, fmt.Errorf("invalid serialized encrypted input chunk %d length", chunk)
+		}
+		chunks[chunk] = append([]byte(nil), blob[offset:offset+length]...)
+		offset += length
+	}
+	if offset != len(blob) {
+		return nil, fmt.Errorf("encrypted input output length does not match chunk lengths")
 	}
 	return chunks, nil
 }
@@ -3663,6 +3888,34 @@ func ChunkedUnionScoreEncryptedPayloadCKKSWithConcurrency(params ContractParams,
 	return runUnionComparatorsWith(ctx, req, comparators, concurrency, usePreinsertedEvalKeys, chunkedEncryptedUnionComparatorWithContext)
 }
 
+// ChunkedUnionScoreEncryptedInputsCKKS is the ciphertext-only union scorer for
+// encrypted profiles, encrypted squared distances, and encrypted payload chunks.
+func ChunkedUnionScoreEncryptedInputsCKKS(params ContractParams, req FullFuseRequest, comparators []UnionComparator) ([][][]byte, error) {
+	return ChunkedUnionScoreEncryptedInputsCKKSWithConcurrency(params, req, comparators, 1)
+}
+
+// ChunkedUnionScoreEncryptedInputsCKKSWithConcurrency reuses one CKKS context
+// across all comparator lanes. Its comparator fanout is independent of the
+// sequential candidate/chunk streaming inside each lane.
+func ChunkedUnionScoreEncryptedInputsCKKSWithConcurrency(params ContractParams, req FullFuseRequest, comparators []UnionComparator, concurrency int) ([][][]byte, error) {
+	if len(comparators) == 0 {
+		return nil, fmt.Errorf("at least one union comparator is required")
+	}
+	concurrency = clampUnionConcurrency(concurrency, comparators)
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer ctx.Close()
+	usePreinsertedEvalKeys := concurrency > 1
+	if usePreinsertedEvalKeys {
+		if err := insertUnionEvalKeys(ctx, req.EvalKeys); err != nil {
+			return nil, err
+		}
+	}
+	return runUnionComparatorsWith(ctx, req, comparators, concurrency, usePreinsertedEvalKeys, chunkedEncryptedInputUnionComparatorWithContext)
+}
+
 // runUnionComparators fuses every comparator lane against an already-built CKKS
 // context. When usePreinsertedEvalKeys is true the eval-mult/eval-sum keys are
 // assumed to already live in the context (each lane passes no key bytes), which
@@ -3797,6 +4050,35 @@ func ChunkedUnionScoreEncryptedPayloadCKKSWithEvalSumRefs(params ContractParams,
 	return runUnionComparatorsWith(ctx, req, comparators, concurrency, true, chunkedEncryptedUnionComparatorWithContext)
 }
 
+// ChunkedUnionScoreEncryptedInputsCKKSWithEvalSumRefs is the b-only,
+// per-index eval-sum-key counterpart of the ciphertext-only union scorer.
+func ChunkedUnionScoreEncryptedInputsCKKSWithEvalSumRefs(params ContractParams, req FullFuseRequest, comparators []UnionComparator, concurrency int, publicKeys [][]byte, evalSumRefsByParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) ([][][]byte, error) {
+	if len(comparators) == 0 {
+		return nil, fmt.Errorf("at least one union comparator is required")
+	}
+	if len(req.EvalKeys.EvalMultFinal) == 0 {
+		return nil, fmt.Errorf("final eval-mult key is required")
+	}
+	concurrency = clampUnionConcurrency(concurrency, comparators)
+	ctx, err := NewCryptoContext(params)
+	if err != nil {
+		return nil, err
+	}
+	defer ctx.Close()
+	multKey, err := deserializeEvalMultKey(ctx.handle, req.EvalKeys.EvalMultFinal)
+	if err != nil {
+		return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
+	}
+	defer C.FreeEvalMultKey(multKey)
+	if rc := C.InsertEvalMultKey(ctx.handle, multKey); rc != 0 {
+		return nil, fmt.Errorf("insert eval-mult key failed")
+	}
+	if err := insertEvalSumPerIndexLazy(ctx.handle, publicKeys, evalSumRefsByParty, resolve); err != nil {
+		return nil, err
+	}
+	return runUnionComparatorsWith(ctx, req, comparators, concurrency, true, chunkedEncryptedInputUnionComparatorWithContext)
+}
+
 func clampUnionConcurrency(concurrency int, comparators []UnionComparator) int {
 	if concurrency <= 0 {
 		concurrency = 1
@@ -3852,6 +4134,11 @@ func chunkedUnionComparatorWithContext(ctx *CryptoContext, req FullFuseRequest, 
 func chunkedEncryptedUnionComparatorWithContext(ctx *CryptoContext, req FullFuseRequest, comp UnionComparator, usePreinsertedEvalKeys bool) ([][]byte, error) {
 	r := unionComparatorRequest(req, comp, usePreinsertedEvalKeys)
 	return ChunkedFuseEncryptedPayloadCKKSWithContext(ctx, r)
+}
+
+func chunkedEncryptedInputUnionComparatorWithContext(ctx *CryptoContext, req FullFuseRequest, comp UnionComparator, usePreinsertedEvalKeys bool) ([][]byte, error) {
+	r := unionComparatorRequest(req, comp, usePreinsertedEvalKeys)
+	return ChunkedFuseEncryptedInputsCKKSWithContext(ctx, r)
 }
 
 // FullFusePayloadCKKSWithEvalSumRefs streams per-index eval-sum shares into a

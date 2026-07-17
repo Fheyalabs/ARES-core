@@ -239,6 +239,18 @@ int EncryptSerializedPayloadChunk(CryptoContextHandle ctx, PublicKeyHandle pk,
     const uint8_t* payload, size_t payload_len,
     size_t bit_offset, size_t chunk_size,
     uint8_t** out_data, size_t* out_len);
+// Encrypt one scalar repeated across the context batch and return its serialized
+// CKKS ciphertext. The caller frees out_data with free(3).
+int EncryptSerializedRepeatedScalarCKKS(CryptoContextHandle ctx, PublicKeyHandle pk,
+    double value, uint8_t** out_data, size_t* out_len);
+// Derive Enc((origin_first-local_first)^2 + (origin_second-local_second)^2)
+// from two serialized repeated-scalar ciphertexts. The context must already
+// contain the matching eval-mult key. The caller frees out_data with free(3).
+int ComputeSerializedSquaredDistanceCKKS(CryptoContextHandle ctx,
+    const uint8_t* origin_first, size_t origin_first_len,
+    const uint8_t* origin_second, size_t origin_second_len,
+    double local_first, double local_second,
+    uint8_t** out_data, size_t* out_len);
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx,
     uint8_t* data, size_t len);
@@ -376,6 +388,51 @@ int ARESChunkedFuseEncryptedPayloadCKKS(
     size_t eval_mult_key_len,
     const uint8_t* eval_sum_key,
     size_t eval_sum_key_len,
+    const uint8_t* candidate_payload_ct_blob,
+    size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens,
+    int candidate_payload_ct_count,
+    int payload_slot_count,
+    uint8_t** out_cts,
+    size_t* out_cts_len,
+    size_t* out_chunk_lens,
+    int* out_n_chunks,
+    char* err,
+    size_t err_len
+);
+
+// ARESChunkedFuseEncryptedInputsCKKS accepts ciphertext-only candidate inputs:
+// encrypted profile vectors, one encrypted squared distance per candidate, and
+// encrypted payload chunks. It deliberately has no coordinate-array arguments.
+int ARESChunkedFuseEncryptedInputsCKKS(
+    CryptoContextHandle ctx_handle,
+    uint32_t ring_dim,
+    double scaling_factor,
+    uint32_t depth,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob,
+    const size_t* candidate_ct_lens,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    double alpha,
+    double beta,
+    double gamma,
+    const char* comparator,
+    int comparator_degree,
+    double comparator_gain,
+    double comparator_input_scale,
+    double comparator_bound,
+    const char* selector_schedule,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const uint8_t* candidate_distance_ct_blob,
+    size_t candidate_distance_ct_blob_len,
+    const size_t* candidate_distance_ct_lens,
+    int candidate_distance_ct_count,
     const uint8_t* candidate_payload_ct_blob,
     size_t candidate_payload_ct_blob_len,
     const size_t* candidate_payload_ct_lens,
