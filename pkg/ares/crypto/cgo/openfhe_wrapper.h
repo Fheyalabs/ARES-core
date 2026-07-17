@@ -230,6 +230,15 @@ int GetOpenFHEVersion(char* out_buf, int out_cap);
 #define ARES_ERR_CTX_MISMATCH (-200)
 
 // Serialization
+// Encrypt one fixed-size, MSB-first bit chunk of a serialized payload and return
+// its ciphertext serialization. chunk_size must equal the context batch size;
+// bit_offset and chunk_size are measured in bits. The caller frees out_data with
+// free(3). This keeps payload bit packing in the native bridge so clients cannot
+// diverge on byte ordering.
+int EncryptSerializedPayloadChunk(CryptoContextHandle ctx, PublicKeyHandle pk,
+    const uint8_t* payload, size_t payload_len,
+    size_t bit_offset, size_t chunk_size,
+    uint8_t** out_data, size_t* out_len);
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx,
     uint8_t* data, size_t len);

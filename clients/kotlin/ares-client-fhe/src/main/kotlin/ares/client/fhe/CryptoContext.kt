@@ -1,7 +1,7 @@
 package ares.client.fhe
 
-class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoCloseable {
-    internal val raw: Long = NativeFHE.createContext(ringDim, scalingFactor, depth)
+class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: Int = 0) : AutoCloseable {
+    internal val raw: Long = NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize)
         .also { if (it == 0L) throw FHEException("context creation failed") }
     private val state = ContextState(raw)
     @Suppress("unused")
@@ -29,6 +29,18 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoClose
     fun encrypt(values: DoubleArray, under: PublicKey): Ciphertext {
         val h = NativeFHE.encrypt(raw, under.raw, values)
         if (h == 0L) throw FHEException("encrypt failed"); return Ciphertext(h)
+    }
+
+    /** Encrypt MSB-first fixed-size payload chunks with bridge-owned bit packing. */
+    fun encryptPayloadChunks(payload: ByteArray, under: PublicKey, chunkSize: Int): List<ByteArray> {
+        require(payload.isNotEmpty()) { "payload must not be empty" }
+        require(chunkSize > 0) { "chunk size must be positive" }
+        val payloadBits = Math.multiplyExact(payload.size, 8)
+        require(payloadBits % chunkSize == 0) { "payload must divide into whole chunks" }
+        return List(payloadBits / chunkSize) { index ->
+            NativeFHE.encryptSerializedPayloadChunk(raw, under.raw, payload, index * chunkSize, chunkSize)
+                ?: throw FHEException("payload chunk encryption failed")
+        }
     }
     /** Every party uses MultiDecMain (matches ThresholdSmokeCKKS). */
     fun partialDecrypt(ct: Ciphertext, sk: SecretKeyShare): Ciphertext {
