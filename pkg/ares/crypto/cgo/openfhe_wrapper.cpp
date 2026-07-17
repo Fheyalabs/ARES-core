@@ -19,6 +19,7 @@
 #include <memory>
 #include <sstream>
 #include <stdlib.h>
+#include <streambuf>
 #include <cstdio>
 #include <stdexcept>
 #include <string.h>
@@ -69,6 +70,21 @@ static void logHeap(const char* label) {
 // --- end heap instrumentation ---
 
 using namespace lbcrypto;
+
+class MemoryInputBuffer : public std::streambuf {
+public:
+    MemoryInputBuffer(const uint8_t* data, size_t len) {
+        char* begin = const_cast<char*>(reinterpret_cast<const char*>(data));
+        setg(begin, begin, begin + len);
+    }
+};
+
+template <typename T>
+static void deserialize_from_memory(T& out, const uint8_t* data, size_t len) {
+    MemoryInputBuffer buffer(data, len);
+    std::istream input(&buffer);
+    Serial::Deserialize(out, input, SerType::BINARY);
+}
 
 struct ARESCryptoContext {
     CryptoContext<DCRTPoly> cc;
@@ -397,6 +413,17 @@ static Ciphertext<DCRTPoly> broadcast_first_slot(const CryptoContext<DCRTPoly>& 
     for (int shift = 1; shift < slot_count; shift *= 2) {
         auto rotated = cc->EvalRotate(out, -shift);
         out = cc->EvalAdd(out, rotated);
+    }
+    return out;
+}
+
+static Ciphertext<DCRTPoly> broadcast_first_slot_bfv(const CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct, int slot_count, uint32_t batch_size) {
+    std::vector<int64_t> first_only(batch_size, 0);
+    first_only[0] = 1;
+    auto out = cc->EvalMult(ct, cc->MakePackedPlaintext(first_only));
+    for (int shift = 1; shift < slot_count; shift *= 2) {
+        out = cc->EvalAdd(out, cc->EvalRotate(out, -shift));
     }
     return out;
 }
@@ -1777,6 +1804,78 @@ int ComputeSerializedSquaredDistanceCKKS(CryptoContextHandle ctx,
         return 1;
     }
 }
+
+int EncryptSerializedRepeatedScalarBFV(CryptoContextHandle ctx, PublicKeyHandle pk,
+    int64_t value, uint8_t** out_data, size_t* out_len) {
+    if (out_data == nullptr || out_len == nullptr) {
+        return 1;
+    }
+    *out_data = nullptr;
+    *out_len = 0;
+
+    std::vector<int64_t> values;
+    try {
+        auto* c = as_ctx(ctx);
+        auto* p = as_pk(pk);
+        if (c->batch_size == 0 || p->pk->GetCryptoContext() != c->cc) {
+            return 1;
+        }
+        values.assign(c->batch_size, value);
+        auto plaintext = c->cc->MakePackedPlaintext(values);
+        auto ciphertext = c->cc->Encrypt(p->pk, plaintext);
+        const int rc = serialize_object(ciphertext, out_data, out_len);
+        std::fill(values.begin(), values.end(), 0);
+        return rc;
+    } catch (...) {
+        std::fill(values.begin(), values.end(), 0);
+        return 1;
+    }
+}
+
+int ComputeSerializedSquaredDistanceBFV(CryptoContextHandle ctx,
+    const uint8_t* origin_first, size_t origin_first_len,
+    const uint8_t* origin_second, size_t origin_second_len,
+    int64_t local_first, int64_t local_second,
+    uint8_t** out_data, size_t* out_len) {
+    if (out_data == nullptr || out_len == nullptr) {
+        return 1;
+    }
+    *out_data = nullptr;
+    *out_len = 0;
+
+    std::vector<int64_t> local_values;
+    try {
+        auto* c = as_ctx(ctx);
+        if (origin_first == nullptr || origin_second == nullptr || origin_first_len == 0 ||
+            origin_second_len == 0 || c->batch_size == 0) {
+            return 1;
+        }
+        Ciphertext<DCRTPoly> first;
+        Ciphertext<DCRTPoly> second;
+        deserialize_from_memory(first, origin_first, origin_first_len);
+        deserialize_from_memory(second, origin_second, origin_second_len);
+        if (first == nullptr || second == nullptr || first->GetCryptoContext() != c->cc ||
+            second->GetCryptoContext() != c->cc || first->GetKeyTag() != second->GetKeyTag()) {
+            return 1;
+        }
+
+        local_values.assign(c->batch_size, local_first);
+        auto local_first_pt = c->cc->MakePackedPlaintext(local_values);
+        std::fill(local_values.begin(), local_values.end(), local_second);
+        auto local_second_pt = c->cc->MakePackedPlaintext(local_values);
+        auto first_delta = c->cc->EvalSub(first, local_first_pt);
+        auto second_delta = c->cc->EvalSub(second, local_second_pt);
+        auto first_square = c->cc->EvalMult(first_delta, first_delta);
+        auto second_square = c->cc->EvalMult(second_delta, second_delta);
+        auto distance = c->cc->EvalAdd(first_square, second_square);
+        const int rc = serialize_object(distance, out_data, out_len);
+        std::fill(local_values.begin(), local_values.end(), 0);
+        return rc;
+    } catch (...) {
+        std::fill(local_values.begin(), local_values.end(), 0);
+        return 1;
+    }
+}
 int GetOpenFHEVersion(char* out_buf, int out_cap) {
     try {
         if (out_buf == nullptr || out_cap <= 0) {
@@ -2885,6 +2984,315 @@ int ARESChunkedFuseEncryptedInputsCKKS(
         candidate_payload_ct_blob, candidate_payload_ct_blob_len, candidate_payload_ct_lens,
         candidate_payload_ct_count, payload_slot_count, out_cts, out_cts_len, out_chunk_lens,
         out_n_chunks, err, err_len);
+}
+
+static Plaintext bfv_repeated_plaintext(const CryptoContext<DCRTPoly>& cc,
+    int64_t value, uint32_t batch_size) {
+    return cc->MakePackedPlaintext(std::vector<int64_t>(batch_size, value));
+}
+
+struct BFVRepeatedPlaintextCache {
+    BFVRepeatedPlaintextCache(const CryptoContext<DCRTPoly>& context, uint32_t batch)
+        : cc(context), batch_size(batch) {}
+
+    Plaintext get(int64_t value) {
+        auto existing = repeated.find(value);
+        if (existing != repeated.end()) {
+            return existing->second;
+        }
+        auto inserted = repeated.emplace(
+            value, cc->MakePackedPlaintext(std::vector<int64_t>(batch_size, value)));
+        return inserted.first->second;
+    }
+
+    const CryptoContext<DCRTPoly>& cc;
+    uint32_t batch_size;
+    std::map<int64_t, Plaintext> repeated;
+};
+
+static Ciphertext<DCRTPoly> bfv_encrypted_constant_cached(
+    const CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& reference,
+    int64_t value,
+    BFVRepeatedPlaintextCache& cache) {
+    auto zero = cc->EvalSub(reference, reference);
+    auto plaintext = cache.get(value);
+    return cc->EvalAdd(zero, plaintext);
+}
+
+static Ciphertext<DCRTPoly> bfv_mul_plain(const CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct, int64_t value, uint32_t batch_size) {
+    return cc->EvalMult(ct, bfv_repeated_plaintext(cc, value, batch_size));
+}
+
+static Ciphertext<DCRTPoly> bfv_mul_plain_cached(const CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& ct, int64_t value, BFVRepeatedPlaintextCache& cache) {
+    auto plaintext = cache.get(value);
+    return cc->EvalMult(ct, plaintext);
+}
+
+static bool bfv_low_rss_mode() {
+    const char* raw = getenv("ARES_BFV_PS_LOW_RSS");
+    return raw == nullptr || raw[0] == '\0' || !(raw[0] == '0' && raw[1] == '\0');
+}
+
+static int bfv_ps_baby_steps(int degree) {
+    const int fallback = std::max(2, static_cast<int>(std::sqrt(static_cast<double>(degree))) + 1);
+    const char* raw = getenv("ARES_BFV_PS_BABY_STEPS");
+    if (raw == nullptr || raw[0] == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    long parsed = std::strtol(raw, &end, 10);
+    if (end == raw || parsed < 2 || parsed > degree + 1) {
+        return fallback;
+    }
+    return static_cast<int>(parsed);
+}
+
+static std::vector<Ciphertext<DCRTPoly>> bfv_power_of_two_cache(
+    const CryptoContext<DCRTPoly>& cc, const Ciphertext<DCRTPoly>& base, int max_exp) {
+    std::vector<Ciphertext<DCRTPoly>> powers;
+    if (max_exp <= 0) {
+        return powers;
+    }
+    powers.push_back(base);
+    for (int covered = 1; covered * 2 <= max_exp; covered *= 2) {
+        powers.push_back(cc->EvalMult(powers.back(), powers.back()));
+    }
+    return powers;
+}
+
+static Ciphertext<DCRTPoly> bfv_power_from_binary(const CryptoContext<DCRTPoly>& cc,
+    const std::vector<Ciphertext<DCRTPoly>>& powers, int exponent,
+    const Ciphertext<DCRTPoly>& one) {
+    if (exponent == 0) {
+        return one;
+    }
+    std::vector<Ciphertext<DCRTPoly>> factors;
+    for (int bit = 0; exponent > 0; exponent >>= 1, bit++) {
+        if ((exponent & 1) != 0) {
+            if (bit >= static_cast<int>(powers.size())) {
+                throw std::runtime_error("BFV power cache is too small");
+            }
+            factors.push_back(powers[static_cast<size_t>(bit)]);
+        }
+    }
+    return product_tree(cc, std::move(factors));
+}
+
+static Ciphertext<DCRTPoly> bfv_ps_eval(const CryptoContext<DCRTPoly>& cc,
+    const Ciphertext<DCRTPoly>& x, const std::vector<int64_t>& coefficients,
+    BFVRepeatedPlaintextCache& cache) {
+    if (coefficients.empty()) {
+        throw std::runtime_error("BFV step polynomial is empty");
+    }
+    const int degree = static_cast<int>(coefficients.size()) - 1;
+    if (degree == 0) {
+        return bfv_encrypted_constant_cached(cc, x, coefficients[0], cache);
+    }
+    const int k = bfv_ps_baby_steps(degree);
+    const int blocks = (degree + k) / k;
+
+    std::vector<Ciphertext<DCRTPoly>> baby(static_cast<size_t>(k));
+    baby[0] = bfv_encrypted_constant_cached(cc, x, 1, cache);
+    baby[1] = x;
+    for (int i = 2; i < k; i++) {
+        const int left = i / 2;
+        baby[static_cast<size_t>(i)] = cc->EvalMult(
+            baby[static_cast<size_t>(left)], baby[static_cast<size_t>(i - left)]);
+    }
+    const auto xk = cc->EvalMult(baby[static_cast<size_t>(k / 2)],
+        baby[static_cast<size_t>(k - k / 2)]);
+
+    std::vector<Ciphertext<DCRTPoly>> giants;
+    std::vector<Ciphertext<DCRTPoly>> giant_powers;
+    const bool low_rss = bfv_low_rss_mode();
+    if (low_rss) {
+        giant_powers = bfv_power_of_two_cache(cc, xk, blocks - 1);
+    } else {
+        giants.resize(static_cast<size_t>(blocks));
+        giants[0] = baby[0];
+        if (blocks > 1) {
+            giants[1] = xk;
+        }
+        for (int i = 2; i < blocks; i++) {
+            const int left = i / 2;
+            giants[static_cast<size_t>(i)] = cc->EvalMult(
+                giants[static_cast<size_t>(left)], giants[static_cast<size_t>(i - left)]);
+        }
+    }
+
+    Ciphertext<DCRTPoly> result;
+    bool have_result = false;
+    for (int block_index = 0; block_index < blocks; block_index++) {
+        Ciphertext<DCRTPoly> block;
+        bool have_block = false;
+        for (int i = 0; i < k; i++) {
+            const int coefficient_index = block_index * k + i;
+            if (coefficient_index > degree) {
+                break;
+            }
+            const int64_t coefficient = coefficients[static_cast<size_t>(coefficient_index)];
+            if (coefficient == 0) {
+                continue;
+            }
+            // Step-polynomial coefficients are high-cardinality. Keeping them
+            // all in the plaintext cache retains a large working set, so each
+            // coefficient plaintext is transient.
+            auto term = bfv_mul_plain(cc, baby[static_cast<size_t>(i)], coefficient, cache.batch_size);
+            block = have_block ? cc->EvalAdd(block, term) : term;
+            have_block = true;
+        }
+        if (!have_block) {
+            continue;
+        }
+        auto weighted = block;
+        if (block_index != 0) {
+            const auto factor = low_rss
+                ? bfv_power_from_binary(cc, giant_powers, block_index, baby[0])
+                : giants[static_cast<size_t>(block_index)];
+            weighted = cc->EvalMult(factor, block);
+        }
+        result = have_result ? cc->EvalAdd(result, weighted) : weighted;
+        have_result = true;
+    }
+    if (!have_result) {
+        return bfv_encrypted_constant_cached(cc, x, 0, cache);
+    }
+    return result;
+}
+
+static void clear_ciphertexts(std::vector<Ciphertext<DCRTPoly>>& ciphertexts) {
+    for (auto& ciphertext : ciphertexts) {
+        ciphertext = nullptr;
+    }
+    std::vector<Ciphertext<DCRTPoly>>().swap(ciphertexts);
+}
+
+int ARESBlindFusePayloadBFV(
+    uint32_t ring_dim, uint32_t multiplicative_depth, uint64_t plaintext_modulus,
+    uint32_t batch_size, const uint8_t* eval_mult_key, size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key, size_t eval_sum_key_len, const uint8_t* initiator_ct,
+    size_t initiator_ct_len, const uint8_t* const* candidate_profile_cts,
+    const size_t* candidate_profile_ct_lens, const uint8_t* const* candidate_distance_cts,
+    const size_t* candidate_distance_ct_lens, const uint8_t* const* candidate_payload_cts,
+    const size_t* candidate_payload_ct_lens, const int* candidate_brownies,
+    int n_candidates, int profile_dim, int64_t profile_weight, int64_t distance_weight,
+    int64_t brownie_weight, int package_bytes, const int64_t* step_coeffs,
+    int n_step_coeffs, uint8_t** out_ct, size_t* out_ct_len, char* err, size_t err_len) {
+    try {
+        if (eval_mult_key == nullptr || eval_sum_key == nullptr || initiator_ct == nullptr ||
+            candidate_profile_cts == nullptr || candidate_profile_ct_lens == nullptr ||
+            candidate_distance_cts == nullptr || candidate_distance_ct_lens == nullptr ||
+            candidate_payload_cts == nullptr || candidate_payload_ct_lens == nullptr ||
+            candidate_brownies == nullptr || step_coeffs == nullptr || out_ct == nullptr ||
+            out_ct_len == nullptr) {
+            set_error(err, err_len, "null pointer passed to ARESBlindFusePayloadBFV");
+            return 1;
+        }
+        if (eval_mult_key_len == 0 || eval_sum_key_len == 0 || initiator_ct_len == 0 ||
+            n_candidates < 2 || profile_dim <= 0 || package_bytes <= 0 ||
+            n_step_coeffs <= 0 || package_bytes > static_cast<int>(batch_size)) {
+            set_error(err, err_len, "invalid BFV blind fusion shape");
+            return 1;
+        }
+
+        auto cc = make_bfv_context(ring_dim, multiplicative_depth, plaintext_modulus, batch_size);
+        EvalKey<DCRTPoly> mult_key;
+        deserialize_from_memory(mult_key, eval_mult_key, eval_mult_key_len);
+        cc->InsertEvalMultKey({mult_key});
+        mult_key = nullptr;
+        std::map<usint, EvalKey<DCRTPoly>> sum_keys;
+        deserialize_from_memory(sum_keys, eval_sum_key, eval_sum_key_len);
+        cc->InsertEvalSumKey(std::make_shared<std::map<usint, EvalKey<DCRTPoly>>>(sum_keys));
+        sum_keys.clear();
+
+        Ciphertext<DCRTPoly> initiator;
+        deserialize_from_memory(initiator, initiator_ct, initiator_ct_len);
+        if (initiator == nullptr || initiator->GetCryptoContext() != cc) {
+            set_error(err, err_len, "initiator ciphertext context does not match BFV scorer context");
+            return 1;
+        }
+        const auto collective_key_tag = initiator->GetKeyTag();
+        std::vector<int64_t> coefficients(step_coeffs, step_coeffs + n_step_coeffs);
+        BFVRepeatedPlaintextCache plaintexts(cc, batch_size);
+
+        std::vector<Ciphertext<DCRTPoly>> scores;
+        scores.reserve(static_cast<size_t>(n_candidates));
+        for (int i = 0; i < n_candidates; i++) {
+            if (candidate_profile_cts[i] == nullptr || candidate_profile_ct_lens[i] == 0 ||
+                candidate_distance_cts[i] == nullptr || candidate_distance_ct_lens[i] == 0 ||
+                candidate_payload_cts[i] == nullptr || candidate_payload_ct_lens[i] == 0) {
+                set_error(err, err_len, "empty BFV candidate ciphertext");
+                return 1;
+            }
+            Ciphertext<DCRTPoly> profile;
+            Ciphertext<DCRTPoly> distance;
+            deserialize_from_memory(profile, candidate_profile_cts[i], candidate_profile_ct_lens[i]);
+            deserialize_from_memory(distance, candidate_distance_cts[i], candidate_distance_ct_lens[i]);
+            if (profile == nullptr || distance == nullptr || profile->GetCryptoContext() != cc ||
+                distance->GetCryptoContext() != cc || profile->GetKeyTag() != collective_key_tag ||
+                distance->GetKeyTag() != collective_key_tag) {
+                set_error(err, err_len, "BFV candidate ciphertext context or key tag mismatch");
+                return 1;
+            }
+            auto product = cc->EvalMult(initiator, profile);
+            auto folded = fold_dot_to_first_slot(cc, product, profile_dim);
+            auto score = broadcast_first_slot_bfv(cc, folded, package_bytes, batch_size);
+            if (profile_weight != 1) {
+                score = bfv_mul_plain_cached(cc, score, profile_weight, plaintexts);
+            }
+            if (distance_weight != 0) {
+                auto weighted_distance = bfv_mul_plain_cached(cc, distance, distance_weight, plaintexts);
+                score = cc->EvalAdd(score, weighted_distance);
+            }
+            const int64_t brownie_offset = brownie_weight * static_cast<int64_t>(candidate_brownies[i]);
+            if (brownie_offset != 0) {
+                auto brownie_plaintext = plaintexts.get(brownie_offset);
+                score = cc->EvalAdd(score, brownie_plaintext);
+            }
+            scores.push_back(score);
+        }
+        initiator = nullptr;
+
+        Ciphertext<DCRTPoly> fused;
+        bool have_fused = false;
+        for (int i = 0; i < n_candidates; i++) {
+            std::vector<Ciphertext<DCRTPoly>> factors;
+            factors.reserve(static_cast<size_t>(n_candidates - 1));
+            for (int j = 0; j < n_candidates; j++) {
+                if (i == j) {
+                    continue;
+                }
+                auto difference = cc->EvalSub(scores[static_cast<size_t>(i)], scores[static_cast<size_t>(j)]);
+                factors.push_back(bfv_ps_eval(cc, difference, coefficients, plaintexts));
+            }
+            auto mask = product_tree(cc, std::move(factors));
+            Ciphertext<DCRTPoly> payload;
+            deserialize_from_memory(payload, candidate_payload_cts[i], candidate_payload_ct_lens[i]);
+            if (payload == nullptr || payload->GetCryptoContext() != cc ||
+                payload->GetKeyTag() != collective_key_tag) {
+                set_error(err, err_len, "BFV payload ciphertext context or key tag mismatch");
+                return 1;
+            }
+            auto weighted_payload = cc->EvalMult(mask, payload);
+            fused = have_fused ? cc->EvalAdd(fused, weighted_payload) : weighted_payload;
+            have_fused = true;
+        }
+        clear_ciphertexts(scores);
+        if (!have_fused) {
+            set_error(err, err_len, "BFV blind fusion produced no payload");
+            return 1;
+        }
+        return serialize_object(fused, out_ct, out_ct_len);
+    } catch (const std::exception& ex) {
+        set_error(err, err_len, ex.what());
+        return 1;
+    } catch (...) {
+        set_error(err, err_len, "unknown BFV blind fusion failure");
+        return 1;
+    }
 }
 
 // ── Scheme-switching argmin (CKKS→FHEW LUT, depth-independent, single-key only) ──
