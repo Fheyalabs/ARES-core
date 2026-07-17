@@ -10,7 +10,7 @@ import cgo "github.com/Fheyalabs/ares-core/pkg/ares/crypto/cgo"
 // context and reuses it across comparator lanes. The default helper is serial;
 // callers should measure memory before opting into native comparator fanout.
 func Score(params cgo.ContractParams, request CiphertextOnlyRequest) ([][][]byte, error) {
-	fuseRequest, err := buildFullFuseRequest(request)
+	fuseRequest, err := buildEncryptedInputFuseRequest(request)
 	if err != nil {
 		return nil, err
 	}
@@ -18,11 +18,11 @@ func Score(params cgo.ContractParams, request CiphertextOnlyRequest) ([][][]byte
 	return cgo.ChunkedUnionScoreEncryptedInputsCKKS(params, fuseRequest, comparators)
 }
 
-func buildFullFuseRequest(request CiphertextOnlyRequest) (cgo.FullFuseRequest, error) {
+func buildEncryptedInputFuseRequest(request CiphertextOnlyRequest) (cgo.EncryptedInputFuseRequest, error) {
 	if err := request.Validate(); err != nil {
-		return cgo.FullFuseRequest{}, err
+		return cgo.EncryptedInputFuseRequest{}, err
 	}
-	return cgo.FullFuseRequest{
+	return cgo.EncryptedInputFuseRequest{
 		InitiatorCiphertext:          request.InitiatorProfileCiphertext,
 		CandidateCiphertexts:         request.CandidateProfileCiphertexts,
 		CandidateDistanceCiphertexts: request.CandidateDistanceCiphertexts,

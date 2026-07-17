@@ -251,6 +251,15 @@ int ComputeSerializedSquaredDistanceCKKS(CryptoContextHandle ctx,
     const uint8_t* origin_second, size_t origin_second_len,
     double local_first, double local_second,
     uint8_t** out_data, size_t* out_len);
+// BFV counterparts use exact packed integers. The context must already contain
+// the matching eval-mult key. The caller frees out_data with free(3).
+int EncryptSerializedRepeatedScalarBFV(CryptoContextHandle ctx, PublicKeyHandle pk,
+    int64_t value, uint8_t** out_data, size_t* out_len);
+int ComputeSerializedSquaredDistanceBFV(CryptoContextHandle ctx,
+    const uint8_t* origin_first, size_t origin_first_len,
+    const uint8_t* origin_second, size_t origin_second_len,
+    int64_t local_first, int64_t local_second,
+    uint8_t** out_data, size_t* out_len);
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx,
     uint8_t* data, size_t len);
@@ -442,6 +451,42 @@ int ARESChunkedFuseEncryptedInputsCKKS(
     size_t* out_cts_len,
     size_t* out_chunk_lens,
     int* out_n_chunks,
+    char* err,
+    size_t err_len
+);
+
+// ARESBlindFusePayloadBFV evaluates the full BFV score from encrypted profile
+// vectors and client-derived encrypted distances, applies the supplied exact
+// step polynomial, and returns only a fused encrypted payload. It never
+// decrypts candidate scores or accepts source coordinates.
+int ARESBlindFusePayloadBFV(
+    uint32_t ring_dim,
+    uint32_t multiplicative_depth,
+    uint64_t plaintext_modulus,
+    uint32_t batch_size,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* const* candidate_profile_cts,
+    const size_t* candidate_profile_ct_lens,
+    const uint8_t* const* candidate_distance_cts,
+    const size_t* candidate_distance_ct_lens,
+    const uint8_t* const* candidate_payload_cts,
+    const size_t* candidate_payload_ct_lens,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    int64_t profile_weight,
+    int64_t distance_weight,
+    int64_t brownie_weight,
+    int package_bytes,
+    const int64_t* step_coeffs,
+    int n_step_coeffs,
+    uint8_t** out_ct,
+    size_t* out_ct_len,
     char* err,
     size_t err_len
 );

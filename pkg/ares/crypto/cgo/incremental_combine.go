@@ -72,6 +72,25 @@ func CombineEvalKeyRound1PerIndexLazy(params ContractParams, publicKeys [][]byte
 	return combineEvalKeyRound1PerIndexLazy(ctx, publicKeys, evalMultShares, evalSumShareRefsByParty, resolve)
 }
 
+// BFVCombineEvalKeyRound1PerIndexLazy is the BFV variant of
+// CombineEvalKeyRound1PerIndexLazy. It resolves each per-index eval-sum key
+// artifact only when needed, keeping the Go heap and native live set bounded to
+// the combined map plus one party/index share.
+func BFVCombineEvalKeyRound1PerIndexLazy(params BFVContractParams, publicKeys [][]byte, evalMultShares [][]byte, evalSumShareRefsByParty [][]IndexedEvalSumKeyRef, resolve EvalSumKeyResolver) (EvalKeyRound1Combined, error) {
+	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumShareRefsByParty) {
+		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-mult/eval-sum party counts must match and be non-empty")
+	}
+	if resolve == nil {
+		return EvalKeyRound1Combined{}, fmt.Errorf("eval-sum key resolver is required")
+	}
+	ctx, err := createBFVContractContext(params)
+	if err != nil {
+		return EvalKeyRound1Combined{}, err
+	}
+	defer C.FreeCryptoContext(ctx)
+	return combineEvalKeyRound1PerIndexLazy(ctx, publicKeys, evalMultShares, evalSumShareRefsByParty, resolve)
+}
+
 func combineEvalKeyRound1PerIndex(ctx C.CryptoContextHandle, publicKeys [][]byte, evalMultShares [][]byte, evalSumSharesByParty [][]IndexedEvalSumKey) (EvalKeyRound1Combined, error) {
 	if len(publicKeys) == 0 || len(publicKeys) != len(evalMultShares) || len(publicKeys) != len(evalSumSharesByParty) {
 		return EvalKeyRound1Combined{}, fmt.Errorf("public/eval-mult/eval-sum party counts must match and be non-empty")
@@ -161,6 +180,58 @@ func combineEvalSumIncremental(ctx C.CryptoContextHandle, pkBytes, shareBytes []
 		}
 		rc := C.EvalSumCombineFold(ctx, accum, pk, share)
 		C.FreeRotKey(share) // freed immediately -> peak bounded to accumulator + one share
+		C.FreePublicKey(pk)
+		if rc != 0 {
+			return nil, fmt.Errorf("eval-sum combine fold %d failed", i)
+		}
+	}
+	return serializeRotKey(accum)
+}
+
+// combineEvalSumIncrementalLazy resolves each serialized share immediately
+// before it is folded into the native accumulator. The resolver boundary keeps
+// large artifacts out of a retained Go slice and bounds live native material to
+// the accumulator plus the current share.
+func combineEvalSumIncrementalLazy(ctx C.CryptoContextHandle, pkBytes [][]byte, shareRefs []string, resolve EvalSumKeyResolver) ([]byte, error) {
+	if len(pkBytes) != len(shareRefs) || len(shareRefs) == 0 {
+		return nil, fmt.Errorf("public-key and eval-sum share counts must match and be non-empty")
+	}
+	if resolve == nil {
+		return nil, fmt.Errorf("eval-sum key resolver is required")
+	}
+	seedBytes, err := resolve(shareRefs[0])
+	if err != nil {
+		return nil, fmt.Errorf("resolve eval-sum share 0: %w", err)
+	}
+	seed, err := deserializeRotKey(ctx, seedBytes)
+	seedBytes = nil
+	if err != nil {
+		return nil, err
+	}
+	accum := C.EvalSumCombineStart(seed)
+	C.FreeRotKey(seed)
+	if accum == nil {
+		return nil, fmt.Errorf("eval-sum combine start failed")
+	}
+	defer C.FreeRotKey(accum)
+	for i := 1; i < len(shareRefs); i++ {
+		pk, err := deserializePublicKey(ctx, pkBytes[i])
+		if err != nil {
+			return nil, err
+		}
+		shareBytes, err := resolve(shareRefs[i])
+		if err != nil {
+			C.FreePublicKey(pk)
+			return nil, fmt.Errorf("resolve eval-sum share %d: %w", i, err)
+		}
+		share, err := deserializeRotKey(ctx, shareBytes)
+		shareBytes = nil
+		if err != nil {
+			C.FreePublicKey(pk)
+			return nil, err
+		}
+		rc := C.EvalSumCombineFold(ctx, accum, pk, share)
+		C.FreeRotKey(share)
 		C.FreePublicKey(pk)
 		if rc != 0 {
 			return nil, fmt.Errorf("eval-sum combine fold %d failed", i)

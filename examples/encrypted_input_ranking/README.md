@@ -18,10 +18,10 @@ The caller submits only:
 
 `CiphertextOnlyRequest` deliberately exposes **no plaintext payload or location
 fields**. The OpenFHE adapter maps its encrypted inputs to
-`cgo.FullFuseRequest.CandidatePayloadCiphertexts` and
-`cgo.FullFuseRequest.CandidateDistanceCiphertexts`; it leaves
-`CandidatePackages`, `CandidateLatQ`, `CandidateLonQ`, `InitiatorLatQ`, and
-`InitiatorLonQ` empty or zero. Decryption shares remain a separate threshold
+`cgo.EncryptedInputFuseRequest.CandidatePayloadCiphertexts` and
+`cgo.EncryptedInputFuseRequest.CandidateDistanceCiphertexts`. The target type
+has no package or coordinate fields, so a caller cannot represent a mixed
+plaintext/ciphertext request. Decryption shares remain a separate threshold
 protocol step.
 
 The client derives each distance ciphertext locally from encrypted origin
@@ -77,7 +77,7 @@ separation without OpenFHE:
 go test ./examples/encrypted_input_ranking
 ```
 
-The build-tagged smoke test checks the real `FullFuseRequest` mapping without
+The build-tagged smoke test checks the real `EncryptedInputFuseRequest` mapping without
 performing key generation or homomorphic evaluation:
 
 ```bash

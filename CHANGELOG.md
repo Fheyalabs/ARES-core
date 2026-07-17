@@ -12,17 +12,22 @@ versions may include breaking changes).
 ### Added
 
 - **Ciphertext-only CKKS inputs for chunked threshold scoring.**
-  `FullFuseRequest` now accepts candidate-major encrypted payload chunks and
-  encrypted squared-distance inputs. `ChunkedFuseEncryptedPayloadCKKS`,
-  `ChunkedFuseEncryptedInputsCKKS`, and their union-scoring variants reject
-  mixed plaintext/ciphertext requests, preserving a server path that never
-  receives a profile package or location scalar in plaintext. The eval-sum
-  reference variants retain the b-only key layout for memory-bounded sessions.
+  `EncryptedInputFuseRequest` carries candidate-major encrypted payload chunks
+  and encrypted squared-distance inputs. `ChunkedFuseEncryptedInputsCKKS` and
+  its union-scoring variants take this narrow type, which has no plaintext
+  package or location fields. The eval-sum reference variants retain the
+  b-only key layout for memory-bounded sessions.
 - **Client encryption helpers for the encrypted-input path.** Swift and
   Kotlin FHE clients expose payload-chunk encryption, repeated-scalar
   encryption, and local encrypted squared-distance construction. Their native
   bindings share the canonical bridge packing, so the two clients produce the
   same chunk layout.
+- **Ciphertext-only exact BFV fallback fusion.** `BFVBlindFuseRequest` accepts
+  encrypted profiles, client-derived encrypted squared distances, server-owned
+  brownie offsets, and encrypted payloads, then returns only one fused
+  threshold ciphertext. It has no coordinate or plaintext-score fields.
+  BFV eval-sum combines can resolve artifact-backed shares incrementally, and
+  the blind-fusion polynomial path defaults to its lower-residency power cache.
 - **Three-stage threshold keygen runner coverage.**
   `Phase0aThresholdKeygen` now explicitly consumes `keygen.eval_round1` in
   addition to `keygen.share` and `keygen.eval_share`, allowing applications to
@@ -31,8 +36,9 @@ versions may include breaking changes).
 - **Single-key evaluator-key transfer APIs.**
   `SingleKeyGenWithEvalKey`, `SingleKeyAuctionServerWithEvalKey`, and
   `SingleKeyAuctionServerEncWithEvalKey` support a separate evaluator context
-  without exposing the secret key. These APIs are additive; the legacy
-  single-key auction entry points remain supported.
+  without exposing the secret key. The legacy single-key auction entry points
+  now fail before evaluation with a migration error because their signatures
+  cannot carry this required public evaluation material.
 
 ## [0.9.12] — 2026-07-04
 

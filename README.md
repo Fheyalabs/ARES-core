@@ -45,9 +45,10 @@ v0.9.13 adds a ciphertext-only input path for threshold CKKS scoring. A
 client can encrypt fixed-size payload chunks under the collective public key,
 derive an encrypted squared distance from encrypted origin scalars and local
 coordinates, and submit only those ciphertexts. The evaluator receives
-`FullFuseRequest.CandidatePayloadCiphertexts` and
-`FullFuseRequest.CandidateDistanceCiphertexts`; it rejects mixed plaintext and
-ciphertext input modes.
+`EncryptedInputFuseRequest.CandidatePayloadCiphertexts` and
+`EncryptedInputFuseRequest.CandidateDistanceCiphertexts`. This separate type
+has no raw package or coordinate fields, so mixed plaintext/ciphertext input
+modes are rejected by the Go type boundary.
 
 Use `ChunkedFuseEncryptedPayloadCKKS` for encrypted payload-only requests or
 `ChunkedFuseEncryptedInputsCKKS` when the request also carries encrypted
@@ -55,6 +56,12 @@ distance inputs. The corresponding `ChunkedUnionScore...` helpers fan out
 comparators without decrypting intermediate inputs. The `WithEvalSumRefs`
 forms retain the per-index eval-sum-reference layout for memory-bounded
 threshold sessions.
+
+For an exact fallback with the same boundary, use
+`BlindFusePayloadBFVForContract`. It accepts collective-key ciphertexts,
+client-derived encrypted squared distances, server-owned public offsets, and
+encrypted payloads, then returns one threshold-decryptable payload ciphertext.
+The request type has no coordinate or plaintext-score fields.
 
 The generic threshold-keygen phase accepts the durable wire sequence
 `keygen.share`, `keygen.eval_round1`, and `keygen.eval_share`. Applications

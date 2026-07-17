@@ -6,6 +6,7 @@ package cgo_test
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/cgo"
@@ -35,7 +36,7 @@ func trueArgmin(prices []int, starNorms, distSqs []float64,
 	return best
 }
 
-func TestSingleKeyAuctionServerLegacyEntryPointRemainsUsable(t *testing.T) {
+func TestSingleKeyAuctionServerLegacyEntryPointRequiresEvalKey(t *testing.T) {
 	if err := cgo.SmokeCKKS(); err != nil {
 		t.Skipf("skip: %v", err)
 	}
@@ -45,24 +46,33 @@ func TestSingleKeyAuctionServerLegacyEntryPointRemainsUsable(t *testing.T) {
 		Depth:         5,
 		ScalingFactor: float64(uint64(1) << 50),
 	}
-	pk, sk, err := cgo.SingleKeyGen(params)
+	pk, _, err := cgo.SingleKeyGen(params)
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
-	masks, err := cgo.SingleKeyAuctionServer(
+	_, err = cgo.SingleKeyAuctionServer(
 		params, pk, []int{1000, 1100}, []float64{4.5, 4.5}, []float64{0, 0},
 		[][]byte{[]byte("nonce-a"), []byte("nonce-b")}, 800, 5000,
 		cgo.AuctionWeights{K: 100, WStar: 1, WDist: 0.001}, 1,
 	)
-	if err != nil {
-		t.Fatalf("legacy evaluator: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "evaluation key") {
+		t.Fatalf("legacy plaintext evaluator error = %v, want evaluation-key requirement", err)
 	}
-	_, winner, err := cgo.SingleKeyAuctionDecrypt(params, sk, masks)
+	encBid0, err := cgo.SingleKeyEncrypt(params, pk, 1000)
 	if err != nil {
-		t.Fatalf("legacy decrypt: %v", err)
+		t.Fatalf("encrypt bid 0: %v", err)
 	}
-	if winner != 0 {
-		t.Fatalf("legacy winner = %d, want 0", winner)
+	encBid1, err := cgo.SingleKeyEncrypt(params, pk, 1100)
+	if err != nil {
+		t.Fatalf("encrypt bid 1: %v", err)
+	}
+	_, err = cgo.SingleKeyAuctionServerEnc(
+		params, pk, [][]byte{encBid0, encBid1}, []float64{4.5, 4.5}, []float64{0, 0},
+		[][]byte{[]byte("nonce-a"), []byte("nonce-b")}, 800, 5000,
+		cgo.AuctionWeights{K: 100, WStar: 1, WDist: 0.001}, 1,
+	)
+	if err == nil || !strings.Contains(err.Error(), "evaluation key") {
+		t.Fatalf("legacy encrypted evaluator error = %v, want evaluation-key requirement", err)
 	}
 }
 

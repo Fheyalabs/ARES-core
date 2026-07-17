@@ -4,9 +4,12 @@
 
 package encrypted_input_ranking
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
-func TestBuildFullFuseRequestUsesCiphertextOnlyModes(t *testing.T) {
+func TestBuildEncryptedInputFuseRequestUsesCiphertextOnlyModes(t *testing.T) {
 	request := CiphertextOnlyRequest{
 		InitiatorProfileCiphertext: []byte("initiator-profile"),
 		CandidateProfileCiphertexts: [][]byte{
@@ -38,9 +41,9 @@ func TestBuildFullFuseRequestUsesCiphertextOnlyModes(t *testing.T) {
 		}},
 	}
 
-	got, err := buildFullFuseRequest(request)
+	got, err := buildEncryptedInputFuseRequest(request)
 	if err != nil {
-		t.Fatalf("buildFullFuseRequest() error = %v", err)
+		t.Fatalf("buildEncryptedInputFuseRequest() error = %v", err)
 	}
 	if len(got.InitiatorCiphertext) == 0 || len(got.CandidateCiphertexts) != 2 {
 		t.Fatalf("profile ciphertexts were not mapped: %+v", got)
@@ -48,11 +51,11 @@ func TestBuildFullFuseRequestUsesCiphertextOnlyModes(t *testing.T) {
 	if len(got.CandidateDistanceCiphertexts) != 2 || len(got.CandidatePayloadCiphertexts) != 2 {
 		t.Fatalf("encrypted distance/payload fields were not mapped: %+v", got)
 	}
-	if len(got.CandidatePackages) != 0 || len(got.CandidateLatQ) != 0 || len(got.CandidateLonQ) != 0 {
-		t.Fatalf("plaintext candidate fields must be empty: %+v", got)
-	}
-	if got.InitiatorLatQ != 0 || got.InitiatorLonQ != 0 {
-		t.Fatalf("plaintext initiator coordinates must remain zero: %+v", got)
+	requestType := reflect.TypeOf(got)
+	for _, forbidden := range []string{"CandidatePackages", "CandidateLatQ", "CandidateLonQ", "InitiatorLatQ", "InitiatorLonQ"} {
+		if _, present := requestType.FieldByName(forbidden); present {
+			t.Fatalf("encrypted input request exposes forbidden plaintext field %q", forbidden)
+		}
 	}
 	if got.CandidateBrownies[0] != 2 || got.CandidateBrownies[1] != -1 {
 		t.Fatalf("public score offsets = %v, want [2 -1]", got.CandidateBrownies)

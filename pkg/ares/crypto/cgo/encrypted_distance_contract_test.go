@@ -6,6 +6,7 @@ package cgo
 
 import (
 	"math"
+	"reflect"
 	"testing"
 )
 
@@ -111,7 +112,7 @@ func TestChunkedFuseEncryptedInputsUsesDistanceCiphertexts(t *testing.T) {
 		}
 	}
 
-	req := FullFuseRequest{
+	req := EncryptedInputFuseRequest{
 		InitiatorCiphertext:          initiator,
 		CandidateCiphertexts:         candidateCiphertexts,
 		CandidateDistanceCiphertexts: [][]byte{farDistance, nearDistance},
@@ -185,11 +186,11 @@ func TestChunkedFuseEncryptedInputsUsesDistanceCiphertexts(t *testing.T) {
 		}
 	}
 
-	mixedMode := req
-	mixedMode.CandidateLatQ = []int{0, 0}
-	mixedMode.CandidateLonQ = []int{0, 0}
-	if _, err := ChunkedFuseEncryptedInputsCKKS(params, mixedMode); err == nil {
-		t.Fatal("encrypted input fusion accepted raw coordinates alongside encrypted distances")
+	requestType := reflect.TypeOf(EncryptedInputFuseRequest{})
+	for _, forbidden := range []string{"InitiatorLatQ", "InitiatorLonQ", "CandidateLatQ", "CandidateLonQ", "CandidatePackages"} {
+		if _, present := requestType.FieldByName(forbidden); present {
+			t.Fatalf("encrypted input request exposes forbidden plaintext field %q", forbidden)
+		}
 	}
 	missingDistance := req
 	missingDistance.CandidateDistanceCiphertexts = missingDistance.CandidateDistanceCiphertexts[:1]
