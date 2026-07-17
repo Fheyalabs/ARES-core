@@ -1,14 +1,16 @@
-// SPDX-License-Identifier: Apache-2.0
 //go:build openfhe
+
+// SPDX-License-Identifier: Apache-2.0
+//
 package cgo_test
 
 import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"fmt"
+	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/cgo"
 	"os"
 	"testing"
-	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/cgo"
 )
 
 // --- full end-to-end with bidirectional identity signatures ---
@@ -35,7 +37,9 @@ import (
 // keys. Can't decrypt ciphertexts (no sk).
 
 func TestFullFlow_BidirectionalSigning(t *testing.T) {
-	if err := cgo.SmokeCKKS(); err != nil { t.Skipf("skip: %v", err) }
+	if err := cgo.SmokeCKKS(); err != nil {
+		t.Skipf("skip: %v", err)
+	}
 	os.Setenv("ARES_FHE_ALLOW_INSECURE", "0")
 	defer os.Setenv("ARES_FHE_ALLOW_INSECURE", "1")
 
@@ -61,8 +65,10 @@ func TestFullFlow_BidirectionalSigning(t *testing.T) {
 	}
 
 	// --- 1. RIDER: generate auction keypair + sign auction_pk ---
-	auctionPK, auctionSK, err := cgo.SingleKeyGen(params)
-	if err != nil { t.Fatalf("rider keygen: %v", err) }
+	auctionPK, auctionSK, auctionEvalMultKey, err := cgo.SingleKeyGenWithEvalKey(params)
+	if err != nil {
+		t.Fatalf("rider keygen: %v", err)
+	}
 
 	// Rider signs: H(auction_pk || session_id) with identity key
 	h := sha256.New()
@@ -82,7 +88,9 @@ func TestFullFlow_BidirectionalSigning(t *testing.T) {
 
 	for i, d := range drivers {
 		// Verify rider's signature on auction_pk
-		h := sha256.New(); h.Write(auctionPK); h.Write([]byte(sessionID))
+		h := sha256.New()
+		h.Write(auctionPK)
+		h.Write([]byte(sessionID))
 		if !ed25519.Verify(rider.pubKey, h.Sum(nil), riderSig) {
 			t.Fatalf("driver %s: RIDER SIGNATURE INVALID — server tampered with auction_pk", d.pseudonym)
 		}
@@ -102,12 +110,16 @@ func TestFullFlow_BidirectionalSigning(t *testing.T) {
 	}
 
 	// --- 4. SERVER: auction (pk only, never sk) ---
-	encMasks, err := cgo.SingleKeyAuctionServer(params, auctionPK, priceCents, starNorms, distSqs, nonces, 800, 2500, w, 1)
-	if err != nil { t.Fatalf("server auction: %v", err) }
+	encMasks, err := cgo.SingleKeyAuctionServerWithEvalKey(params, auctionPK, auctionEvalMultKey, priceCents, starNorms, distSqs, nonces, 800, 2500, w, 1)
+	if err != nil {
+		t.Fatalf("server auction: %v", err)
+	}
 
 	// --- 5. RIDER: decrypt masks locally ---
 	masks, winner, err := cgo.SingleKeyAuctionDecrypt(params, auctionSK, encMasks)
-	if err != nil { t.Fatalf("rider decrypt: %v", err) }
+	if err != nil {
+		t.Fatalf("rider decrypt: %v", err)
+	}
 
 	// --- 6. RIDER: verify winning driver's signature ---
 	winnerDriver := drivers[winner]
@@ -120,7 +132,9 @@ func TestFullFlow_BidirectionalSigning(t *testing.T) {
 	}
 
 	// --- 7. Assertions ---
-	if winner != 0 { t.Errorf("expected winner 0, got %d", winner) }
+	if winner != 0 {
+		t.Errorf("expected winner 0, got %d", winner)
+	}
 	for i := 0; i < len(drivers); i++ {
 		if i != winner && masks[i] >= masks[winner] {
 			t.Errorf("mask[%d]=%.4f >= winner mask[%d]=%.4f", i, masks[i], winner, masks[winner])
@@ -128,7 +142,9 @@ func TestFullFlow_BidirectionalSigning(t *testing.T) {
 	}
 
 	// Shared secret for OTP/phrase/QR
-	sh := sha256.New(); sh.Write(nonces[winner]); sh.Write([]byte(sessionID))
+	sh := sha256.New()
+	sh.Write(nonces[winner])
+	sh.Write([]byte(sessionID))
 	t.Logf("FULL FLOW: rider=%s winner=%s price=€%.2f masks[0]=%.4f sep=%.4f secret=%x rider_sig=OK bid_sig=OK",
 		rider.pseudonym, winnerDriver.pseudonym, float64(priceCents[winner])/100,
 		masks[0], masks[0]-masks[1], sh.Sum(nil)[:8])
@@ -137,7 +153,9 @@ func TestFullFlow_BidirectionalSigning(t *testing.T) {
 // --- attack scenarios ---
 
 func TestFullFlow_AttackScenarios(t *testing.T) {
-	if err := cgo.SmokeCKKS(); err != nil { t.Skipf("skip: %v", err) }
+	if err := cgo.SmokeCKKS(); err != nil {
+		t.Skipf("skip: %v", err)
+	}
 	os.Setenv("ARES_FHE_ALLOW_INSECURE", "0")
 	defer os.Setenv("ARES_FHE_ALLOW_INSECURE", "1")
 
@@ -146,19 +164,24 @@ func TestFullFlow_AttackScenarios(t *testing.T) {
 	sessionID := "ride-attack-test"
 
 	makeID := func(name string) (ed25519.PublicKey, ed25519.PrivateKey) {
-		pub, priv, _ := ed25519.GenerateKey(nil); return pub, priv
+		pub, priv, _ := ed25519.GenerateKey(nil)
+		return pub, priv
 	}
 
 	t.Run("server-tampers-auction-pk", func(t *testing.T) {
 		// Rider generates pk, signs it
 		auctionPK, _, _ := cgo.SingleKeyGen(params)
 		riderPub, riderPriv := makeID("rider")
-		h := sha256.New(); h.Write(auctionPK); h.Write([]byte(sessionID))
+		h := sha256.New()
+		h.Write(auctionPK)
+		h.Write([]byte(sessionID))
 		riderSig := ed25519.Sign(riderPriv, h.Sum(nil))
 
 		// Attacker: server swaps auction_pk with its own malicious pk
 		maliciousPK, _, _ := cgo.SingleKeyGen(params)
-		h = sha256.New(); h.Write(maliciousPK); h.Write([]byte(sessionID))
+		h = sha256.New()
+		h.Write(maliciousPK)
+		h.Write([]byte(sessionID))
 
 		// Driver verifies: signature was over ORIGINAL pk, but server sent MALICIOUS pk
 		valid := ed25519.Verify(riderPub, h.Sum(nil), riderSig)
@@ -170,14 +193,14 @@ func TestFullFlow_AttackScenarios(t *testing.T) {
 	})
 
 	t.Run("server-spawns-ghost-driver-without-sig", func(t *testing.T) {
-		auctionPK, auctionSK, _ := cgo.SingleKeyGen(params)
+		auctionPK, auctionSK, auctionEvalMultKey, _ := cgo.SingleKeyGenWithEvalKey(params)
 		// Ghost bid: server encrypts low price, but has no driver identity key to sign
-		pc := []int{500, 1000, 1200} // ghost at idx 0 bids €5
+		pc := []int{500, 1000, 1200}   // ghost at idx 0 bids €5
 		sn := []float64{1.0, 5.0, 5.0} // ghost has no ★ history
 		ds := []float64{0.1, 0.1, 0.1}
 		nc := [][]byte{[]byte("ghost-nonce!!"), []byte("nc-1"), []byte("nc-2")}
 
-		encMasks, _ := cgo.SingleKeyAuctionServer(params, auctionPK, pc, sn, ds, nc, 800, 2500, w, 1)
+		encMasks, _ := cgo.SingleKeyAuctionServerWithEvalKey(params, auctionPK, auctionEvalMultKey, pc, sn, ds, nc, 800, 2500, w, 1)
 		_, winner, _ := cgo.SingleKeyAuctionDecrypt(params, auctionSK, encMasks)
 
 		if winner == 0 {

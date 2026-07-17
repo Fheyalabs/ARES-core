@@ -65,6 +65,11 @@ int GenRotKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle* out_share);
 
 int SingleKeyEvalMultKeyGen(CryptoContextHandle ctx, SecretKeyShareHandle sk);
+// SingleKeyEvalMultKeyGenWithOutput generates the single-key relinearization
+// key and returns it for serialization and transfer to a fresh evaluator
+// context.
+int SingleKeyEvalMultKeyGenWithOutput(CryptoContextHandle ctx,
+    SecretKeyShareHandle sk, EvalMultKeyHandle* out_key);
 
 int EvalMultKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     EvalMultKeyHandle* out_base);
@@ -319,6 +324,53 @@ int ARESChunkedFusePayloadCKKS(
     size_t eval_sum_key_len,
     const int* candidate_packages,
     int package_bytes,
+    int payload_slot_count,
+    uint8_t** out_cts,
+    size_t* out_cts_len,
+    size_t* out_chunk_lens,
+    int* out_n_chunks,
+    char* err,
+    size_t err_len
+);
+
+// ARESChunkedFuseEncryptedPayloadCKKS is the ciphertext-only counterpart of
+// ARESChunkedFusePayloadCKKS. candidate_payload_ct_blob contains exactly
+// n_candidates * ceil(payload_slot_count / next_pow2(profile_dim)) serialized
+// CKKS ciphertexts in candidate-major, then chunk-major order. The lens array
+// has one entry per ciphertext. The scorer never receives source package bytes.
+int ARESChunkedFuseEncryptedPayloadCKKS(
+    CryptoContextHandle ctx_handle,
+    uint32_t ring_dim,
+    double scaling_factor,
+    uint32_t depth,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob,
+    const size_t* candidate_ct_lens,
+    const int* candidate_lat_q,
+    const int* candidate_lon_q,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    int initiator_lat_q,
+    int initiator_lon_q,
+    double alpha,
+    double beta,
+    double gamma,
+    const char* comparator,
+    int comparator_degree,
+    double comparator_gain,
+    double comparator_input_scale,
+    double comparator_bound,
+    const char* selector_schedule,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const uint8_t* candidate_payload_ct_blob,
+    size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens,
+    int candidate_payload_ct_count,
     int payload_slot_count,
     uint8_t** out_cts,
     size_t* out_cts_len,
