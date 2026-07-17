@@ -6,7 +6,6 @@ package cgo_test
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/Fheyalabs/ares-core/pkg/ares/crypto/cgo"
@@ -36,7 +35,7 @@ func trueArgmin(prices []int, starNorms, distSqs []float64,
 	return best
 }
 
-func TestSingleKeyAuctionServerRequiresSerializedEvalMultKey(t *testing.T) {
+func TestSingleKeyAuctionServerLegacyEntryPointRemainsUsable(t *testing.T) {
 	if err := cgo.SmokeCKKS(); err != nil {
 		t.Skipf("skip: %v", err)
 	}
@@ -46,17 +45,24 @@ func TestSingleKeyAuctionServerRequiresSerializedEvalMultKey(t *testing.T) {
 		Depth:         5,
 		ScalingFactor: float64(uint64(1) << 50),
 	}
-	pk, _, err := cgo.SingleKeyGen(params)
+	pk, sk, err := cgo.SingleKeyGen(params)
 	if err != nil {
 		t.Fatalf("keygen: %v", err)
 	}
-	_, err = cgo.SingleKeyAuctionServer(
+	masks, err := cgo.SingleKeyAuctionServer(
 		params, pk, []int{1000, 1100}, []float64{4.5, 4.5}, []float64{0, 0},
 		[][]byte{[]byte("nonce-a"), []byte("nonce-b")}, 800, 5000,
 		cgo.AuctionWeights{K: 100, WStar: 1, WDist: 0.001}, 1,
 	)
-	if err == nil || !strings.Contains(err.Error(), "eval-mult key required") {
-		t.Fatalf("legacy evaluator error = %v, want serialized eval-mult key requirement", err)
+	if err != nil {
+		t.Fatalf("legacy evaluator: %v", err)
+	}
+	_, winner, err := cgo.SingleKeyAuctionDecrypt(params, sk, masks)
+	if err != nil {
+		t.Fatalf("legacy decrypt: %v", err)
+	}
+	if winner != 0 {
+		t.Fatalf("legacy winner = %d, want 0", winner)
 	}
 }
 

@@ -2432,10 +2432,6 @@ func singleKeyAuctionServer(
 	if pk == nil || len(pk) == 0 {
 		return nil, fmt.Errorf("pk required")
 	}
-	if len(evalMultKey) == 0 {
-		return nil, fmt.Errorf("eval-mult key required; use SingleKeyGenWithEvalKey and SingleKeyAuctionServerWithEvalKey")
-	}
-
 	ctx, err := createContractContext(params)
 	if err != nil {
 		return nil, err
@@ -2448,13 +2444,15 @@ func singleKeyAuctionServer(
 	}
 	defer C.FreePublicKey(cPk)
 
-	cEvalMultKey, err := deserializeEvalMultKey(ctx, evalMultKey)
-	if err != nil {
-		return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
-	}
-	defer C.FreeEvalMultKey(cEvalMultKey)
-	if C.InsertEvalMultKey(ctx, cEvalMultKey) != 0 {
-		return nil, fmt.Errorf("insert eval-mult key failed")
+	if len(evalMultKey) > 0 {
+		cEvalMultKey, err := deserializeEvalMultKey(ctx, evalMultKey)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
+		}
+		defer C.FreeEvalMultKey(cEvalMultKey)
+		if C.InsertEvalMultKey(ctx, cEvalMultKey) != 0 {
+			return nil, fmt.Errorf("insert eval-mult key failed")
+		}
 	}
 
 	span := float64(capCents - floorCents)
@@ -2619,10 +2617,6 @@ func singleKeyAuctionServerEnc(
 	if len(pk) == 0 {
 		return nil, fmt.Errorf("pk required")
 	}
-	if len(evalMultKey) == 0 {
-		return nil, fmt.Errorf("eval-mult key required; use SingleKeyGenWithEvalKey and SingleKeyAuctionServerEncWithEvalKey")
-	}
-
 	ctx, err := createContractContext(params)
 	if err != nil {
 		return nil, err
@@ -2635,13 +2629,15 @@ func singleKeyAuctionServerEnc(
 	}
 	defer C.FreePublicKey(cPk)
 
-	cEvalMultKey, err := deserializeEvalMultKey(ctx, evalMultKey)
-	if err != nil {
-		return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
-	}
-	defer C.FreeEvalMultKey(cEvalMultKey)
-	if C.InsertEvalMultKey(ctx, cEvalMultKey) != 0 {
-		return nil, fmt.Errorf("insert eval-mult key failed")
+	if len(evalMultKey) > 0 {
+		cEvalMultKey, err := deserializeEvalMultKey(ctx, evalMultKey)
+		if err != nil {
+			return nil, fmt.Errorf("deserialize eval-mult key: %w", err)
+		}
+		defer C.FreeEvalMultKey(cEvalMultKey)
+		if C.InsertEvalMultKey(ctx, cEvalMultKey) != 0 {
+			return nil, fmt.Errorf("insert eval-mult key failed")
+		}
 	}
 
 	span := float64(capCents - floorCents)

@@ -122,6 +122,11 @@ repo-relative symlinks) for threshold CKKS homomorphic encryption. The layer cov
 - **N-party keygen chain** — `keyGenFirst()` / `keyGenNext(prev:)` / `multiAddPublicKeys(_:)`
 - **Eval-key round protocols** — `genEvalMultKeyShare` / `genRotKeyShare` / `evalKeyRounds`
 - **Encrypt / partial-decrypt / fuse** — `encrypt(values:under:)`, `partialDecrypt(_:with:)`, `fuse(_:slotCapacity:)`
+- **Encrypted-input helpers** — `encryptPayloadChunks(payload:publicKey:chunkSize:)`,
+  `encryptRepeatedScalar(_:publicKey:)`, and
+  `encryptedSquaredDistance(originFirst:originSecond:localFirst:localSecond:)`
+  produce serialized ciphertext inputs without exposing payload bytes or local
+  coordinates to the evaluator.
 - **Serialization** — round-trip serialize/deserialize for `Ciphertext`, `PublicKey`,
   `SecretKeyShare`, `EvalMultKey`, and `RotKey`
 - **Homomorphic ops** — add, sub, mult, multConst, sum, `evalChebyshevSign`,

@@ -9,17 +9,21 @@ and Swift clients.
 
 ## Status / scope
 
-This is **Android-A**: L1 + L3 on the JVM.
+This is **Android-A plus the optional OpenFHE JNI module**. The protocol and
+transport modules remain JVM/Android-ready; `ares-client-fhe` is the native
+FHE layer used when an OpenFHE build is bundled with the application.
 
 | Layer | Contents | Status |
 |---|---|---|
 | L1 | Protocol-crypto primitives (SC-2 onion, SC-10 lineage `DAGNode`, v2 `WSMessage` frame, device signing) | **Included** |
 | L3 | WS transport, session lifecycle, gossip orchestration, `ares-smoke` CLI | **Included** |
-| L2 / Android-B | FHE client operations (threshold CKKS key generation, ciphertext submission, client-side ARES-BC) | Future slice |
+| L2 | FHE client operations (threshold CKKS key generation, ciphertext submission) | `ares-client-fhe` JNI module |
+| Android-B | Android packaging and client-side ARES-BC | Future slice |
 
-The library is **Android-ready**: all dependencies (Bouncy Castle, OkHttp, Kotlin coroutines)
-run on Android. Android-A runs on the JVM; the Android module and FHE/JNI layer are deferred
-to Android-B.
+The protocol library is **Android-ready**: its Bouncy Castle, OkHttp, and
+Kotlin-coroutine dependencies run on Android. The FHE module requires a
+matching native OpenFHE library; application packaging and client-side ARES-BC
+remain Android-B work.
 
 ## Crypto
 
@@ -69,6 +73,11 @@ clients/kotlin/
       Main.kt                    — entry point; subcommand dispatch
       VotingFlow.kt              — voting end-to-end flow (onion + lineage)
 
+  ares-client-fhe/               — optional OpenFHE JNI client module
+    src/main/kotlin/ares/client/fhe/
+      CryptoContext.kt            — threshold keygen, FHE operations, encrypted inputs
+      NativeFHE.kt                — JNI declarations
+
   e2e/
     voting.sh                    — build fat jar, set ARES_CLIENT_CMD, delegate to shared harness
 
@@ -92,6 +101,7 @@ Requires **JDK 17+** and the Gradle wrapper (no local Gradle installation needed
 ```bash
 # From clients/kotlin/
 ./gradlew :ares-client:test          # unit tests + golden-vector parity (14 tests)
+./gradlew :ares-client-fhe:test      # FHE tests (requires matching native OpenFHE JNI library)
 ./gradlew clean build                # clean, compile, all unit tests
 ./gradlew :ares-smoke:fatJar         # produce a self-contained fat jar
 ```
@@ -99,6 +109,16 @@ Requires **JDK 17+** and the Gradle wrapper (no local Gradle installation needed
 The lineage golden-vector test (`LineageVectorsTest`) loads
 `pkg/ares/lineage/testdata/node_vectors.json` from the repository root — the single source of
 truth for cross-language parity with the Go, Python, and Swift clients.
+
+### Optional L2 encrypted inputs
+
+`ares-client-fhe` exposes `CryptoContext.encryptPayloadChunks`,
+`encryptRepeatedScalar`, and `encryptedSquaredDistance`. These helpers produce
+serialized CKKS ciphertext inputs using the same canonical bridge packing as
+the Swift client. The local scalar coordinates used for
+`encryptedSquaredDistance` are not serialized; the evaluator receives only the
+derived ciphertext. The module requires a matching OpenFHE JNI library and is
+therefore not part of the pure-JVM `ares-client` artifact.
 
 ### A note on Ed25519 signatures
 

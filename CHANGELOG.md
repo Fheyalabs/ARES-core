@@ -7,28 +7,32 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
-### Roadmap (Fheya-app-side, recorded here so ARES-core knows what its consumer needs)
+## [0.9.13] — 2026-07-17
 
-The Fheya app at `Fheyalabs/ARES.git` is the load test for ARES-core
-v1.0. Three pieces of work blocking real homelab traffic — none of
-which require ARES-core API changes, but ARES-core's `[Unreleased]`
-records them so the framework knows what its primary consumer is
-moving toward.
+### Added
 
-- **Post-session memory cleanup.** Orchestrator currently leaks
-  per-session FHE artifacts (`scoringInputs`, `profiles`, accumulator
-  buckets) until container restart. Audit OP-CAP-6. Fheya-app PR.
-- **Nightly amortized keygen.** Threshold keygen is 95% of
-  `n=6` dim=128 session wall-clock. Proposal:
-  `wiki/summaries/nightly-keygen-batch-orchestrator-2026-05-19.md` —
-  split orchestration into cohort-formation / nightly-keygen /
-  daytime-scoring subsystems. Uses ARES-core's existing
-  `keygen.PreSharedKeygen` primitive; no framework changes required.
-- **Self-hosted CI runner on the homelab.** Free GitHub-hosted
-  runners can't carry full `n=6` dim=128 keygen; Fheya's end-to-end
-  lane needs `runs-on: [self-hosted, fheya-homelab]`. ARES-core's CI
-  stays on hosted runners; Fheya's CI gets a separate self-hosted
-  lane.
+- **Ciphertext-only CKKS inputs for chunked threshold scoring.**
+  `FullFuseRequest` now accepts candidate-major encrypted payload chunks and
+  encrypted squared-distance inputs. `ChunkedFuseEncryptedPayloadCKKS`,
+  `ChunkedFuseEncryptedInputsCKKS`, and their union-scoring variants reject
+  mixed plaintext/ciphertext requests, preserving a server path that never
+  receives a profile package or location scalar in plaintext. The eval-sum
+  reference variants retain the b-only key layout for memory-bounded sessions.
+- **Client encryption helpers for the encrypted-input path.** Swift and
+  Kotlin FHE clients expose payload-chunk encryption, repeated-scalar
+  encryption, and local encrypted squared-distance construction. Their native
+  bindings share the canonical bridge packing, so the two clients produce the
+  same chunk layout.
+- **Three-stage threshold keygen runner coverage.**
+  `Phase0aThresholdKeygen` now explicitly consumes `keygen.eval_round1` in
+  addition to `keygen.share` and `keygen.eval_share`, allowing applications to
+  durably acknowledge every evaluation-key stage before advancing their
+  session state.
+- **Single-key evaluator-key transfer APIs.**
+  `SingleKeyGenWithEvalKey`, `SingleKeyAuctionServerWithEvalKey`, and
+  `SingleKeyAuctionServerEncWithEvalKey` support a separate evaluator context
+  without exposing the secret key. These APIs are additive; the legacy
+  single-key auction entry points remain supported.
 
 ## [0.9.12] — 2026-07-04
 
