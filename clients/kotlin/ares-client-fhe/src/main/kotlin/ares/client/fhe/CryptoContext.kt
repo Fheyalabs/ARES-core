@@ -1,5 +1,6 @@
 package ares.client.fhe
 
+<<<<<<< HEAD
 class CryptoContext private constructor(internal val raw: Long) : AutoCloseable {
     constructor(
         ringDim: Int,
@@ -9,10 +10,18 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
         minimalRotationKeys: Boolean = false,
         evalSumOnlyRotationKeys: Boolean = false,
         profileDim: Int = 0,
-        payloadSlotCount: Int = 0
+        payloadSlotCount: Int = 0,
+        scalingModSize: Int? = null,
+        firstModSize: Int? = null
     ) : this(
-        NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize)
-            .also { if (it == 0L) throw FHEException("context creation failed") }
+        createCKKSContext(
+            ringDim,
+            scalingFactor,
+            depth,
+            batchSize,
+            scalingModSize,
+            firstModSize
+        )
     ) {
         configureRotationKeys(
             minimalRotationKeys,
@@ -32,6 +41,25 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
             .also { if (it == 0L) throw FHEException("BFV context creation failed") }
     )
 
+=======
+class CryptoContext(
+    ringDim: Int,
+    scalingFactor: Double,
+    depth: Int,
+    batchSize: Int = 0,
+    minimalRotationKeys: Boolean = false,
+    evalSumOnlyRotationKeys: Boolean = false,
+    profileDim: Int = 0,
+    payloadSlotCount: Int = 0,
+    scalingModSize: Int? = null,
+    firstModSize: Int? = null
+) : AutoCloseable {
+    private val explicitModuli = validateExplicitModuli(scalingModSize, firstModSize)
+    internal val raw: Long = (explicitModuli?.let { (scaling, first) ->
+        NativeFHE.createContextWithModuli(ringDim, depth, scaling, first, batchSize)
+    } ?: NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize))
+        .also { if (it == 0L) throw FHEException("context creation failed") }
+>>>>>>> 3734372 (feat(kotlin): bind explicit ckks moduli)
     private val state = ContextState(raw)
     @Suppress("unused")
     private val cleanable = FHE_CLEANER.register(this, state)
@@ -243,5 +271,32 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
         val h = NativeFHE.reconstructRotKeyFromAB(raw, aVectors, bVectors)
         if (h == 0L) throw FHEException("reconstruct rk from a/b")
         return RotKey(h)
+    }
+
+    private companion object {
+        fun createCKKSContext(
+            ringDim: Int,
+            scalingFactor: Double,
+            depth: Int,
+            batchSize: Int,
+            scalingModSize: Int?,
+            firstModSize: Int?
+        ): Long {
+            val explicitModuli = validateExplicitModuli(scalingModSize, firstModSize)
+            return (explicitModuli?.let { (scaling, first) ->
+                NativeFHE.createContextWithModuli(ringDim, depth, scaling, first, batchSize)
+            } ?: NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize))
+                .also { if (it == 0L) throw FHEException("context creation failed") }
+        }
+
+        fun validateExplicitModuli(scalingModSize: Int?, firstModSize: Int?): Pair<Int, Int>? {
+            require((scalingModSize == null) == (firstModSize == null)) {
+                "scalingModSize and firstModSize must be supplied together"
+            }
+            if (scalingModSize == null || firstModSize == null) return null
+            require(scalingModSize in 30..60) { "scalingModSize must be between 30 and 60" }
+            require(firstModSize in 30..60) { "firstModSize must be between 30 and 60" }
+            return scalingModSize to firstModSize
+        }
     }
 }
