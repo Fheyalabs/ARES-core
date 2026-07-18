@@ -6,6 +6,20 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertTrue
 
 class PerIndexEvalSumKeyTest {
+    @Test fun explicitCKKSModulusSizesAreAcceptedByTheContextConstructor() {
+        assumeTrue(NativeFHE.loaded)
+        CryptoContext(
+            ringDim = 1024,
+            scalingFactor = Math.scalb(1.0, 50),
+            depth = 4,
+            batchSize = 8,
+            scalingModSize = 50,
+            firstModSize = 60
+        ).use { context ->
+            assertTrue(context.serialize(context.keyGenFirst().publicKey).isNotEmpty())
+        }
+    }
+
     @Test fun perIndexRotationKeysPreserveTheConfiguredRotationSet() {
         assumeTrue(NativeFHE.loaded)
         CryptoContext(

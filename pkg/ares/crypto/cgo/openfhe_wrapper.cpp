@@ -613,11 +613,29 @@ static int serialize_object(const T& obj, uint8_t** out_data, size_t* out_len) {
 extern "C" {
 
 CryptoContextHandle CreateCKKSContext(uint32_t ring_dim, double scaling_factor, uint32_t depth, uint32_t batch_size) {
+    return CreateCKKSContextWithModuli(
+        ring_dim,
+        depth,
+        infer_scaling_mod_size(scaling_factor),
+        60,
+        batch_size);
+}
+
+CryptoContextHandle CreateCKKSContextWithModuli(
+    uint32_t ring_dim,
+    uint32_t multiplicative_depth,
+    uint32_t scaling_mod_size,
+    uint32_t first_mod_size,
+    uint32_t batch_size) {
     try {
         uint32_t bs = batch_size > 0 ? batch_size : (ring_dim >= 16 ? ring_dim / 2 : 8);
-        int scaling_mod_size = static_cast<int>(infer_scaling_mod_size(scaling_factor));
         auto* ctx = new ARESCryptoContext{
-            make_ckks_context(bs, depth == 0 ? 2 : depth, scaling_mod_size, 60, ring_dim),
+            make_ckks_context(
+                bs,
+                multiplicative_depth == 0 ? 2 : multiplicative_depth,
+                static_cast<int>(scaling_mod_size),
+                static_cast<int>(first_mod_size),
+                ring_dim),
             bs,
             {},
             {},

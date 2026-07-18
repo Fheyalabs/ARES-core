@@ -43,6 +43,14 @@ JNIEXPORT jint JNICALL Java_ares_client_fhe_NativeFHE_smoke(JNIEnv*, jclass) {
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContext(JNIEnv*, jclass, jint ringDim, jdouble scale, jint depth, jint batchSize) {
     return H(CreateCKKSContext((uint32_t)ringDim, (double)scale, (uint32_t)depth, (uint32_t)batchSize));
 }
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContextWithModuli(JNIEnv*, jclass, jint ringDim, jint depth, jint scalingModSize, jint firstModSize, jint batchSize) {
+    return H(CreateCKKSContextWithModuli(
+        (uint32_t)ringDim,
+        (uint32_t)depth,
+        (uint32_t)scalingModSize,
+        (uint32_t)firstModSize,
+        (uint32_t)batchSize));
+}
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createBFVContext(JNIEnv*, jclass, jint ringDim, jint multiplicativeDepth, jlong plaintextModulus, jint batchSize) {
     return H(CreateBFVContext(
         (uint32_t)ringDim,
