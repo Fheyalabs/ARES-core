@@ -1,10 +1,26 @@
 package ares.client.fhe
 
 class CryptoContext private constructor(internal val raw: Long) : AutoCloseable {
-    constructor(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: Int = 0) : this(
+    constructor(
+        ringDim: Int,
+        scalingFactor: Double,
+        depth: Int,
+        batchSize: Int = 0,
+        minimalRotationKeys: Boolean = false,
+        evalSumOnlyRotationKeys: Boolean = false,
+        profileDim: Int = 0,
+        payloadSlotCount: Int = 0
+    ) : this(
         NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize)
             .also { if (it == 0L) throw FHEException("context creation failed") }
-    )
+    ) {
+        configureRotationKeys(
+            minimalRotationKeys,
+            evalSumOnlyRotationKeys,
+            profileDim,
+            payloadSlotCount
+        )
+    }
 
     constructor(
         ringDim: Int,
@@ -15,11 +31,33 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
         NativeFHE.createBFVContext(ringDim, multiplicativeDepth, plaintextModulus, batchSize)
             .also { if (it == 0L) throw FHEException("BFV context creation failed") }
     )
+
     private val state = ContextState(raw)
     @Suppress("unused")
     private val cleanable = FHE_CLEANER.register(this, state)
     private class ContextState(@Volatile var raw: Long) : Runnable {
         override fun run() { val h = raw; if (h != 0L) { raw = 0L; NativeFHE.freeContext(h) } }
+    }
+    private fun configureRotationKeys(
+        minimalRotationKeys: Boolean,
+        evalSumOnlyRotationKeys: Boolean,
+        profileDim: Int,
+        payloadSlotCount: Int
+    ) {
+        require(!(minimalRotationKeys && evalSumOnlyRotationKeys)) {
+            "minimal and eval-sum-only rotation modes are mutually exclusive"
+        }
+        when {
+            minimalRotationKeys -> {
+                require(profileDim > 0) { "profileDim must be positive for minimal rotation keys" }
+                require(payloadSlotCount > 0) { "payloadSlotCount must be positive for minimal rotation keys" }
+                NativeFHE.setMinimalRotationKeys(raw, profileDim, payloadSlotCount)
+            }
+            evalSumOnlyRotationKeys -> {
+                require(profileDim > 0) { "profileDim must be positive for eval-sum-only rotation keys" }
+                NativeFHE.setEvalSumOnlyRotationKeys(raw, profileDim)
+            }
+        }
     }
     override fun close() { state.run() }
 
@@ -154,6 +192,21 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
     // eval-sum (rotation) key
     fun evalSumKeyGenLead(sk: SecretKeyShare): RotKey { val h = NativeFHE.evalSumKeyGenLead(raw, sk.raw); if (h==0L) throw FHEException("esk lead"); return RotKey(h) }
     fun evalSumKeyShare(sk: SecretKeyShare, base: RotKey, ownPK: PublicKey): RotKey { val h = NativeFHE.evalSumKeyShare(raw, sk.raw, base.raw, ownPK.raw); if (h==0L) throw FHEException("esk share"); return RotKey(h) }
+    fun rotationIndices(): IntArray = NativeFHE.rotationIndices(raw).also {
+        if (it.isEmpty()) throw FHEException("rotation index set is empty")
+    }
+    fun generatePerIndexEvalSumKey(sk: SecretKeyShare, index: Int): RotKey {
+        require(index != 0) { "rotation index must be non-zero" }
+        val h = NativeFHE.generatePerIndexEvalSumKey(raw, sk.raw, index)
+        if (h == 0L) throw FHEException("per-index eval-sum lead")
+        return RotKey(h)
+    }
+    fun generatePerIndexEvalSumShare(sk: SecretKeyShare, base: RotKey, ownPK: PublicKey, index: Int): RotKey {
+        require(index != 0) { "rotation index must be non-zero" }
+        val h = NativeFHE.generatePerIndexEvalSumShare(raw, sk.raw, base.raw, ownPK.raw, index)
+        if (h == 0L) throw FHEException("per-index eval-sum share")
+        return RotKey(h)
+    }
     fun combineEvalSumKeys(pks: List<PublicKey>, shares: List<RotKey>): RotKey {
         require(pks.size >= shares.size)
         val h = NativeFHE.combineEvalSumKeys(raw, LongArray(pks.size){pks[it].raw}, LongArray(shares.size){shares[it].raw}); if (h==0L) throw FHEException("esk combine"); return RotKey(h) }
@@ -180,4 +233,15 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
     fun deserializeEvalMultKey(d: ByteArray): EvalMultKey { val h=NativeFHE.deserializeEvalMultKey(raw,d); if(h==0L) throw FHEException("deser emk"); return EvalMultKey(h) }
     fun serialize(key: RotKey): ByteArray = NativeFHE.serializeRotKey(key.raw) ?: throw FHEException("ser rk")
     fun deserializeRotKey(d: ByteArray): RotKey { val h=NativeFHE.deserializeRotKey(raw,d); if(h==0L) throw FHEException("deser rk"); return RotKey(h) }
+    fun serializeRotKeyAVectors(key: RotKey): ByteArray =
+        NativeFHE.serializeRotKeyAVectors(key.raw) ?: throw FHEException("ser rk a-vectors")
+    fun serializeRotKeyBVectors(key: RotKey): ByteArray =
+        NativeFHE.serializeRotKeyBVectors(key.raw) ?: throw FHEException("ser rk b-vectors")
+    fun reconstructRotKeyFromAB(aVectors: ByteArray, bVectors: ByteArray): RotKey {
+        require(aVectors.isNotEmpty()) { "rotation-key a-vectors are required" }
+        require(bVectors.isNotEmpty()) { "rotation-key b-vectors are required" }
+        val h = NativeFHE.reconstructRotKeyFromAB(raw, aVectors, bVectors)
+        if (h == 0L) throw FHEException("reconstruct rk from a/b")
+        return RotKey(h)
+    }
 }
