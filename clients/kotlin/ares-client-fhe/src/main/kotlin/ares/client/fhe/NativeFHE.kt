@@ -8,6 +8,7 @@ internal object NativeFHE {
     external fun getVersion(out: ByteArray): Int
     external fun smoke(): Int
     external fun createContext(ringDim: Int, scale: Double, depth: Int, batchSize: Int = 0): Long
+    external fun createContextWithModuli(ringDim: Int, depth: Int, scalingModSize: Int, firstModSize: Int, batchSize: Int = 0): Long
     external fun freeContext(ctx: Long)
     external fun setMinimalRotationKeys(ctx: Long, profileDim: Int, payloadSlotCount: Int)
     external fun setEvalSumOnlyRotationKeys(ctx: Long, profileDim: Int)

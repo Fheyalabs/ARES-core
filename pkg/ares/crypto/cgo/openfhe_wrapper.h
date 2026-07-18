@@ -26,6 +26,16 @@ CryptoContextHandle CreateCKKSContext(
     uint32_t depth,        // 12
     uint32_t batch_size    // 0 = ring_dim/2 (default), >0 = explicit batch
 );
+// CreateCKKSContextWithModuli is the explicit-parameter variant used when a
+// signed contract carries both CKKS modulus sizes. It avoids deriving the
+// first modulus from a legacy default.
+CryptoContextHandle CreateCKKSContextWithModuli(
+    uint32_t ring_dim,
+    uint32_t multiplicative_depth,
+    uint32_t scaling_mod_size,
+    uint32_t first_mod_size,
+    uint32_t batch_size
+);
 CryptoContextHandle CreateBFVContext(
     uint32_t ring_dim,
     uint32_t multiplicative_depth,

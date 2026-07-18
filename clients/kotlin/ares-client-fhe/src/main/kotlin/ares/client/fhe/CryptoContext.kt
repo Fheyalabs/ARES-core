@@ -8,9 +8,14 @@ class CryptoContext(
     minimalRotationKeys: Boolean = false,
     evalSumOnlyRotationKeys: Boolean = false,
     profileDim: Int = 0,
-    payloadSlotCount: Int = 0
+    payloadSlotCount: Int = 0,
+    scalingModSize: Int? = null,
+    firstModSize: Int? = null
 ) : AutoCloseable {
-    internal val raw: Long = NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize)
+    private val explicitModuli = validateExplicitModuli(scalingModSize, firstModSize)
+    internal val raw: Long = (explicitModuli?.let { (scaling, first) ->
+        NativeFHE.createContextWithModuli(ringDim, depth, scaling, first, batchSize)
+    } ?: NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize))
         .also { if (it == 0L) throw FHEException("context creation failed") }
     private val state = ContextState(raw)
     @Suppress("unused")
@@ -182,5 +187,17 @@ class CryptoContext(
         val h = NativeFHE.reconstructRotKeyFromAB(raw, aVectors, bVectors)
         if (h == 0L) throw FHEException("reconstruct rk from a/b")
         return RotKey(h)
+    }
+
+    private companion object {
+        fun validateExplicitModuli(scalingModSize: Int?, firstModSize: Int?): Pair<Int, Int>? {
+            require((scalingModSize == null) == (firstModSize == null)) {
+                "scalingModSize and firstModSize must be supplied together"
+            }
+            if (scalingModSize == null || firstModSize == null) return null
+            require(scalingModSize in 30..60) { "scalingModSize must be between 30 and 60" }
+            require(firstModSize in 30..60) { "firstModSize must be between 30 and 60" }
+            return scalingModSize to firstModSize
+        }
     }
 }
