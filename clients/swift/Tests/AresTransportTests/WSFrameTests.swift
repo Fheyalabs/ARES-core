@@ -24,4 +24,32 @@ final class WSFrameTests: XCTestCase {
         let f = try WSFrame.decodeInbound(raw)
         XCTAssertEqual(f.type, "auction.invitation"); XCTAssertEqual(f.sessionID, "s1"); XCTAssertEqual(f.seq, 3)
     }
+
+    func testInboundFramePreservesRawPayloadBytesWithStandardBase64Slashes() throws {
+        let payload = Data(#"{"frame":"////"}"#.utf8)
+        let raw = try WSFrame.encodeOutbound(
+            type: "phased.message",
+            sessionID: "s1",
+            seq: 1,
+            payloadJSON: payload,
+            lineage: nil
+        )
+
+        let frame = try WSFrame.decodeInbound(raw)
+        XCTAssertEqual(frame.payload, payload)
+    }
+
+    func testInboundFramePreservesNestedPayloadWhitespaceAndStrings() throws {
+        let payload = Data(#"{ "nested" : [ { "frame" : "////" } ], "note" : "a } , [ string" }"#.utf8)
+        let raw = try WSFrame.encodeOutbound(
+            type: "phased.message",
+            sessionID: "s1",
+            seq: 1,
+            payloadJSON: payload,
+            lineage: nil
+        )
+
+        let frame = try WSFrame.decodeInbound(raw)
+        XCTAssertEqual(frame.payload, payload)
+    }
 }
