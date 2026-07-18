@@ -68,7 +68,31 @@ public actor Session {
 
     public static func connect(serverURL: String, pseudonym: String, sessionID: String,
                                authSecret: String = "", authToken: String = "",
+                               headers: [String: String] = [:],
+                               resumeAfter: Int? = nil,
                                defaultTimeout: TimeInterval = 30) async throws -> Session {
+        let request = try webSocketRequest(
+            serverURL: serverURL,
+            pseudonym: pseudonym,
+            authSecret: authSecret,
+            authToken: authToken,
+            headers: headers,
+            resumeAfter: resumeAfter
+        )
+        let task = URLSession.shared.webSocketTask(with: request)
+        task.maximumMessageSize = 64 * 1024 * 1024
+        task.resume()
+        let base = serverURL.hasSuffix("/") ? String(serverURL.dropLast()) : serverURL
+        let s = Session(pseudonym: pseudonym, sessionID: sessionID, serverURL: base,
+                        task: task, defaultTimeout: defaultTimeout)
+        await s.startReceiveLoop()
+        return s
+    }
+
+    static func webSocketRequest(serverURL: String, pseudonym: String,
+                                 authSecret: String = "", authToken: String = "",
+                                 headers: [String: String] = [:],
+                                 resumeAfter: Int? = nil) throws -> URLRequest {
         guard var comps = URLComponents(string: serverURL) else { throw TransportError.dialFailed(serverURL) }
         comps.scheme = (comps.scheme == "https") ? "wss" : "ws"
         comps.path = "/v2/ws"
@@ -78,16 +102,17 @@ public actor Session {
         } else if !authSecret.isEmpty {
             items.append(URLQueryItem(name: "auth", value: deriveAuthToken(secret: authSecret, pseudonym: pseudonym)))
         }
+        if let resumeAfter {
+            guard resumeAfter >= 0 else { throw TransportError.dialFailed("negative resume cursor") }
+            items.append(URLQueryItem(name: "resume_after", value: String(resumeAfter)))
+        }
         comps.queryItems = items
         guard let url = comps.url else { throw TransportError.dialFailed(serverURL) }
-        let task = URLSession.shared.webSocketTask(with: url)
-        task.maximumMessageSize = 64 * 1024 * 1024
-        task.resume()
-        let base = serverURL.hasSuffix("/") ? String(serverURL.dropLast()) : serverURL
-        let s = Session(pseudonym: pseudonym, sessionID: sessionID, serverURL: base,
-                        task: task, defaultTimeout: defaultTimeout)
-        await s.startReceiveLoop()
-        return s
+        var request = URLRequest(url: url)
+        for (name, value) in headers {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
     }
 
     /// Update the session id used for outbound frames and admin-state polling.
