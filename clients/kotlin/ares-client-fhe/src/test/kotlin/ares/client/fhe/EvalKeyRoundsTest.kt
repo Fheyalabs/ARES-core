@@ -16,10 +16,11 @@ class EvalKeyRoundsTest {
 
             // eval-mult-key 2-round protocol
             val lead = ctx.evalMultKeyGenLead(sks[0])
-            val switch0 = ctx.evalMultKeySwitchShare(sks[0], lead)
             val switch1 = ctx.evalMultKeySwitchShare(sks[1], lead)
             val switch2 = ctx.evalMultKeySwitchShare(sks[2], lead)
-            val joined = ctx.combineEvalMultSwitchShares(pks, listOf(switch0, switch1, switch2))
+            // The lead base is slot zero's R1 contribution. Each later slot
+            // derives its switch share against that published base.
+            val joined = ctx.combineEvalMultSwitchShares(pks, listOf(lead, switch1, switch2))
             val final0 = ctx.evalMultKeyFinalShare(sks[0], joined, jointPK)
             val final1 = ctx.evalMultKeyFinalShare(sks[1], joined, jointPK)
             val final2 = ctx.evalMultKeyFinalShare(sks[2], joined, jointPK)
@@ -28,10 +29,9 @@ class EvalKeyRoundsTest {
 
             // eval-sum key protocol
             val eskBase = ctx.evalSumKeyGenLead(sks[0])
-            val esk0 = ctx.evalSumKeyShare(sks[0], eskBase, pks[0])
             val esk1 = ctx.evalSumKeyShare(sks[1], eskBase, pks[1])
             val esk2 = ctx.evalSumKeyShare(sks[2], eskBase, pks[2])
-            val evalSumKey = ctx.combineEvalSumKeys(pks, listOf(esk0, esk1, esk2))
+            val evalSumKey = ctx.combineEvalSumKeys(pks, listOf(eskBase, esk1, esk2))
             ctx.insertEvalSumKey(evalSumKey)
 
             // EvalMult squares [2,3,4,5] to [4,9,16,25]
