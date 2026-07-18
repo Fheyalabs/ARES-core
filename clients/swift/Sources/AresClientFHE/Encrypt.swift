@@ -104,4 +104,51 @@ extension CryptoContext {
         }
         return copyAndFree(serialized, serializedLength)
     }
+
+    /// Encrypt one exact integer into every BFV batch slot for client-derived
+    /// location-distance input. The caller only sends the ciphertext.
+    public func encryptRepeatedScalarBFV(_ value: Int64, publicKey: PublicKey) throws -> Data {
+        var serialized: UnsafeMutablePointer<UInt8>?
+        var serializedLength = 0
+        guard EncryptSerializedRepeatedScalarBFV(
+            raw, publicKey.raw, value, &serialized, &serializedLength
+        ) == 0, serialized != nil, serializedLength > 0 else {
+            if let serialized { free(serialized) }
+            throw FHEError.encryptFailed
+        }
+        return copyAndFree(serialized, serializedLength)
+    }
+
+    /// Derive an exact BFV encrypted squared distance from two encrypted,
+    /// repeated origin coordinates. Local coordinates remain in process.
+    public func encryptedSquaredDistanceBFV(
+        originFirst: Data,
+        originSecond: Data,
+        localFirst: Int64,
+        localSecond: Int64
+    ) throws -> Data {
+        guard !originFirst.isEmpty, !originSecond.isEmpty else { throw FHEError.encryptFailed }
+        var serialized: UnsafeMutablePointer<UInt8>?
+        var serializedLength = 0
+        let result = originFirst.withUnsafeBytes { firstBytes in
+            originSecond.withUnsafeBytes { secondBytes in
+                ComputeSerializedSquaredDistanceBFV(
+                    raw,
+                    firstBytes.bindMemory(to: UInt8.self).baseAddress,
+                    originFirst.count,
+                    secondBytes.bindMemory(to: UInt8.self).baseAddress,
+                    originSecond.count,
+                    localFirst,
+                    localSecond,
+                    &serialized,
+                    &serializedLength
+                )
+            }
+        }
+        guard result == 0, serialized != nil, serializedLength > 0 else {
+            if let serialized { free(serialized) }
+            throw FHEError.encryptFailed
+        }
+        return copyAndFree(serialized, serializedLength)
+    }
 }

@@ -7,6 +7,16 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
+## [0.9.14] — 2026-07-18
+
+### Added
+
+- **Swift BFV encrypted-location input helpers.** `AresClientFHE` now exposes
+  exact repeated-scalar BFV encryption and client-side encrypted squared
+  distance construction. The helper accepts serialized encrypted origins plus
+  local integer coordinates, so applications can submit the ciphertext-only
+  BFV fallback input contract without serializing raw location values.
+
 ## [0.9.13] — 2026-07-17
 
 ### Added

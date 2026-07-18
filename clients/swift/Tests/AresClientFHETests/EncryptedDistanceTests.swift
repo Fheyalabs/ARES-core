@@ -4,6 +4,44 @@ import XCTest
 @testable import AresClientFHE
 
 final class EncryptedDistanceTests: FHETestCase {
+    func testBFVEncryptedSquaredDistanceIsRepeatedAcrossSlots() throws {
+        let ctx = try BFVCryptoContext(
+            ringDim: 1024,
+            multiplicativeDepth: 4,
+            plaintextModulus: 65_537,
+            batchSize: 8
+        )
+        let share = try ctx.singleKeyGen()
+        let originFirst = try ctx.encryptRepeatedScalarBFV(10, publicKey: share.publicKey)
+        let originSecond = try ctx.encryptRepeatedScalarBFV(20, publicKey: share.publicKey)
+
+        let distance = try ctx.encryptedSquaredDistanceBFV(
+            originFirst: originFirst,
+            originSecond: originSecond,
+            localFirst: 7,
+            localSecond: 24
+        )
+        let ciphertext = try ctx.deserializeCiphertext(distance)
+        let partial = try ctx.partialDecrypt(ciphertext, with: share.secretKey)
+        XCTAssertEqual(try ctx.fuseInt([partial], slotCapacity: 8), Array(repeating: 25, count: 8))
+    }
+
+    func testBFVEncryptedSquaredDistanceRejectsMalformedOriginCiphertext() throws {
+        let ctx = try BFVCryptoContext(
+            ringDim: 1024,
+            multiplicativeDepth: 4,
+            plaintextModulus: 65_537,
+            batchSize: 8
+        )
+        _ = try ctx.singleKeyGen()
+        XCTAssertThrowsError(try ctx.encryptedSquaredDistanceBFV(
+            originFirst: Data([0x01]),
+            originSecond: Data([0x02]),
+            localFirst: 0,
+            localSecond: 0
+        ))
+    }
+
     func testEncryptedSquaredDistanceIsRepeatedAcrossSlots() throws {
         let ctx = try CryptoContext(
             ringDim: 1024,
