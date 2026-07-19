@@ -1,17 +1,27 @@
 # clients/native
 
 Native client artifact staging layer for the v0.9.15 release line: builds
-and stages the pinned OpenFHE 1.5.1 Apple XCFramework and Android AAR from
-clean, pinned source, cross-compiled per platform/ABI.
+and stages the pinned OpenFHE 1.5.1 **and ARES-core's canonical C/JNI bridge**
+from clean, pinned source, cross-compiled per platform/ABI.
 
-**Scope boundary:** these scripts build and stage OpenFHE's own native
-library only. They do not modify `Package.swift`, any Kotlin/Gradle
-dependency declaration, or anything else in `clients/swift` or
-`clients/kotlin`. Wiring a consuming SwiftPM `binaryTarget` or Gradle module
-to the staged artifacts is separate, out-of-scope release-packaging work —
-see Task 4 of
-`ARES/docs/superpowers/plans/2026-07-11-fheya-v2-2-07-integration-release.md`
-in the Fheya-server repo for where that fits in the larger release program.
+The Apple artifact is `AresPrivacyCore.xcframework`: a static library that
+combines the canonical `openfhe_wrapper.cpp` with OpenFHE and exports the
+`COpenFHEBridge` C module. The Android artifact is an AAR containing
+`libares_fhe_jni.so` beside the three OpenFHE shared libraries for every
+required ABI. Both use the same tracked bridge source already exercised by
+the Go, Swift, and Kotlin development clients; neither duplicates FHE logic.
+
+`clients/swift/Package.release.swift` is the immutable consumer manifest for
+a release staging directory. It declares a `COpenFHEBridge` binary target at
+`Artifacts/AresPrivacyCore.xcframework`; it contains no local Homebrew path,
+environment switch, or workstation dependency. The tracked `Package.swift`
+remains the development manifest and is intentionally not a release input.
+
+**Scope boundary:** the scripts do not publish a Maven coordinate, alter a
+consumer Gradle dependency, or build Fheya's independently-owned Rust privacy
+core. Fheya's release assembler must combine these ARES-core artifacts with
+that separate binding and provenance evidence before invoking its complete
+release-artifact gate.
 
 ## Pins
 
@@ -47,10 +57,10 @@ in CI (see `.github/workflows/release-clients.yml`).
 
 Each script writes, into `OUTPUT_DIR`:
 
-- the artifact itself (`OpenFHE-<version>-apple.xcframework.zip` or
-  `OpenFHE-<version>-android.aar`);
-- `*.sbom.json` — a minimal CycloneDX-shaped SBOM naming the OpenFHE
-  component/version/commit;
+- the artifact itself (`AresPrivacyCore-<version>-apple.xcframework.zip` or
+  `AresPrivacyCore-<version>-android.aar`);
+- `*.sbom.json` — a minimal CycloneDX-shaped SBOM naming the embedded
+  OpenFHE version/commit and ARES bridge artifact;
 - `*.provenance.json` — a minimal SLSA-provenance-shaped statement binding
   the artifact's SHA-256 to its exact source commit and the ares-core
   revision that triggered the build;
@@ -78,7 +88,9 @@ a partial or best-effort one, when:
   caught, not trusted;
 - any required platform slice (Apple: `ios-arm64`, `ios-arm64-simulator`,
   `macos-arm64`) or ABI (Android: `arm64-v8a`, `x86_64`) fails to build or
-  produce its expected libraries;
+  produce its bridge and OpenFHE libraries;
+- `JAVA_HOME` is absent or does not provide both `include/jni.h` and a
+  supported `jni_md.h` platform header for the Android JNI build;
 - the output directory argument is missing, or resolves inside this
   repository.
 
