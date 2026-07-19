@@ -1,0 +1,350 @@
+#!/usr/bin/env bash
+# Shared helpers for clients/native/build-*.sh. Sourced, not executed
+# directly. Every function fails closed: on any ambiguity about a
+# toolchain, pin, or path, it exits nonzero with a clear message rather
+# than proceeding with a best-effort guess.
+
+set -euo pipefail
+
+NATIVE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+NATIVE_DIR="$(cd "${NATIVE_LIB_DIR}/.." && pwd)"
+REPO_ROOT="$(cd "${NATIVE_DIR}/../.." && pwd)"
+
+# PIN_FILE is the tracked, committed source of truth. It is only ever
+# redirected in ARES_NATIVE_TEST_MODE=1, so a test can exercise the clone
+# + commit-verification logic against a small local repository instead of
+# the real network -- a real release invocation always reads the tracked
+# file at its fixed repo-relative location.
+if [ "${ARES_NATIVE_TEST_MODE:-}" = "1" ] && [ -n "${ARES_NATIVE_TEST_PIN_FILE:-}" ]; then
+  PIN_FILE="${ARES_NATIVE_TEST_PIN_FILE}"
+else
+  PIN_FILE="${NATIVE_DIR}/openfhe.pin.json"
+fi
+
+log_info()  { printf '[native] %s\n' "$*" >&2; }
+log_error() { printf '[native] ERROR: %s\n' "$*" >&2; }
+
+die() {
+  log_error "$*"
+  exit 1
+}
+
+# require_cmd NAME [MIN_VERSION_HINT] fails closed if NAME is not on PATH.
+# It only checks presence; callers that care about an exact version run
+# their own check afterward (see require_version_output).
+require_cmd() {
+  local name="$1"
+  if ! command -v "${name}" >/dev/null 2>&1; then
+    die "required toolchain command not found on PATH: ${name}"
+  fi
+}
+
+# require_version_output CMD_DESCRIPTION VERSION_COMMAND PATTERN runs
+# VERSION_COMMAND, requires it to succeed, and requires its output to match
+# PATTERN (an extended regex). Fails closed on a missing command, a nonzero
+# exit, or output that does not match -- an unrecognized or unparsable
+# version string is treated the same as an absent toolchain, never silently
+# accepted.
+require_version_output() {
+  local description="$1"
+  local pattern="$2"
+  shift 2
+  local output
+  if ! output="$("$@" 2>&1)"; then
+    die "${description}: version command failed: $*"
+  fi
+  if ! printf '%s' "${output}" | grep -Eq "${pattern}"; then
+    die "${description}: version output did not match expected pattern (${pattern}): ${output}"
+  fi
+  printf '%s' "${output}"
+}
+
+# read_pin KEY reads one field from the checked-in, tracked pin file. The
+# pin file is the sole source of truth for what OpenFHE source/version is
+# releasable; it is never overridable by an ordinary environment variable,
+# so a build cannot silently point at an unpinned source the way
+# clients/swift/FheyaClient/Package.swift's FHEYA_ARES_CORE_SWIFT_PATH does
+# for local development. A test-only, explicitly-named escape hatch
+# (ARES_NATIVE_TEST_OPENFHE_SOURCE_URL) exists solely so this script can be
+# tested without a real network clone; see resolve_openfhe_source_url.
+read_pin() {
+  local key="$1"
+  [ -f "${PIN_FILE}" ] || die "pin file not found: ${PIN_FILE}"
+  local value
+  value="$(jq -r --arg k "${key}" '.[$k] // empty' "${PIN_FILE}" 2>/dev/null || true)"
+  [ -n "${value}" ] || die "pin file ${PIN_FILE} is missing required key: ${key}"
+  printf '%s' "${value}"
+}
+
+# resolve_openfhe_source_url prints the OpenFHE clone URL. It honors
+# ARES_NATIVE_TEST_OPENFHE_SOURCE_URL only when ARES_NATIVE_TEST_MODE=1 is
+# also set, so the override can never activate by accident against a real
+# release invocation that merely inherited a stray environment variable.
+resolve_openfhe_source_url() {
+  if [ "${ARES_NATIVE_TEST_MODE:-}" = "1" ] && [ -n "${ARES_NATIVE_TEST_OPENFHE_SOURCE_URL:-}" ]; then
+    printf '%s' "${ARES_NATIVE_TEST_OPENFHE_SOURCE_URL}"
+    return 0
+  fi
+  read_pin openfhe_source_url
+}
+
+# sha256_of FILE prints a lowercase hex SHA-256, using whichever of shasum
+# / sha256sum is available (macOS ships shasum by default; Linux runners
+# ship sha256sum).
+sha256_of() {
+  local file="$1"
+  [ -f "${file}" ] || die "cannot hash missing file: ${file}"
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "${file}" | awk '{print $1}'
+  elif command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "${file}" | awk '{print $1}'
+  else
+    die "no sha256 tool found (need shasum or sha256sum)"
+  fi
+}
+
+# ares_core_source_revision prints the git commit this checkout is at. It
+# refuses to guess: an unclean detection (not a git repo, or a dirty
+# worktree) is a hard failure, because a staged artifact whose provenance
+# cannot be tied to an exact source commit is not releasable evidence.
+ares_core_source_revision() {
+  require_cmd git
+  ( cd "${REPO_ROOT}" && git rev-parse --verify HEAD 2>/dev/null ) \
+    || die "cannot determine ares-core source revision: ${REPO_ROOT} is not a git checkout with a HEAD commit"
+}
+
+# require_android_ndk fails closed unless an Android NDK is configured and
+# meets the pinned minimum major version, printing its root path on
+# success. It checks ANDROID_NDK_HOME first, then ANDROID_NDK_ROOT; an
+# unset/missing/malformed/too-old NDK is a hard failure, never a silent
+# fallback to "whatever NDK happens to be findable."
+require_android_ndk() {
+  local ndk_root="${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}"
+  [ -n "${ndk_root}" ] || die "ANDROID_NDK_HOME (or ANDROID_NDK_ROOT) is not set"
+  [ -d "${ndk_root}" ] || die "Android NDK root does not exist: ${ndk_root}"
+
+  local toolchain_file="${ndk_root}/build/cmake/android.toolchain.cmake"
+  [ -f "${toolchain_file}" ] || die "Android NDK at ${ndk_root} has no build/cmake/android.toolchain.cmake"
+
+  local props="${ndk_root}/source.properties"
+  [ -f "${props}" ] || die "Android NDK at ${ndk_root} has no source.properties"
+  local revision
+  revision="$(awk -F '= *' '/^Pkg\.Revision/{print $2}' "${props}")"
+  [ -n "${revision}" ] || die "could not read Pkg.Revision from ${props}"
+  local major="${revision%%.*}"
+  case "${major}" in
+    ''|*[!0-9]*) die "unparsable Android NDK major version in ${props}: ${revision}" ;;
+  esac
+
+  local ndk_pin="${NATIVE_DIR}/android-ndk.pin.json"
+  if [ "${ARES_NATIVE_TEST_MODE:-}" = "1" ] && [ -n "${ARES_NATIVE_TEST_NDK_PIN_FILE:-}" ]; then
+    ndk_pin="${ARES_NATIVE_TEST_NDK_PIN_FILE}"
+  fi
+  [ -f "${ndk_pin}" ] || die "NDK pin file not found: ${ndk_pin}"
+  local min_major
+  min_major="$(jq -r '.android_ndk_min_major_version // empty' "${ndk_pin}")"
+  [ -n "${min_major}" ] || die "NDK pin file ${ndk_pin} is missing android_ndk_min_major_version"
+
+  if [ "${major}" -lt "${min_major}" ]; then
+    die "Android NDK ${revision} at ${ndk_root} is older than the pinned minimum major version ${min_major}"
+  fi
+
+  log_info "using Android NDK ${revision} at ${ndk_root}"
+  printf '%s' "${ndk_root}"
+}
+
+# require_untracked_output_dir OUTPUT_DIR fails closed unless OUTPUT_DIR is
+# an explicit argument that resolves outside this repository's working
+# tree. Native build output is never something a release process should
+# risk committing, so there is no default: a missing argument is also a
+# failure, not a fallback into the repo.
+require_untracked_output_dir() {
+  local raw="${1:-}"
+  [ -n "${raw}" ] || die "an output directory argument is required (no default is provided inside the repository)"
+
+  local created=0
+  if [ ! -d "${raw}" ]; then
+    mkdir -p "${raw}"
+    created=1
+  fi
+  local resolved
+  resolved="$(cd "${raw}" && pwd)"
+  case "${resolved}" in
+    "${REPO_ROOT}"|"${REPO_ROOT}"/*)
+      # Reject before leaving a stray directory behind inside the repo: only
+      # remove it if this call is what created it (never delete a
+      # pre-existing directory the caller happened to point at).
+      if [ "${created}" -eq 1 ]; then
+        rmdir "${resolved}" 2>/dev/null || true
+      fi
+      die "output directory ${resolved} is inside the repository (${REPO_ROOT}); pass an untracked directory outside the repo"
+      ;;
+  esac
+  printf '%s' "${resolved}"
+}
+
+# clone_pinned_openfhe DEST clones the pinned OpenFHE tag into DEST and
+# fails closed unless the checked-out HEAD exactly matches the pinned
+# commit -- a moved or re-pointed tag is caught here rather than trusted.
+clone_pinned_openfhe() {
+  local dest="$1"
+  require_cmd git
+  local version url expected_commit
+  version="$(read_pin openfhe_version)"
+  url="$(resolve_openfhe_source_url)"
+  expected_commit="$(read_pin openfhe_source_commit)"
+
+  log_info "cloning pinned OpenFHE ${version} from ${url}"
+  rm -rf "${dest}"
+  git clone --branch "${version}" --depth 1 "${url}" "${dest}" >&2
+
+  local actual_commit
+  actual_commit="$(git -C "${dest}" rev-parse HEAD)"
+  if [ "${actual_commit}" != "${expected_commit}" ]; then
+    die "OpenFHE source revision mismatch: tag ${version} at ${url} resolved to ${actual_commit}, pin file requires ${expected_commit}"
+  fi
+  log_info "OpenFHE source revision verified: ${actual_commit}"
+}
+
+# require_all_present LABEL REQUIRED_LIST... ACTUAL_LIST... fails closed if
+# any entry named in the (space-separated) required list is absent from
+# the (space-separated) actual list -- used to enforce that every required
+# target architecture actually produced a build output, not merely that
+# the build command exited zero.
+require_all_present() {
+  local label="$1"; shift
+  local -a required=()
+  while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do
+    required+=("$1"); shift
+  done
+  shift # drop the --
+  local -a actual=("$@")
+  local req
+  for req in "${required[@]}"; do
+    local found=0
+    local act
+    for act in "${actual[@]}"; do
+      if [ "${act}" = "${req}" ]; then
+        found=1
+        break
+      fi
+    done
+    if [ "${found}" -ne 1 ]; then
+      die "${label}: required architecture/ABI '${req}' is absent from the build output (produced: ${actual[*]:-none})"
+    fi
+  done
+}
+
+# write_sbom PATH COMPONENT_NAME COMPONENT_VERSION SOURCE_COMMIT emits a
+# minimal, valid CycloneDX-shaped SBOM naming the single vendored
+# component (OpenFHE) this artifact embeds.
+write_sbom() {
+  local path="$1" name="$2" version="$3" commit="$4"
+  jq -n \
+    --arg bomFormat "CycloneDX" \
+    --arg specVersion "1.5" \
+    --arg name "${name}" \
+    --arg version "${version}" \
+    --arg commit "${commit}" \
+    --arg purl "pkg:github/openfheorg/openfhe-development@${version}" \
+    '{
+      bomFormat: $bomFormat,
+      specVersion: $specVersion,
+      components: [
+        {
+          type: "library",
+          name: $name,
+          version: $version,
+          purl: $purl,
+          externalReferences: [
+            { type: "vcs", url: ("https://github.com/openfheorg/openfhe-development/commit/" + $commit) }
+          ]
+        }
+      ]
+    }' > "${path}"
+}
+
+# write_provenance PATH ARTIFACT_NAME ARTIFACT_SHA256 ARES_CORE_REVISION
+# OPENFHE_COMMIT BUILDER_ID emits a minimal, valid SLSA-provenance-shaped
+# statement tying the artifact hash to its exact source materials.
+write_provenance() {
+  local path="$1" artifact_name="$2" artifact_sha256="$3" ares_core_revision="$4" openfhe_commit="$5" builder_id="$6"
+  jq -n \
+    --arg predicateType "https://slsa.dev/provenance/v1" \
+    --arg artifact_name "${artifact_name}" \
+    --arg artifact_sha256 "${artifact_sha256}" \
+    --arg ares_core_revision "${ares_core_revision}" \
+    --arg openfhe_commit "${openfhe_commit}" \
+    --arg builder_id "${builder_id}" \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      predicateType: $predicateType,
+      subject: [ { name: $artifact_name, digest: { sha256: $artifact_sha256 } } ],
+      predicate: {
+        buildDefinition: {
+          builder: { id: $builder_id },
+          resolvedDependencies: [
+            { uri: "git+https://github.com/openfheorg/openfhe-development.git", digest: { sha1: $openfhe_commit } }
+          ]
+        },
+        materials: [
+          { uri: ("git+https://github.com/Fheyalabs/ARES-core.git@" + $ares_core_revision) }
+        ],
+        generatedAt: $generated_at
+      }
+    }' > "${path}"
+}
+
+# emit_native_manifest PATH ARTIFACT_KIND ARTIFACT_PATH ARTIFACT_SHA256
+# OPENFHE_VERSION OPENFHE_COMMIT ARES_CORE_REVISION SBOM_PATH PROVENANCE_PATH
+# TARGET1 [TARGET2 ...] writes the deterministic staging-manifest JSON a
+# downstream release-audit gate (see the sibling internal/releaseaudit
+# NativeArtifact/HashedFile schema) can consume: artifact path, hash,
+# source revision, OpenFHE version, target ABI/platform list, and
+# SBOM/provenance paths and hashes. Field order and key names are fixed on
+# purpose so byte-identical inputs produce byte-identical manifests (modulo
+# the generated_at timestamp).
+emit_native_manifest() {
+  local path="$1" kind="$2" artifact_path="$3" artifact_sha256="$4"
+  local openfhe_version="$5" openfhe_commit="$6" ares_core_revision="$7"
+  local sbom_path="$8" provenance_path="$9"
+  shift 9
+  local -a targets=("$@")
+
+  local sbom_sha256 provenance_sha256
+  sbom_sha256="$(sha256_of "${sbom_path}")"
+  provenance_sha256="$(sha256_of "${provenance_path}")"
+
+  local targets_json
+  targets_json="$(printf '%s\n' "${targets[@]}" | jq -R . | jq -s .)"
+
+  jq -n \
+    --arg schema_version "1" \
+    --arg artifact_kind "${kind}" \
+    --arg artifact_path "${artifact_path}" \
+    --arg artifact_sha256 "${artifact_sha256}" \
+    --arg openfhe_version "${openfhe_version}" \
+    --arg openfhe_source_commit "${openfhe_commit}" \
+    --arg ares_core_source_revision "${ares_core_revision}" \
+    --arg sbom_path "${sbom_path}" \
+    --arg sbom_sha256 "${sbom_sha256}" \
+    --arg provenance_path "${provenance_path}" \
+    --arg provenance_sha256 "${provenance_sha256}" \
+    --argjson target_architectures "${targets_json}" \
+    --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    '{
+      schema_version: ($schema_version | tonumber),
+      artifact_kind: $artifact_kind,
+      artifact_path: $artifact_path,
+      artifact_sha256: $artifact_sha256,
+      openfhe_version: $openfhe_version,
+      openfhe_source_commit: $openfhe_source_commit,
+      ares_core_source_revision: $ares_core_source_revision,
+      target_architectures: $target_architectures,
+      sbom_path: $sbom_path,
+      sbom_sha256: $sbom_sha256,
+      provenance_path: $provenance_path,
+      provenance_sha256: $provenance_sha256,
+      generated_at: $generated_at
+    }' > "${path}"
+}

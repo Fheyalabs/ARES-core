@@ -1,0 +1,91 @@
+name: release-clients
+
+# Builds and stages the pinned OpenFHE Apple XCFramework and Android AAR
+# from clean, pinned source (see clients/native/openfhe.pin.json and
+# clients/native/android-ndk.pin.json). This workflow only STAGES
+# artifacts as workflow run artifacts; it never publishes, tags, or
+# commits anything, and it never writes staging output inside the
+# repository checkout.
+#
+# Manual dispatch only: a full OpenFHE cross-compile per platform/ABI is
+# expensive (see clients/native/README.md for RSS/disk/time guidance), so
+# this does not run on every push.
+on:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+# One release-clients run at a time per ref. Combined with the two jobs
+# below being serialized via `needs`, this keeps native builds serialized
+# end-to-end: never more than one OpenFHE cross-compile running under this
+# workflow at any moment, even though the Apple and Android jobs run on
+# independent runners and could technically overlap.
+concurrency:
+  group: release-clients-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apple-xcframework:
+    name: build OpenFHE Apple XCFramework
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and stage the pinned OpenFHE Apple XCFramework
+        run: |
+          set -euo pipefail
+          # RUNNER_TEMP is a per-job ephemeral directory outside the
+          # checkout -- exactly the "untracked, outside the repo" output
+          # directory the script requires.
+          out="${RUNNER_TEMP}/ares-core-native-staging/apple"
+          mkdir -p "${out}"
+          ./clients/native/build-apple-xcframework.sh "${out}"
+          echo "APPLE_STAGING_DIR=${out}" >> "${GITHUB_ENV}"
+
+      - name: Upload staged Apple artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openfhe-apple-xcframework
+          path: |
+            ${{ env.APPLE_STAGING_DIR }}/*.xcframework.zip
+            ${{ env.APPLE_STAGING_DIR }}/*.sbom.json
+            ${{ env.APPLE_STAGING_DIR }}/*.provenance.json
+            ${{ env.APPLE_STAGING_DIR }}/*.staging-manifest.json
+          if-no-files-found: error
+          retention-days: 14
+
+  android-aar:
+    name: build OpenFHE Android AAR
+    # Serialized after the Apple job rather than run in parallel; see the
+    # concurrency comment above.
+    needs: apple-xcframework
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # actions/runner-images' ubuntu-latest ships a preinstalled Android
+      # NDK and exports ANDROID_NDK_HOME / ANDROID_NDK_LATEST_HOME. This
+      # workflow deliberately does not override it: build-android-aar.sh
+      # fails closed on its own (missing/too-old NDK, missing toolchain
+      # file) if the runner image ever stops providing one that meets
+      # clients/native/android-ndk.pin.json's minimum version.
+      - name: Build and stage the pinned OpenFHE Android AAR
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/ares-core-native-staging/android"
+          mkdir -p "${out}"
+          ./clients/native/build-android-aar.sh "${out}"
+          echo "ANDROID_STAGING_DIR=${out}" >> "${GITHUB_ENV}"
+
+      - name: Upload staged Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: openfhe-android-aar
+          path: |
+            ${{ env.ANDROID_STAGING_DIR }}/*.aar
+            ${{ env.ANDROID_STAGING_DIR }}/*.sbom.json
+            ${{ env.ANDROID_STAGING_DIR }}/*.provenance.json
+            ${{ env.ANDROID_STAGING_DIR }}/*.staging-manifest.json
+          if-no-files-found: error
+          retention-days: 14
