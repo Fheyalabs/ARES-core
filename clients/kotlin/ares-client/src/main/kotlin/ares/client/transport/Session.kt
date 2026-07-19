@@ -141,6 +141,14 @@ class Session private constructor(
         }
     }
 
+    /** Sends a previously validated, canonical wire frame without re-encoding it. */
+    fun sendRaw(frame: ByteArray) {
+        require(frame.isNotEmpty()) { "raw websocket frame is required" }
+        if (!ws.send(frame.toByteString())) {
+            throw TransportException("$pseudonym: raw ws send failed")
+        }
+    }
+
     /**
      * Wait for the next inbound frame (any type).
      *
