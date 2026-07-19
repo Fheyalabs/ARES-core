@@ -113,6 +113,43 @@ ares_core_source_revision() {
     || die "cannot determine ares-core source revision: ${REPO_ROOT} is not a git checkout with a HEAD commit"
 }
 
+# Canonical bridge sources are intentionally shared by Go, Swift, and JNI
+# builds. Packaging scripts must compile these exact tracked files instead of
+# copying or reimplementing cryptographic operations per client platform.
+bridge_source_path() {
+  local path="${REPO_ROOT}/pkg/ares/crypto/cgo/openfhe_wrapper.cpp"
+  [ -f "${path}" ] || die "canonical OpenFHE bridge source is missing: ${path}"
+  printf '%s' "${path}"
+}
+
+bridge_header_path() {
+  local path="${REPO_ROOT}/pkg/ares/crypto/cgo/openfhe_wrapper.h"
+  [ -f "${path}" ] || die "canonical OpenFHE bridge header is missing: ${path}"
+  printf '%s' "${path}"
+}
+
+jni_bridge_source_path() {
+  local path="${REPO_ROOT}/clients/kotlin/native/jni_openfhe.cpp"
+  [ -f "${path}" ] || die "canonical JNI bridge source is missing: ${path}"
+  printf '%s' "${path}"
+}
+
+# stage_copenfhe_headers emits the public C module interface consumed by the
+# release-only Swift binary target. The caller owns DEST and must keep it out
+# of the repository worktree.
+stage_copenfhe_headers() {
+  local dest="$1"
+  [ -n "${dest}" ] || die "COpenFHEBridge header destination is required"
+  mkdir -p "${dest}"
+  cp "$(bridge_header_path)" "${dest}/openfhe_wrapper.h"
+  cat > "${dest}/module.modulemap" <<'EOF'
+module COpenFHEBridge {
+    header "openfhe_wrapper.h"
+    export *
+}
+EOF
+}
+
 # require_android_ndk fails closed unless an Android NDK is configured and
 # meets the pinned minimum major version, printing its root path on
 # success. It checks ANDROID_NDK_HOME first, then ANDROID_NDK_ROOT; an
