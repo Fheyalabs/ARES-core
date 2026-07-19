@@ -112,5 +112,19 @@ final class SessionWaiterTests: XCTestCase {
         XCTAssertEqual(fallback.type, "fallback.bfv_required")
         XCTAssertEqual(fallback.seq, 20)
     }
+
+    func testReceiveAfterCloseFailsAsClosedInsteadOfWaitingForTimeout() async throws {
+        let session = Session(_testPseudonym: "test-closed")
+        await session.close()
+
+        do {
+            _ = try await session.receiveAny(timeout: 0.05)
+            XCTFail("closed transport accepted a new receive waiter")
+        } catch let error as TransportError {
+            guard case .closed = error else {
+                return XCTFail("unexpected transport error: \(error)")
+            }
+        }
+    }
 }
 #endif

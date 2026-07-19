@@ -18,6 +18,7 @@ public actor Session {
     private var inbox: [InboundFrame] = []
     private var waiters: [(id: UUID, cont: CheckedContinuation<InboundFrame, any Error>)] = []
     private var closed = false
+    private var closeError: TransportError?
     private let defaultTimeout: TimeInterval
 
     public nonisolated static func deriveAuthToken(secret: String, pseudonym: String) -> String {
@@ -153,7 +154,10 @@ public actor Session {
             if let frame = try? WSFrame.decodeInbound(data) { deliver(frame) }
             return !closed
         } catch {
-            failWaiters(TransportError.closed("\(pseudonym): \(error)"))
+            let transportError = TransportError.closed("\(pseudonym): \(error)")
+            closed = true
+            closeError = transportError
+            failWaiters(transportError)
             return false
         }
     }
@@ -209,6 +213,12 @@ public actor Session {
     }
 
     public func receiveAny(timeout: TimeInterval? = nil) async throws -> InboundFrame {
+        if let closeError {
+            throw closeError
+        }
+        if closed {
+            throw TransportError.closed(pseudonym)
+        }
         if !inbox.isEmpty { return inbox.removeFirst() }
         let t = timeout ?? defaultTimeout
         let id = UUID()
@@ -274,7 +284,10 @@ public actor Session {
 
     public func close() {
         closed = true
+        if closeError == nil {
+            closeError = TransportError.closed(pseudonym)
+        }
         task.cancel(with: .goingAway, reason: nil)
-        failWaiters(TransportError.closed(pseudonym))
+        failWaiters(closeError ?? TransportError.closed(pseudonym))
     }
 }
