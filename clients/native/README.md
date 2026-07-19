@@ -209,3 +209,122 @@ These tests never invoke a real toolchain build (no real OpenFHE compile
 happens), so they run in seconds. Run a real, non-mocked build only when
 the real toolchains (Xcode, Android NDK, cmake) are already installed and
 the target volume has enough free space per the disk guidance above.
+
+## Release-cache bundle assembly and verification
+
+`internal/releasebundle` (Go package) and `cmd/release-artifact-gate` (its
+CLI) are ARES-core's own assembly and verification step for its own two
+staged platform artifacts. They consume the Apple and Android staging
+output described above and produce one deterministic release-cache
+manifest; they do not build, sign, publish, tag, or claim device/emulator
+runtime validation of anything.
+
+This is deliberately scoped to what this repository owns: it does not
+combine these artifacts with a downstream consumer's own bindings and
+provenance evidence, and it is not a substitute for that consumer's own,
+separately-owned release-artifact gate (see the "Scope boundary" note
+above). Treat it as the release-time counterpart to the fail-closed staging
+guarantees already documented above: an internal consistency and integrity
+check over exactly the two artifacts this repository stages, nothing more.
+
+### What it checks
+
+Given a bundle directory containing both platforms' staged output and this
+repository's checkout root, `release-artifact-gate assemble` fails closed
+unless:
+
+- both `*.staging-manifest.json` files are present, exactly one of each
+  `artifact_kind`, and every hash they claim (artifact, SBOM, provenance)
+  matches a hash recomputed from the actual file on disk;
+- `ares_core_source_revision`, `openfhe_version`, and
+  `openfhe_source_commit` agree exactly between the two platform artifacts;
+- that shared `openfhe_version`/`openfhe_source_commit` matches the
+  currently tracked `clients/native/openfhe.pin.json` (an artifact staged
+  against a since-rotated pin is rejected, not silently bundled);
+- `clients/native/android-ndk.pin.json` is present and well-formed;
+- the repo root's checkout is clean (`git status --porcelain` empty) and
+  its `HEAD` exactly equals the artifacts' recorded
+  `ares_core_source_revision` — the "clean-cache" guarantee: a bundle
+  cannot be assembled from a stale or locally-modified tree;
+- every required Apple slice / Android ABI (the same sets documented above)
+  is present, and the artifact archives actually contain what they claim:
+  the Android AAR has `libares_fhe_jni.so` plus all three OpenFHE shared
+  libraries under `jni/<abi>/` for every required ABI, and the Apple
+  XCFramework has `libAresPrivacyCore.a` plus the `COpenFHEBridge` module
+  headers for every required slice;
+- `clients/swift/Package.release.swift` contains no local
+  (`.package(path: ...)`) dependency, no `ProcessInfo`-driven or
+  workstation-toolchain-path (`/usr/local`, `/opt/homebrew`) substitution,
+  and does bind the staged `COpenFHEBridge` binary target.
+
+None of the above is re-derived from the native build scripts or their
+`emit_native_manifest` output at gate time — the gate opens the actual
+staged files and recomputes everything itself, the same fail-closed
+posture as the scripts that produced them.
+
+`release-artifact-gate verify -manifest=... -bundle-dir=... -repo-root=...`
+re-assembles the bundle from scratch and requires the result to be
+identical (aside from `generated_at`) to the given manifest, so a
+hand-edited or stale `release-cache-manifest.json` is rejected even if it
+happens to look internally plausible on its own.
+
+### Known limitation: NDK provenance
+
+The Android staging manifest (see schema above) does not record which
+exact NDK build produced a given artifact — that would require changing
+`build-android-aar.sh`, which is out of scope here. The gate's NDK check is
+therefore limited to confirming `android-ndk.pin.json` is present and
+well-formed, not to independently re-deriving the exact NDK version that
+built a specific staged AAR.
+
+### Release-cache manifest schema
+
+```json
+{
+  "schema_version": 1,
+  "ares_core_source_revision": "...",
+  "openfhe_version": "v1.5.1",
+  "openfhe_source_commit": "...",
+  "apple": {
+    "artifact_kind": "apple_xcframework",
+    "artifact_file": "AresPrivacyCore-v1.5.1-apple.xcframework.zip",
+    "artifact_sha256": "...",
+    "target_architectures": ["ios-arm64", "ios-arm64-simulator", "macos-arm64"],
+    "sbom_file": "...", "sbom_sha256": "...",
+    "provenance_file": "...", "provenance_sha256": "..."
+  },
+  "android": {
+    "artifact_kind": "android_aar",
+    "artifact_file": "AresPrivacyCore-v1.5.1-android.aar",
+    "artifact_sha256": "...",
+    "target_architectures": ["arm64-v8a", "x86_64"],
+    "sbom_file": "...", "sbom_sha256": "...",
+    "provenance_file": "...", "provenance_sha256": "..."
+  },
+  "swift_release_manifest_sha256": "...",
+  "generated_at": "..."
+}
+```
+
+Artifact/SBOM/provenance files are recorded as bundle-relative basenames,
+never the absolute local path the native build scripts happened to use for
+`OUTPUT_DIR` — a release-cache manifest is meant to be reproducible from a
+copy of the bundle directory on any machine.
+
+### Testing
+
+`internal/releasebundle/*_test.go` cover `Assemble` and `Verify` directly
+against fixture bundles (a real, tiny, committed local git repository plus
+hand-built fixture zip archives shaped like the real artifacts), including
+mutation coverage for a mismatched source revision, a mismatched artifact
+hash, a local SwiftPM path dependency, an environment-driven dependency
+substitution, and an absent required Android ABI/JNI library.
+`cmd/release-artifact-gate/main_test.go` drives the built CLI binary as a
+real subprocess through `assemble` then `verify` against a fixture bundle,
+including a tampered-artifact rejection case, so the exit-code and
+stdout/stderr contract is exercised end to end, not just the underlying Go
+functions.
+
+```
+go test ./internal/releasebundle/... ./cmd/release-artifact-gate/... -v -count=1
+```
