@@ -11,6 +11,10 @@
 coverage.txt
 coverage.html
 
+# SwiftPM build artifacts
+.build/
+.swiftpm/
+
 # Editor / IDE
 .vscode/
 .idea/
