@@ -1,6 +1,5 @@
 package ares.client.fhe
 
-<<<<<<< HEAD
 class CryptoContext private constructor(internal val raw: Long) : AutoCloseable {
     constructor(
         ringDim: Int,
@@ -41,25 +40,6 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
             .also { if (it == 0L) throw FHEException("BFV context creation failed") }
     )
 
-=======
-class CryptoContext(
-    ringDim: Int,
-    scalingFactor: Double,
-    depth: Int,
-    batchSize: Int = 0,
-    minimalRotationKeys: Boolean = false,
-    evalSumOnlyRotationKeys: Boolean = false,
-    profileDim: Int = 0,
-    payloadSlotCount: Int = 0,
-    scalingModSize: Int? = null,
-    firstModSize: Int? = null
-) : AutoCloseable {
-    private val explicitModuli = validateExplicitModuli(scalingModSize, firstModSize)
-    internal val raw: Long = (explicitModuli?.let { (scaling, first) ->
-        NativeFHE.createContextWithModuli(ringDim, depth, scaling, first, batchSize)
-    } ?: NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize))
-        .also { if (it == 0L) throw FHEException("context creation failed") }
->>>>>>> 3734372 (feat(kotlin): bind explicit ckks moduli)
     private val state = ContextState(raw)
     @Suppress("unused")
     private val cleanable = FHE_CLEANER.register(this, state)
