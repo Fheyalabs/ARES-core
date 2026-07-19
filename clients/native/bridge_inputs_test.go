@@ -21,3 +21,30 @@ func TestNativeBridgeProjectsUseCanonicalSources(t *testing.T) {
 		}
 	}
 }
+
+func TestCanonicalWrapperSuppliesEveryEncryptedInputJNIEntryPoint(t *testing.T) {
+	root := repoRoot(t)
+	header, err := os.ReadFile(filepath.Join(root, "pkg/ares/crypto/cgo/openfhe_wrapper.h"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	implementation, err := os.ReadFile(filepath.Join(root, "pkg/ares/crypto/cgo/openfhe_wrapper.cpp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, symbol := range []string{
+		"EncryptSerializedPayloadChunk",
+		"EncryptSerializedRepeatedScalarCKKS",
+		"ComputeSerializedSquaredDistanceCKKS",
+		"EncryptSerializedRepeatedScalarBFV",
+		"ComputeSerializedSquaredDistanceBFV",
+	} {
+		if !strings.Contains(string(header), symbol) {
+			t.Fatalf("canonical wrapper header does not declare JNI encrypted-input entry point %s", symbol)
+		}
+		if !strings.Contains(string(implementation), symbol) {
+			t.Fatalf("canonical wrapper implementation does not define JNI encrypted-input entry point %s", symbol)
+		}
+	}
+}
