@@ -7,28 +7,67 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
-### Roadmap (Fheya-app-side, recorded here so ARES-core knows what its consumer needs)
+### Added
 
-The Fheya app at `Fheyalabs/ARES.git` is the load test for ARES-core
-v1.0. Three pieces of work blocking real homelab traffic — none of
-which require ARES-core API changes, but ARES-core's `[Unreleased]`
-records them so the framework knows what its primary consumer is
-moving toward.
+- **Kotlin BFV encrypted-location input helpers.** `ares-client-fhe` now
+  exposes BFV contexts, exact packed-int7 profile encryption, exact packed
+  threshold fusion, repeated-scalar origin encryption, and client-side
+  encrypted squared-distance construction. Kotlin clients can therefore build
+  the ciphertext-only BFV fallback input contract without serializing raw
+  location values or decrypting candidate scores.
 
-- **Post-session memory cleanup.** Orchestrator currently leaks
-  per-session FHE artifacts (`scoringInputs`, `profiles`, accumulator
-  buckets) until container restart. Audit OP-CAP-6. Fheya-app PR.
-- **Nightly amortized keygen.** Threshold keygen is 95% of
-  `n=6` dim=128 session wall-clock. Proposal:
-  `wiki/summaries/nightly-keygen-batch-orchestrator-2026-05-19.md` —
-  split orchestration into cohort-formation / nightly-keygen /
-  daytime-scoring subsystems. Uses ARES-core's existing
-  `keygen.PreSharedKeygen` primitive; no framework changes required.
-- **Self-hosted CI runner on the homelab.** Free GitHub-hosted
-  runners can't carry full `n=6` dim=128 keygen; Fheya's end-to-end
-  lane needs `runs-on: [self-hosted, fheya-homelab]`. ARES-core's CI
-  stays on hosted runners; Fheya's CI gets a separate self-hosted
-  lane.
+## [0.9.14] — 2026-07-18
+
+### Added
+
+- **Swift BFV encrypted-location input helpers.** `AresClientFHE` now exposes
+  exact repeated-scalar BFV encryption and client-side encrypted squared
+  distance construction. The helper accepts serialized encrypted origins plus
+  local integer coordinates, so applications can submit the ciphertext-only
+  BFV fallback input contract without serializing raw location values.
+
+## [0.9.13] — 2026-07-17
+
+### Added
+
+- **Ciphertext-only CKKS inputs for chunked threshold scoring.**
+  `EncryptedInputFuseRequest` carries candidate-major encrypted payload chunks
+  and encrypted squared-distance inputs. `ChunkedFuseEncryptedInputsCKKS` and
+  its union-scoring variants take this narrow type, which has no plaintext
+  package or location fields. The eval-sum reference variants retain the
+  b-only key layout for memory-bounded sessions.
+- **Client encryption helpers for the encrypted-input path.** Swift and
+  Kotlin FHE clients expose payload-chunk encryption, repeated-scalar
+  encryption, and local encrypted squared-distance construction. Their native
+  bindings share the canonical bridge packing, so the two clients produce the
+  same chunk layout.
+- **Ciphertext-only exact BFV fallback fusion.** `BFVBlindFuseRequest` accepts
+  encrypted profiles, client-derived encrypted squared distances, server-owned
+  brownie offsets, and encrypted payloads, then returns only one fused
+  threshold ciphertext. It has no coordinate or plaintext-score fields.
+  BFV eval-sum combines can resolve artifact-backed shares incrementally, and
+  the blind-fusion polynomial path defaults to its lower-residency power cache.
+- **Three-stage threshold keygen runner coverage.**
+  `Phase0aThresholdKeygen` now explicitly consumes `keygen.eval_round1` in
+  addition to `keygen.share` and `keygen.eval_share`, allowing applications to
+  durably acknowledge every evaluation-key stage before advancing their
+  session state.
+- **Single-key evaluator-key transfer APIs.**
+  `SingleKeyGenWithEvalKey`, `SingleKeyAuctionServerWithEvalKey`, and
+  `SingleKeyAuctionServerEncWithEvalKey` support a separate evaluator context
+  without exposing the secret key. The legacy single-key auction entry points
+  now fail before evaluation with a migration error because their signatures
+  cannot carry this required public evaluation material.
+
+## [0.9.12] — 2026-07-04
+
+### Added
+
+- **Explicit OpenFHE global context-factory release.**
+  `ReleaseOpenFHEGlobalContexts` clears OpenFHE's process-global
+  `CryptoContextFactory` cache, and `OpenFHEContextCount` exposes the retained
+  context count for diagnostics. Long-lived services should call the release
+  only at a quiescent boundary where no CryptoContext handles are in use.
 
 ## [0.9.11] — 2026-07-04
 
@@ -746,7 +785,8 @@ Initial framework-extraction snapshot (private). Split ARES into a
 generic framework (`Fheyalabs/ARES-core`) and a Fheya app
 (`Fheyalabs/ARES`). 30+ tests passing across both repos.
 
-[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.11...HEAD
+[Unreleased]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.12...HEAD
+[0.9.12]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.11...v0.9.12
 [0.9.11]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.10...v0.9.11
 [0.9.10]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.9...v0.9.10
 [0.9.5]: https://github.com/Fheyalabs/ARES-core/compare/v0.9.2...v0.9.5

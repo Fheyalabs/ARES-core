@@ -40,8 +40,16 @@ JNIEXPORT jint JNICALL Java_ares_client_fhe_NativeFHE_smoke(JNIEnv*, jclass) {
 }
 
 // ── context ──
-JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContext(JNIEnv*, jclass, jint ringDim, jdouble scale, jint depth) {
-    return H(CreateCKKSContext((uint32_t)ringDim, (double)scale, (uint32_t)depth));
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContext(JNIEnv*, jclass, jint ringDim, jdouble scale, jint depth, jint batchSize) {
+    return H(CreateCKKSContext((uint32_t)ringDim, (double)scale, (uint32_t)depth, (uint32_t)batchSize));
+}
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createBFVContext(JNIEnv*, jclass, jint ringDim, jint multiplicativeDepth, jlong plaintextModulus, jint batchSize) {
+    return H(CreateBFVContext(
+        (uint32_t)ringDim,
+        (uint32_t)multiplicativeDepth,
+        (uint64_t)plaintextModulus,
+        (uint32_t)batchSize
+    ));
 }
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeContext(JNIEnv*, jclass, jlong c) { FreeCryptoContext(P(c)); }
 
@@ -122,6 +130,18 @@ JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_encrypt(JNIEnv* env, jcla
     env->ReleaseDoubleArrayElements(values, v, JNI_ABORT);
     return H(out);
 }
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_encryptPackedInt(JNIEnv* env, jclass, jlong ctx, jlong pk, jlongArray values) {
+    if (values == nullptr) return 0;
+    jsize n = env->GetArrayLength(values);
+    if (n <= 0) return 0;
+    jlong* packed = env->GetLongArrayElements(values, nullptr);
+    if (packed == nullptr) return 0;
+    std::vector<int64_t> nativeValues((size_t)n);
+    for (jsize i = 0; i < n; ++i) nativeValues[(size_t)i] = (int64_t)packed[i];
+    void* out = EncryptPackedInt(P(ctx), P(pk), nativeValues.data(), (int)n);
+    env->ReleaseLongArrayElements(values, packed, JNI_ABORT);
+    return H(out);
+}
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_multiDecMain(JNIEnv*, jclass, jlong ctx, jlong ct, jlong sk) {
     void* out=nullptr; return MultiDecMain(P(ctx), P(ct), P(sk), &out)==0 ? H(out) : 0;
 }
@@ -132,6 +152,20 @@ JNIEXPORT jdoubleArray JNICALL Java_ares_client_fhe_NativeFHE_multiDecFusion(JNI
     if (rc != 0) return env->NewDoubleArray(0);
     jdoubleArray arr = env->NewDoubleArray(n);
     env->SetDoubleArrayRegion(arr, 0, n, out.data());
+    return arr;
+}
+JNIEXPORT jlongArray JNICALL Java_ares_client_fhe_NativeFHE_multiDecFusionPackedInt(JNIEnv* env, jclass, jlong ctx, jlongArray partials, jint cap) {
+    if (partials == nullptr || cap <= 0) return env->NewLongArray(0);
+    auto pv = handles(env, partials);
+    std::vector<int64_t> out((size_t)cap, 0);
+    int n = cap;
+    if (MultiDecFusionPackedInt(P(ctx), pv.data(), (int)pv.size(), out.data(), &n) != 0 || n <= 0) {
+        return env->NewLongArray(0);
+    }
+    jlongArray arr = env->NewLongArray(n);
+    std::vector<jlong> javaValues((size_t)n);
+    for (int i = 0; i < n; ++i) javaValues[(size_t)i] = (jlong)out[(size_t)i];
+    env->SetLongArrayRegion(arr, 0, n, javaValues.data());
     return arr;
 }
 
@@ -162,6 +196,76 @@ JNIEXPORT jlongArray JNICALL Java_ares_client_fhe_NativeFHE_evalArgmax(JNIEnv* e
 }
 
 // ── serialization ── (serialize → byte[] | null; deserialize → handle | 0)
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_encryptSerializedPayloadChunk(JNIEnv* env, jclass, jlong ctx, jlong pk, jbyteArray payload, jint bitOffset, jint chunkSize) {
+    if (payload == nullptr || bitOffset < 0 || chunkSize <= 0) return nullptr;
+    const jsize len = env->GetArrayLength(payload);
+    jbyte* data = env->GetByteArrayElements(payload, nullptr);
+    if (data == nullptr) return nullptr;
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = EncryptSerializedPayloadChunk(P(ctx), P(pk), reinterpret_cast<const uint8_t*>(data),
+        static_cast<size_t>(len), static_cast<size_t>(bitOffset), static_cast<size_t>(chunkSize), &out, &outLen);
+    env->ReleaseByteArrayElements(payload, data, JNI_ABORT);
+    return bytesAndFree(env, out, outLen, rc);
+}
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_encryptSerializedRepeatedScalar(JNIEnv* env, jclass, jlong ctx, jlong pk, jdouble value) {
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = EncryptSerializedRepeatedScalarCKKS(P(ctx), P(pk), static_cast<double>(value), &out, &outLen);
+    return bytesAndFree(env, out, outLen, rc);
+}
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_computeSerializedSquaredDistance(JNIEnv* env, jclass, jlong ctx, jbyteArray originFirst, jbyteArray originSecond, jdouble localFirst, jdouble localSecond) {
+    if (originFirst == nullptr || originSecond == nullptr) return nullptr;
+    const jsize firstLen = env->GetArrayLength(originFirst);
+    const jsize secondLen = env->GetArrayLength(originSecond);
+    jbyte* first = env->GetByteArrayElements(originFirst, nullptr);
+    jbyte* second = env->GetByteArrayElements(originSecond, nullptr);
+    if (first == nullptr || second == nullptr) {
+        if (first != nullptr) env->ReleaseByteArrayElements(originFirst, first, JNI_ABORT);
+        if (second != nullptr) env->ReleaseByteArrayElements(originSecond, second, JNI_ABORT);
+        return nullptr;
+    }
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = ComputeSerializedSquaredDistanceCKKS(P(ctx),
+        reinterpret_cast<const uint8_t*>(first), static_cast<size_t>(firstLen),
+        reinterpret_cast<const uint8_t*>(second), static_cast<size_t>(secondLen),
+        static_cast<double>(localFirst), static_cast<double>(localSecond), &out, &outLen);
+    env->ReleaseByteArrayElements(originFirst, first, JNI_ABORT);
+    env->ReleaseByteArrayElements(originSecond, second, JNI_ABORT);
+    return bytesAndFree(env, out, outLen, rc);
+}
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_encryptSerializedRepeatedScalarBFV(JNIEnv* env, jclass, jlong ctx, jlong pk, jlong value) {
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = EncryptSerializedRepeatedScalarBFV(P(ctx), P(pk), (int64_t)value, &out, &outLen);
+    return bytesAndFree(env, out, outLen, rc);
+}
+JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_computeSerializedSquaredDistanceBFV(JNIEnv* env, jclass, jlong ctx, jbyteArray originFirst, jbyteArray originSecond, jlong localFirst, jlong localSecond) {
+    if (originFirst == nullptr || originSecond == nullptr) return nullptr;
+    const jsize firstLen = env->GetArrayLength(originFirst);
+    const jsize secondLen = env->GetArrayLength(originSecond);
+    if (firstLen <= 0 || secondLen <= 0) return nullptr;
+    jbyte* first = env->GetByteArrayElements(originFirst, nullptr);
+    jbyte* second = env->GetByteArrayElements(originSecond, nullptr);
+    if (first == nullptr || second == nullptr) {
+        if (first != nullptr) env->ReleaseByteArrayElements(originFirst, first, JNI_ABORT);
+        if (second != nullptr) env->ReleaseByteArrayElements(originSecond, second, JNI_ABORT);
+        return nullptr;
+    }
+    uint8_t* out = nullptr;
+    size_t outLen = 0;
+    const int rc = ComputeSerializedSquaredDistanceBFV(
+        P(ctx),
+        reinterpret_cast<const uint8_t*>(first), static_cast<size_t>(firstLen),
+        reinterpret_cast<const uint8_t*>(second), static_cast<size_t>(secondLen),
+        (int64_t)localFirst, (int64_t)localSecond,
+        &out, &outLen
+    );
+    env->ReleaseByteArrayElements(originFirst, first, JNI_ABORT);
+    env->ReleaseByteArrayElements(originSecond, second, JNI_ABORT);
+    return bytesAndFree(env, out, outLen, rc);
+}
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializeCiphertext(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializeCiphertext(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_deserializeCiphertext(JNIEnv* env, jclass, jlong ctx, jbyteArray d){jsize n=env->GetArrayLength(d); jbyte* p=env->GetByteArrayElements(d,nullptr); void* out=DeserializeCiphertext(P(ctx),reinterpret_cast<uint8_t*>(p),(size_t)n); env->ReleaseByteArrayElements(d,p,JNI_ABORT); return H(out);}
 JNIEXPORT jbyteArray JNICALL Java_ares_client_fhe_NativeFHE_serializePublicKey(JNIEnv* env, jclass, jlong h){uint8_t* b=nullptr; size_t l=0; int rc=SerializePublicKey(P(h),&b,&l); return bytesAndFree(env,b,l,rc);}
