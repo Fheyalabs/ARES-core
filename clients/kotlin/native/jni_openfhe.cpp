@@ -43,7 +43,38 @@ JNIEXPORT jint JNICALL Java_ares_client_fhe_NativeFHE_smoke(JNIEnv*, jclass) {
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContext(JNIEnv*, jclass, jint ringDim, jdouble scale, jint depth, jint batchSize) {
     return H(CreateCKKSContext((uint32_t)ringDim, (double)scale, (uint32_t)depth, (uint32_t)batchSize));
 }
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_createContextWithModuli(JNIEnv*, jclass, jint ringDim, jint depth, jint scalingModSize, jint firstModSize, jint batchSize) {
+    return H(CreateCKKSContextWithModuli(
+        (uint32_t)ringDim,
+        (uint32_t)depth,
+        (uint32_t)scalingModSize,
+        (uint32_t)firstModSize,
+        (uint32_t)batchSize));
+}
 JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_freeContext(JNIEnv*, jclass, jlong c) { FreeCryptoContext(P(c)); }
+JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_setMinimalRotationKeys(JNIEnv*, jclass, jlong ctx, jint profileDim, jint payloadSlotCount) {
+    SetMinimalRotationKeys(P(ctx), (int)profileDim, (int)payloadSlotCount);
+}
+JNIEXPORT void JNICALL Java_ares_client_fhe_NativeFHE_setEvalSumOnlyRotationKeys(JNIEnv*, jclass, jlong ctx, jint profileDim) {
+    SetEvalSumOnlyRotationKeys(P(ctx), (int)profileDim);
+}
+JNIEXPORT jintArray JNICALL Java_ares_client_fhe_NativeFHE_rotationIndices(JNIEnv* env, jclass, jlong ctx) {
+    int32_t count = 0;
+    if (GetMinimalRotationIndices(P(ctx), nullptr, &count) != 0 || count <= 0) {
+        return env->NewIntArray(0);
+    }
+    std::vector<int32_t> indices((size_t)count);
+    if (GetMinimalRotationIndices(P(ctx), indices.data(), &count) != 0 || count <= 0) {
+        return env->NewIntArray(0);
+    }
+    std::vector<jint> output((size_t)count);
+    for (int32_t i = 0; i < count; i++) {
+        output[(size_t)i] = static_cast<jint>(indices[(size_t)i]);
+    }
+    jintArray out = env->NewIntArray(count);
+    env->SetIntArrayRegion(out, 0, count, output.data());
+    return out;
+}
 
 // ── keygen ── (out-param pairs returned as long[]{pk,sk}; empty array on failure)
 JNIEXPORT jlongArray JNICALL Java_ares_client_fhe_NativeFHE_keyGenFirst(JNIEnv* env, jclass, jlong ctx) {
@@ -104,6 +135,12 @@ JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_evalSumKeyGenLead(JNIEnv*
 }
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_evalSumKeyShare(JNIEnv*, jclass, jlong ctx, jlong sk, jlong base, jlong ownPk) {
     void* out=nullptr; return EvalSumKeyShare(P(ctx), P(sk), P(base), P(ownPk), &out)==0 ? H(out) : 0;
+}
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_generatePerIndexEvalSumKey(JNIEnv*, jclass, jlong ctx, jlong sk, jint index) {
+    void* out=nullptr; return GeneratePerIndexEvalSumKey(P(ctx), P(sk), (int32_t)index, &out)==0 ? H(out) : 0;
+}
+JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_generatePerIndexEvalSumShare(JNIEnv*, jclass, jlong ctx, jlong sk, jlong base, jlong ownPk, jint index) {
+    void* out=nullptr; return GeneratePerIndexEvalSumShare(P(ctx), P(sk), P(base), P(ownPk), (int32_t)index, &out)==0 ? H(out) : 0;
 }
 JNIEXPORT jlong JNICALL Java_ares_client_fhe_NativeFHE_combineEvalSumKeys(JNIEnv* env, jclass, jlong ctx, jlongArray pks, jlongArray shares) {
     auto pv = handles(env, pks); auto sv = handles(env, shares); void* out=nullptr;
