@@ -38,6 +38,16 @@ public final class CryptoContext {
         self.raw = h
     }
     deinit { FreeCryptoContext(raw) }
+
+    public static func openFHEContextCount() -> Int {
+        Int(OpenFHEContextCount())
+    }
+
+    /// Releases process-global OpenFHE context state at a quiescent boundary.
+    /// Callers must not retain a CryptoContext when invoking this method.
+    public static func releaseOpenFHEGlobalContexts() {
+        ReleaseAllOpenFHEContexts()
+    }
 }
 
 public typealias BFVCryptoContext = CryptoContext
