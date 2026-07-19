@@ -7,6 +7,15 @@ versions may include breaking changes).
 
 ## [Unreleased]
 
+### Added
+
+- **Kotlin BFV encrypted-location input helpers.** `ares-client-fhe` now
+  exposes BFV contexts, exact packed-int7 profile encryption, exact packed
+  threshold fusion, repeated-scalar origin encryption, and client-side
+  encrypted squared-distance construction. Kotlin clients can therefore build
+  the ciphertext-only BFV fallback input contract without serializing raw
+  location values or decrypting candidate scores.
+
 ## [0.9.14] — 2026-07-18
 
 ### Added

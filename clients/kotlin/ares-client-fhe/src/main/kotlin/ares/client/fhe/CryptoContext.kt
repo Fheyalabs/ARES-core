@@ -1,8 +1,20 @@
 package ares.client.fhe
 
-class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: Int = 0) : AutoCloseable {
-    internal val raw: Long = NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize)
-        .also { if (it == 0L) throw FHEException("context creation failed") }
+class CryptoContext private constructor(internal val raw: Long) : AutoCloseable {
+    constructor(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: Int = 0) : this(
+        NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize)
+            .also { if (it == 0L) throw FHEException("context creation failed") }
+    )
+
+    constructor(
+        ringDim: Int,
+        multiplicativeDepth: Int,
+        plaintextModulus: Long,
+        batchSize: Int = 0
+    ) : this(
+        NativeFHE.createBFVContext(ringDim, multiplicativeDepth, plaintextModulus, batchSize)
+            .also { if (it == 0L) throw FHEException("BFV context creation failed") }
+    )
     private val state = ContextState(raw)
     @Suppress("unused")
     private val cleanable = FHE_CLEANER.register(this, state)
@@ -29,6 +41,13 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: 
     fun encrypt(values: DoubleArray, under: PublicKey): Ciphertext {
         val h = NativeFHE.encrypt(raw, under.raw, values)
         if (h == 0L) throw FHEException("encrypt failed"); return Ciphertext(h)
+    }
+
+    /** Encrypt exact packed integer slots under a BFV collective public key. */
+    fun encryptPackedInts(values: LongArray, under: PublicKey): Ciphertext {
+        val h = NativeFHE.encryptPackedInt(raw, under.raw, values)
+        if (h == 0L) throw FHEException("packed integer encryption failed")
+        return Ciphertext(h)
     }
 
     /** Encrypt MSB-first fixed-size payload chunks with bridge-owned bit packing. */
@@ -60,6 +79,29 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: 
         return NativeFHE.computeSerializedSquaredDistance(raw, originFirst, originSecond, localFirst, localSecond)
             ?: throw FHEException("encrypted squared distance failed")
     }
+
+    /** Encrypt one exact integer scalar into every BFV batch slot. */
+    fun encryptRepeatedScalarBFV(value: Long, under: PublicKey): ByteArray =
+        NativeFHE.encryptSerializedRepeatedScalarBFV(raw, under.raw, value)
+            ?: throw FHEException("BFV repeated scalar encryption failed")
+
+    /** Derive an exact encrypted squared distance from BFV origin ciphertexts. */
+    fun encryptedSquaredDistanceBFV(
+        originFirst: ByteArray,
+        originSecond: ByteArray,
+        localFirst: Long,
+        localSecond: Long
+    ): ByteArray {
+        require(originFirst.isNotEmpty()) { "origin first ciphertext must not be empty" }
+        require(originSecond.isNotEmpty()) { "origin second ciphertext must not be empty" }
+        return NativeFHE.computeSerializedSquaredDistanceBFV(
+            raw,
+            originFirst,
+            originSecond,
+            localFirst,
+            localSecond
+        ) ?: throw FHEException("BFV encrypted squared distance failed")
+    }
     /** Every party uses MultiDecMain (matches ThresholdSmokeCKKS). */
     fun partialDecrypt(ct: Ciphertext, sk: SecretKeyShare): Ciphertext {
         val h = NativeFHE.multiDecMain(raw, ct.raw, sk.raw)
@@ -68,6 +110,12 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int, batchSize: 
     fun fuse(partials: List<Ciphertext>, slotCapacity: Int): DoubleArray {
         val out = NativeFHE.multiDecFusion(raw, LongArray(partials.size) { partials[it].raw }, slotCapacity)
         if (out.isEmpty()) throw FHEException("fuse failed"); return out
+    }
+
+    fun fusePackedInt(partials: List<Ciphertext>, slotCapacity: Int): LongArray {
+        val out = NativeFHE.multiDecFusionPackedInt(raw, LongArray(partials.size) { partials[it].raw }, slotCapacity)
+        if (out.isEmpty()) throw FHEException("packed integer fusion failed")
+        return out
     }
 
     /** Single-party keygen + eval-mult key. Rider-only; no multi-party rounds. */
