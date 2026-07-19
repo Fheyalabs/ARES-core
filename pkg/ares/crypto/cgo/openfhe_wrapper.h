@@ -26,6 +26,16 @@ CryptoContextHandle CreateCKKSContext(
     uint32_t depth,        // 12
     uint32_t batch_size    // 0 = ring_dim/2 (default), >0 = explicit batch
 );
+// CreateCKKSContextWithModuli is the explicit-parameter variant used when a
+// signed contract carries both CKKS modulus sizes. It avoids deriving the
+// first modulus from a legacy default.
+CryptoContextHandle CreateCKKSContextWithModuli(
+    uint32_t ring_dim,
+    uint32_t multiplicative_depth,
+    uint32_t scaling_mod_size,
+    uint32_t first_mod_size,
+    uint32_t batch_size
+);
 CryptoContextHandle CreateBFVContext(
     uint32_t ring_dim,
     uint32_t multiplicative_depth,
@@ -65,6 +75,11 @@ int GenRotKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     RotKeyHandle* out_share);
 
 int SingleKeyEvalMultKeyGen(CryptoContextHandle ctx, SecretKeyShareHandle sk);
+// SingleKeyEvalMultKeyGenWithOutput generates the single-key relinearization
+// key and returns it for serialization and transfer to a fresh evaluator
+// context.
+int SingleKeyEvalMultKeyGenWithOutput(CryptoContextHandle ctx,
+    SecretKeyShareHandle sk, EvalMultKeyHandle* out_key);
 
 int EvalMultKeyGenLead(CryptoContextHandle ctx, SecretKeyShareHandle sk,
     EvalMultKeyHandle* out_base);
@@ -225,6 +240,27 @@ int GetOpenFHEVersion(char* out_buf, int out_cap);
 #define ARES_ERR_CTX_MISMATCH (-200)
 
 // Serialization
+// Encrypt one fixed-size, MSB-first bit chunk of a serialized payload and return
+// its ciphertext serialization. chunk_size must equal the context batch size;
+// bit_offset and chunk_size are measured in bits. The caller frees out_data with
+// free(3). This keeps payload bit packing in the native bridge so clients cannot
+// diverge on byte ordering.
+int EncryptSerializedPayloadChunk(CryptoContextHandle ctx, PublicKeyHandle pk,
+    const uint8_t* payload, size_t payload_len,
+    size_t bit_offset, size_t chunk_size,
+    uint8_t** out_data, size_t* out_len);
+// Encrypt one scalar repeated across the context batch and return its serialized
+// CKKS ciphertext. The caller frees out_data with free(3).
+int EncryptSerializedRepeatedScalarCKKS(CryptoContextHandle ctx, PublicKeyHandle pk,
+    double value, uint8_t** out_data, size_t* out_len);
+// Derive Enc((origin_first-local_first)^2 + (origin_second-local_second)^2)
+// from two serialized repeated-scalar ciphertexts. The context must already
+// contain the matching eval-mult key. The caller frees out_data with free(3).
+int ComputeSerializedSquaredDistanceCKKS(CryptoContextHandle ctx,
+    const uint8_t* origin_first, size_t origin_first_len,
+    const uint8_t* origin_second, size_t origin_second_len,
+    double local_first, double local_second,
+    uint8_t** out_data, size_t* out_len);
 int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len);
 CiphertextHandle DeserializeCiphertext(CryptoContextHandle ctx,
     uint8_t* data, size_t len);
@@ -319,6 +355,98 @@ int ARESChunkedFusePayloadCKKS(
     size_t eval_sum_key_len,
     const int* candidate_packages,
     int package_bytes,
+    int payload_slot_count,
+    uint8_t** out_cts,
+    size_t* out_cts_len,
+    size_t* out_chunk_lens,
+    int* out_n_chunks,
+    char* err,
+    size_t err_len
+);
+
+// ARESChunkedFuseEncryptedPayloadCKKS is the ciphertext-only counterpart of
+// ARESChunkedFusePayloadCKKS. candidate_payload_ct_blob contains exactly
+// n_candidates * ceil(payload_slot_count / next_pow2(profile_dim)) serialized
+// CKKS ciphertexts in candidate-major, then chunk-major order. The lens array
+// has one entry per ciphertext. The scorer never receives source package bytes.
+int ARESChunkedFuseEncryptedPayloadCKKS(
+    CryptoContextHandle ctx_handle,
+    uint32_t ring_dim,
+    double scaling_factor,
+    uint32_t depth,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob,
+    const size_t* candidate_ct_lens,
+    const int* candidate_lat_q,
+    const int* candidate_lon_q,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    int initiator_lat_q,
+    int initiator_lon_q,
+    double alpha,
+    double beta,
+    double gamma,
+    const char* comparator,
+    int comparator_degree,
+    double comparator_gain,
+    double comparator_input_scale,
+    double comparator_bound,
+    const char* selector_schedule,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const uint8_t* candidate_payload_ct_blob,
+    size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens,
+    int candidate_payload_ct_count,
+    int payload_slot_count,
+    uint8_t** out_cts,
+    size_t* out_cts_len,
+    size_t* out_chunk_lens,
+    int* out_n_chunks,
+    char* err,
+    size_t err_len
+);
+
+// ARESChunkedFuseEncryptedInputsCKKS accepts ciphertext-only candidate inputs:
+// encrypted profile vectors, one encrypted squared distance per candidate, and
+// encrypted payload chunks. It deliberately has no coordinate-array arguments.
+int ARESChunkedFuseEncryptedInputsCKKS(
+    CryptoContextHandle ctx_handle,
+    uint32_t ring_dim,
+    double scaling_factor,
+    uint32_t depth,
+    const uint8_t* initiator_ct,
+    size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob,
+    const size_t* candidate_ct_lens,
+    const int* candidate_brownies,
+    int n_candidates,
+    int profile_dim,
+    double alpha,
+    double beta,
+    double gamma,
+    const char* comparator,
+    int comparator_degree,
+    double comparator_gain,
+    double comparator_input_scale,
+    double comparator_bound,
+    const char* selector_schedule,
+    const uint8_t* eval_mult_key,
+    size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key,
+    size_t eval_sum_key_len,
+    const uint8_t* candidate_distance_ct_blob,
+    size_t candidate_distance_ct_blob_len,
+    const size_t* candidate_distance_ct_lens,
+    int candidate_distance_ct_count,
+    const uint8_t* candidate_payload_ct_blob,
+    size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens,
+    int candidate_payload_ct_count,
     int payload_slot_count,
     uint8_t** out_cts,
     size_t* out_cts_len,

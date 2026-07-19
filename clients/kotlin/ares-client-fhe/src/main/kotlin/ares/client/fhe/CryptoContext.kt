@@ -1,13 +1,43 @@
 package ares.client.fhe
 
-class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoCloseable {
-    internal val raw: Long = NativeFHE.createContext(ringDim, scalingFactor, depth)
+class CryptoContext(
+    ringDim: Int,
+    scalingFactor: Double,
+    depth: Int,
+    batchSize: Int = 0,
+    minimalRotationKeys: Boolean = false,
+    evalSumOnlyRotationKeys: Boolean = false,
+    profileDim: Int = 0,
+    payloadSlotCount: Int = 0,
+    scalingModSize: Int? = null,
+    firstModSize: Int? = null
+) : AutoCloseable {
+    private val explicitModuli = validateExplicitModuli(scalingModSize, firstModSize)
+    internal val raw: Long = (explicitModuli?.let { (scaling, first) ->
+        NativeFHE.createContextWithModuli(ringDim, depth, scaling, first, batchSize)
+    } ?: NativeFHE.createContext(ringDim, scalingFactor, depth, batchSize))
         .also { if (it == 0L) throw FHEException("context creation failed") }
     private val state = ContextState(raw)
     @Suppress("unused")
     private val cleanable = FHE_CLEANER.register(this, state)
     private class ContextState(@Volatile var raw: Long) : Runnable {
         override fun run() { val h = raw; if (h != 0L) { raw = 0L; NativeFHE.freeContext(h) } }
+    }
+    init {
+        require(!(minimalRotationKeys && evalSumOnlyRotationKeys)) {
+            "minimal and eval-sum-only rotation modes are mutually exclusive"
+        }
+        when {
+            minimalRotationKeys -> {
+                require(profileDim > 0) { "profileDim must be positive for minimal rotation keys" }
+                require(payloadSlotCount > 0) { "payloadSlotCount must be positive for minimal rotation keys" }
+                NativeFHE.setMinimalRotationKeys(raw, profileDim, payloadSlotCount)
+            }
+            evalSumOnlyRotationKeys -> {
+                require(profileDim > 0) { "profileDim must be positive for eval-sum-only rotation keys" }
+                NativeFHE.setEvalSumOnlyRotationKeys(raw, profileDim)
+            }
+        }
     }
     override fun close() { state.run() }
 
@@ -29,6 +59,36 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoClose
     fun encrypt(values: DoubleArray, under: PublicKey): Ciphertext {
         val h = NativeFHE.encrypt(raw, under.raw, values)
         if (h == 0L) throw FHEException("encrypt failed"); return Ciphertext(h)
+    }
+
+    /** Encrypt MSB-first fixed-size payload chunks with bridge-owned bit packing. */
+    fun encryptPayloadChunks(payload: ByteArray, under: PublicKey, chunkSize: Int): List<ByteArray> {
+        require(payload.isNotEmpty()) { "payload must not be empty" }
+        require(chunkSize > 0) { "chunk size must be positive" }
+        val payloadBits = Math.multiplyExact(payload.size, 8)
+        require(payloadBits % chunkSize == 0) { "payload must divide into whole chunks" }
+        return List(payloadBits / chunkSize) { index ->
+            NativeFHE.encryptSerializedPayloadChunk(raw, under.raw, payload, index * chunkSize, chunkSize)
+                ?: throw FHEException("payload chunk encryption failed")
+        }
+    }
+
+    /** Encrypt one scalar into every batch slot for a local encrypted distance computation. */
+    fun encryptRepeatedScalar(value: Double, under: PublicKey): ByteArray =
+        NativeFHE.encryptSerializedRepeatedScalar(raw, under.raw, value)
+            ?: throw FHEException("repeated scalar encryption failed")
+
+    /** Derive a serialized encrypted squared distance without serializing local values. */
+    fun encryptedSquaredDistance(
+        originFirst: ByteArray,
+        originSecond: ByteArray,
+        localFirst: Double,
+        localSecond: Double
+    ): ByteArray {
+        require(originFirst.isNotEmpty()) { "origin first ciphertext must not be empty" }
+        require(originSecond.isNotEmpty()) { "origin second ciphertext must not be empty" }
+        return NativeFHE.computeSerializedSquaredDistance(raw, originFirst, originSecond, localFirst, localSecond)
+            ?: throw FHEException("encrypted squared distance failed")
     }
     /** Every party uses MultiDecMain (matches ThresholdSmokeCKKS). */
     fun partialDecrypt(ct: Ciphertext, sk: SecretKeyShare): Ciphertext {
@@ -76,6 +136,21 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoClose
     // eval-sum (rotation) key
     fun evalSumKeyGenLead(sk: SecretKeyShare): RotKey { val h = NativeFHE.evalSumKeyGenLead(raw, sk.raw); if (h==0L) throw FHEException("esk lead"); return RotKey(h) }
     fun evalSumKeyShare(sk: SecretKeyShare, base: RotKey, ownPK: PublicKey): RotKey { val h = NativeFHE.evalSumKeyShare(raw, sk.raw, base.raw, ownPK.raw); if (h==0L) throw FHEException("esk share"); return RotKey(h) }
+    fun rotationIndices(): IntArray = NativeFHE.rotationIndices(raw).also {
+        if (it.isEmpty()) throw FHEException("rotation index set is empty")
+    }
+    fun generatePerIndexEvalSumKey(sk: SecretKeyShare, index: Int): RotKey {
+        require(index != 0) { "rotation index must be non-zero" }
+        val h = NativeFHE.generatePerIndexEvalSumKey(raw, sk.raw, index)
+        if (h == 0L) throw FHEException("per-index eval-sum lead")
+        return RotKey(h)
+    }
+    fun generatePerIndexEvalSumShare(sk: SecretKeyShare, base: RotKey, ownPK: PublicKey, index: Int): RotKey {
+        require(index != 0) { "rotation index must be non-zero" }
+        val h = NativeFHE.generatePerIndexEvalSumShare(raw, sk.raw, base.raw, ownPK.raw, index)
+        if (h == 0L) throw FHEException("per-index eval-sum share")
+        return RotKey(h)
+    }
     fun combineEvalSumKeys(pks: List<PublicKey>, shares: List<RotKey>): RotKey {
         require(pks.size >= shares.size)
         val h = NativeFHE.combineEvalSumKeys(raw, LongArray(pks.size){pks[it].raw}, LongArray(shares.size){shares[it].raw}); if (h==0L) throw FHEException("esk combine"); return RotKey(h) }
@@ -102,4 +177,27 @@ class CryptoContext(ringDim: Int, scalingFactor: Double, depth: Int) : AutoClose
     fun deserializeEvalMultKey(d: ByteArray): EvalMultKey { val h=NativeFHE.deserializeEvalMultKey(raw,d); if(h==0L) throw FHEException("deser emk"); return EvalMultKey(h) }
     fun serialize(key: RotKey): ByteArray = NativeFHE.serializeRotKey(key.raw) ?: throw FHEException("ser rk")
     fun deserializeRotKey(d: ByteArray): RotKey { val h=NativeFHE.deserializeRotKey(raw,d); if(h==0L) throw FHEException("deser rk"); return RotKey(h) }
+    fun serializeRotKeyAVectors(key: RotKey): ByteArray =
+        NativeFHE.serializeRotKeyAVectors(key.raw) ?: throw FHEException("ser rk a-vectors")
+    fun serializeRotKeyBVectors(key: RotKey): ByteArray =
+        NativeFHE.serializeRotKeyBVectors(key.raw) ?: throw FHEException("ser rk b-vectors")
+    fun reconstructRotKeyFromAB(aVectors: ByteArray, bVectors: ByteArray): RotKey {
+        require(aVectors.isNotEmpty()) { "rotation-key a-vectors are required" }
+        require(bVectors.isNotEmpty()) { "rotation-key b-vectors are required" }
+        val h = NativeFHE.reconstructRotKeyFromAB(raw, aVectors, bVectors)
+        if (h == 0L) throw FHEException("reconstruct rk from a/b")
+        return RotKey(h)
+    }
+
+    private companion object {
+        fun validateExplicitModuli(scalingModSize: Int?, firstModSize: Int?): Pair<Int, Int>? {
+            require((scalingModSize == null) == (firstModSize == null)) {
+                "scalingModSize and firstModSize must be supplied together"
+            }
+            if (scalingModSize == null || firstModSize == null) return null
+            require(scalingModSize in 30..60) { "scalingModSize must be between 30 and 60" }
+            require(firstModSize in 30..60) { "firstModSize must be between 30 and 60" }
+            return scalingModSize to firstModSize
+        }
+    }
 }

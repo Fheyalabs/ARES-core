@@ -10,7 +10,7 @@ import "github.com/Fheyalabs/ares-core/pkg/ares/phase"
 // participant's secret share, and the joint evaluation keys
 // (eval-mult, eval-sum) needed for Phase 2 homomorphic operations.
 //
-// The phase owns the LOCKED → GOSSIP arc and consumes `keygen.share`
+// The phase owns the LOCKED → GOSSIP arc and consumes the key-generation
 // messages. Inside the phase the engine drives the internal
 // keygen-share / eval-round1 / eval-round2 sub-flow; from the
 // framework's perspective those are accumulation events within one
@@ -60,6 +60,7 @@ func (Phase0aThresholdKeygen) ConsumedMessageTypes() []string {
 	// by inspecting payload fields; the WS routing only cares
 	// about the type string.
 	//
+	// keygen.eval_round1 is the intermediate evaluation-key contribution.
 	// keygen.eval_share is the eval-round-2 final share each
 	// participant emits after the server broadcasts
 	// keygen.eval_round1_complete. All eval shares for the session
@@ -67,7 +68,7 @@ func (Phase0aThresholdKeygen) ConsumedMessageTypes() []string {
 	// LOCKED → GOSSIP arc, transitioning out only when the
 	// orchestrator has fused the round-2 shares into the joint
 	// evaluation keys.
-	return []string{"keygen.share", "keygen.eval_share"}
+	return []string{"keygen.share", "keygen.eval_round1", "keygen.eval_share"}
 }
 
 func (Phase0aThresholdKeygen) Requires() phase.ContextSchema {
