@@ -46,10 +46,15 @@ Tests/AresClientTests/
 Add to `Package.swift`:
 
 ```swift
-.package(url: "https://github.com/Fheyalabs/ARES-core", from: "0.5.0")
+.package(url: "https://github.com/Fheyalabs/ARES-core", from: "0.9.15")
 // then in your target:
 .product(name: "AresClient", package: "ARES-core")
 ```
+
+The repository-root package publishes the pure Swift `AresClient` and
+`AresTransport` products. `AresClientFHE` remains an in-tree development
+target until its OpenFHE bridge is distributed as a checksummed binary
+artifact; a release must not advertise that target before then.
 
 ### Build a lineage node for a slot submission
 
