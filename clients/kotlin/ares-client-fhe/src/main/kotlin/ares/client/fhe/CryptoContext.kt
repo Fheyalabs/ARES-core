@@ -34,11 +34,22 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
         ringDim: Int,
         multiplicativeDepth: Int,
         plaintextModulus: Long,
-        batchSize: Int = 0
+        batchSize: Int = 0,
+        minimalRotationKeys: Boolean = false,
+        evalSumOnlyRotationKeys: Boolean = false,
+        profileDim: Int = 0,
+        payloadSlotCount: Int = 0
     ) : this(
         NativeFHE.createBFVContext(ringDim, multiplicativeDepth, plaintextModulus, batchSize)
             .also { if (it == 0L) throw FHEException("BFV context creation failed") }
-    )
+    ) {
+        configureRotationKeys(
+            minimalRotationKeys,
+            evalSumOnlyRotationKeys,
+            profileDim,
+            payloadSlotCount
+        )
+    }
 
     private val state = ContextState(raw)
     @Suppress("unused")
