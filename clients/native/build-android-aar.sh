@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Builds and stages the pinned OpenFHE Android AAR from clean, pinned
-# source, cross-compiled per ABI with the Android NDK. See
-# clients/native/openfhe.pin.json and clients/native/android-ndk.pin.json
-# for the exact pins, and clients/native/README.md for expected RSS/disk
-# usage and the staging-manifest schema.
+# Builds and stages the pinned OpenFHE Android AAR plus ARES-core's canonical
+# JNI bridge from clean, pinned source, cross-compiled per ABI with the
+# Android NDK. See clients/native/openfhe.pin.json and
+# clients/native/android-ndk.pin.json for the exact pins, and
+# clients/native/README.md for expected RSS/disk usage and the staging
+# manifest schema.
 #
-# This script builds ONLY OpenFHE's own native libraries and packages them
-# as a standalone .aar (jni/<abi>/*.so plus a minimal manifest). It does
-# not touch any Kotlin/Gradle dependency declaration; wiring a consuming
-# Gradle module to this artifact is separate, out-of-scope release-
-# packaging work.
+# This script packages the bridge and all required OpenFHE shared libraries
+# as a standalone AAR (jni/<abi>/*.so plus a minimal manifest). It does not
+# alter a Kotlin/Gradle dependency declaration; wiring a consuming Gradle
+# module to this artifact is separate release-packaging work.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
-# Builds and stages the pinned OpenFHE Apple XCFramework from clean,
-# pinned source. See clients/native/openfhe.pin.json for the exact version
-# and source commit, and clients/native/README.md for expected RSS/disk
-# usage and the staging-manifest schema.
+# Builds and stages the pinned OpenFHE Apple XCFramework plus ARES-core's
+# canonical C bridge from clean, pinned source. See
+# clients/native/openfhe.pin.json for the exact version and source commit,
+# and clients/native/README.md for expected RSS/disk usage and the staging
+# manifest schema.
 #
-# This script builds ONLY OpenFHE's own native library, cross-compiled for
-# each required Apple platform slice, and packages it as a standalone
-# .xcframework. It does not touch Package.swift or any ares-core Swift
-# target; wiring a consuming binaryTarget to this artifact is separate,
-# out-of-scope release-packaging work.
+# This script cross-compiles OpenFHE and the canonical wrapper for each
+# required Apple platform slice, then packages them as a standalone
+# AresPrivacyCore.xcframework. It does not alter Package.swift or publish a
+# Swift package; assembling a complete Fheya release is separate work.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
