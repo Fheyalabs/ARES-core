@@ -136,7 +136,6 @@ class CryptoContext private constructor(internal val raw: Long) : AutoCloseable 
         return NativeFHE.computeSerializedSquaredDistance(raw, originFirst, originSecond, localFirst, localSecond)
             ?: throw FHEException("encrypted squared distance failed")
     }
-
     /** Encrypt one exact integer scalar into every BFV batch slot. */
     fun encryptRepeatedScalarBFV(value: Long, under: PublicKey): ByteArray =
         NativeFHE.encryptSerializedRepeatedScalarBFV(raw, under.raw, value)

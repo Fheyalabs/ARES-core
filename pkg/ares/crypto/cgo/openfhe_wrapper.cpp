@@ -789,6 +789,27 @@ int SingleKeyEvalMultKeyGen(CryptoContextHandle ctx, SecretKeyShareHandle sk) {
     }
 }
 
+int SingleKeyEvalMultKeyGenWithOutput(CryptoContextHandle ctx,
+                                      SecretKeyShareHandle sk,
+                                      EvalMultKeyHandle* out_key) {
+    try {
+        if (out_key == nullptr) {
+            return 1;
+        }
+        auto* c = as_ctx(ctx);
+        auto* s = as_sk(sk);
+        c->cc->EvalMultKeyGen(s->sk);
+        const auto& keys = c->cc->GetEvalMultKeyVector(s->sk->GetKeyTag());
+        if (keys.empty()) {
+            return 1;
+        }
+        *out_key = reinterpret_cast<EvalMultKeyHandle>(new ARESEvalMultKey{keys.front()});
+        return 0;
+    } catch (...) {
+        return 1;
+    }
+}
+
 int GenEvalMultKeyShare(CryptoContextHandle ctx, SecretKeyShareHandle sk, EvalMultKeyHandle* out_share) {
     try {
         if (out_share == nullptr) {
@@ -1644,6 +1665,118 @@ int SerializeCiphertext(CiphertextHandle ct, uint8_t** out_data, size_t* out_len
         return 1;
     }
 }
+int EncryptSerializedPayloadChunk(CryptoContextHandle ctx, PublicKeyHandle pk,
+    const uint8_t* payload, size_t payload_len,
+    size_t bit_offset, size_t chunk_size,
+    uint8_t** out_data, size_t* out_len) {
+    if (out_data == nullptr || out_len == nullptr) {
+        return 1;
+    }
+    *out_data = nullptr;
+    *out_len = 0;
+
+    std::vector<double> values;
+    try {
+        auto* c = as_ctx(ctx);
+        auto* p = as_pk(pk);
+        if (payload == nullptr || payload_len == 0 || chunk_size == 0 ||
+            chunk_size != c->batch_size || bit_offset % chunk_size != 0 ||
+            payload_len > std::numeric_limits<size_t>::max() / 8) {
+            return 1;
+        }
+        const size_t payload_bits = payload_len * 8;
+        if (bit_offset > payload_bits || chunk_size > payload_bits - bit_offset ||
+            p->pk->GetCryptoContext() != c->cc) {
+            return 1;
+        }
+
+        values.resize(chunk_size);
+        for (size_t i = 0; i < chunk_size; ++i) {
+            const size_t bit = bit_offset + i;
+            values[i] = static_cast<double>((payload[bit / 8] >> (7 - (bit % 8))) & 1U);
+        }
+        auto plaintext = c->cc->MakeCKKSPackedPlaintext(values);
+        auto ciphertext = c->cc->Encrypt(p->pk, plaintext);
+        const int rc = serialize_object(ciphertext, out_data, out_len);
+        std::fill(values.begin(), values.end(), 0.0);
+        return rc;
+    } catch (...) {
+        std::fill(values.begin(), values.end(), 0.0);
+        return 1;
+    }
+}
+int EncryptSerializedRepeatedScalarCKKS(CryptoContextHandle ctx, PublicKeyHandle pk,
+    double value, uint8_t** out_data, size_t* out_len) {
+    if (out_data == nullptr || out_len == nullptr) {
+        return 1;
+    }
+    *out_data = nullptr;
+    *out_len = 0;
+
+    std::vector<double> values;
+    try {
+        auto* c = as_ctx(ctx);
+        auto* p = as_pk(pk);
+        if (c->batch_size == 0 || p->pk->GetCryptoContext() != c->cc) {
+            return 1;
+        }
+        values.assign(c->batch_size, value);
+        auto plaintext = c->cc->MakeCKKSPackedPlaintext(values);
+        auto ciphertext = c->cc->Encrypt(p->pk, plaintext);
+        const int rc = serialize_object(ciphertext, out_data, out_len);
+        std::fill(values.begin(), values.end(), 0.0);
+        return rc;
+    } catch (...) {
+        std::fill(values.begin(), values.end(), 0.0);
+        return 1;
+    }
+}
+int ComputeSerializedSquaredDistanceCKKS(CryptoContextHandle ctx,
+    const uint8_t* origin_first, size_t origin_first_len,
+    const uint8_t* origin_second, size_t origin_second_len,
+    double local_first, double local_second,
+    uint8_t** out_data, size_t* out_len) {
+    if (out_data == nullptr || out_len == nullptr) {
+        return 1;
+    }
+    *out_data = nullptr;
+    *out_len = 0;
+
+    std::vector<double> local_values;
+    try {
+        auto* c = as_ctx(ctx);
+        if (origin_first == nullptr || origin_second == nullptr || origin_first_len == 0 ||
+            origin_second_len == 0 || c->batch_size == 0) {
+            return 1;
+        }
+        Ciphertext<DCRTPoly> first;
+        Ciphertext<DCRTPoly> second;
+        std::stringstream first_stream(std::string(reinterpret_cast<const char*>(origin_first), origin_first_len));
+        std::stringstream second_stream(std::string(reinterpret_cast<const char*>(origin_second), origin_second_len));
+        Serial::Deserialize(first, first_stream, SerType::BINARY);
+        Serial::Deserialize(second, second_stream, SerType::BINARY);
+        if (first == nullptr || second == nullptr || first->GetCryptoContext() != c->cc ||
+            second->GetCryptoContext() != c->cc || first->GetKeyTag() != second->GetKeyTag()) {
+            return 1;
+        }
+
+        local_values.assign(c->batch_size, local_first);
+        auto local_first_pt = c->cc->MakeCKKSPackedPlaintext(local_values);
+        std::fill(local_values.begin(), local_values.end(), local_second);
+        auto local_second_pt = c->cc->MakeCKKSPackedPlaintext(local_values);
+        auto first_delta = c->cc->EvalSub(first, local_first_pt);
+        auto second_delta = c->cc->EvalSub(second, local_second_pt);
+        auto first_square = c->cc->EvalMult(first_delta, first_delta);
+        auto second_square = c->cc->EvalMult(second_delta, second_delta);
+        auto distance = c->cc->EvalAdd(first_square, second_square);
+        const int rc = serialize_object(distance, out_data, out_len);
+        std::fill(local_values.begin(), local_values.end(), 0.0);
+        return rc;
+    } catch (...) {
+        std::fill(local_values.begin(), local_values.end(), 0.0);
+        return 1;
+    }
+}
 int GetOpenFHEVersion(char* out_buf, int out_cap) {
     try {
         if (out_buf == nullptr || out_cap <= 0) {
@@ -2166,6 +2299,11 @@ int ARESFullFusePayloadCKKS(
             std::stringstream is(raw);
             Serial::Deserialize(init, is, SerType::BINARY);
         }
+        if (init == nullptr || init->GetCryptoContext() != cc) {
+            set_error(err, err_len, "initiator ciphertext context does not match scorer context");
+            return 1;
+        }
+        const std::string collective_key_tag = init->GetKeyTag();
         std::vector<Ciphertext<DCRTPoly>> candidates;
         candidates.reserve(static_cast<size_t>(n_candidates));
         size_t offset = 0;
@@ -2179,6 +2317,14 @@ int ARESFullFusePayloadCKKS(
             std::string raw(reinterpret_cast<const char*>(candidate_ct_blob + offset), n);
             std::stringstream is(raw);
             Serial::Deserialize(ct, is, SerType::BINARY);
+            if (ct == nullptr || ct->GetCryptoContext() != cc) {
+                set_error(err, err_len, "candidate ciphertext context does not match scorer context");
+                return 1;
+            }
+            if (ct->GetKeyTag() != collective_key_tag) {
+                set_error(err, err_len, "candidate ciphertext key tag does not match initiator ciphertext");
+                return 1;
+            }
             candidates.push_back(ct);
             offset += n;
         }
@@ -2310,7 +2456,7 @@ static std::vector<double> package_chunk_bits(const int* candidate_packages,
 // >= n_chunks) holds each chunk's serialized length; *out_n_chunks = chunk count.
 // Each chunk holds the winner's chunk_size payload bits in slots [0, chunk_size);
 // the caller threshold-decrypts each chunk and reassembles the 640-bit package.
-int ARESChunkedFusePayloadCKKS(
+static int chunkedFusePayloadCKKSImpl(
     CryptoContextHandle ctx_handle,
     uint32_t ring_dim,
     double scaling_factor,
@@ -2322,6 +2468,10 @@ int ARESChunkedFusePayloadCKKS(
     const int* candidate_lat_q,
     const int* candidate_lon_q,
     const int* candidate_brownies,
+    const uint8_t* candidate_distance_ct_blob,
+    size_t candidate_distance_ct_blob_len,
+    const size_t* candidate_distance_ct_lens,
+    int candidate_distance_ct_count,
     int n_candidates,
     int profile_dim,
     int initiator_lat_q,
@@ -2341,6 +2491,10 @@ int ARESChunkedFusePayloadCKKS(
     size_t eval_sum_key_len,
     const int* candidate_packages,
     int package_bytes,
+    const uint8_t* candidate_payload_ct_blob,
+    size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens,
+    int candidate_payload_ct_count,
     int payload_slot_count,
     uint8_t** out_cts,
     size_t* out_cts_len,
@@ -2350,21 +2504,30 @@ int ARESChunkedFusePayloadCKKS(
     size_t err_len
 ) {
     try {
+        const bool plain_payload = candidate_packages != nullptr;
+        const bool encrypted_payload = candidate_payload_ct_blob != nullptr ||
+            candidate_payload_ct_lens != nullptr || candidate_payload_ct_count != 0;
+        const bool raw_distance = candidate_lat_q != nullptr || candidate_lon_q != nullptr;
+        const bool encrypted_distance = candidate_distance_ct_blob != nullptr ||
+            candidate_distance_ct_lens != nullptr || candidate_distance_ct_count != 0;
         const bool eval_mult_preinserted =
             ctx_handle != nullptr && (eval_mult_key == nullptr || eval_mult_key_len == 0);
         const bool eval_sum_preinserted =
             ctx_handle != nullptr && (eval_sum_key == nullptr || eval_sum_key_len == 0);
         if (initiator_ct == nullptr || initiator_ct_len == 0 ||
             candidate_ct_blob == nullptr || candidate_ct_lens == nullptr ||
-            candidate_lat_q == nullptr || candidate_lon_q == nullptr || candidate_brownies == nullptr ||
+            candidate_brownies == nullptr ||
+            (candidate_lat_q == nullptr) != (candidate_lon_q == nullptr) ||
+            raw_distance == encrypted_distance ||
             (!eval_mult_preinserted && (eval_mult_key == nullptr || eval_mult_key_len == 0)) ||
             (!eval_sum_preinserted && (eval_sum_key == nullptr || eval_sum_key_len == 0)) ||
-            candidate_packages == nullptr || out_cts == nullptr || out_cts_len == nullptr ||
+            plain_payload == encrypted_payload || out_cts == nullptr || out_cts_len == nullptr ||
             out_chunk_lens == nullptr || out_n_chunks == nullptr) {
-            set_error(err, err_len, "null pointer passed to ARESChunkedFusePayloadCKKS");
+            set_error(err, err_len, "invalid pointers or payload mode passed to chunked payload fusion");
             return 1;
         }
-        if (n_candidates <= 0 || profile_dim <= 0 || package_bytes <= 0 || payload_slot_count < package_bytes * 8) {
+        if (n_candidates <= 0 || profile_dim <= 0 || payload_slot_count <= 0 ||
+            (plain_payload && (package_bytes <= 0 || payload_slot_count < package_bytes * 8))) {
             set_error(err, err_len, "invalid chunked-fuse dimensions");
             return 1;
         }
@@ -2375,6 +2538,60 @@ int ARESChunkedFusePayloadCKKS(
         const uint32_t batch_size = next_power_of_two(static_cast<uint32_t>(profile_dim));
         const int chunk_size = static_cast<int>(batch_size);
         const int n_chunks = (payload_slot_count + chunk_size - 1) / chunk_size;
+        if (encrypted_payload && candidate_payload_ct_count != n_candidates * n_chunks) {
+            set_error(err, err_len, "encrypted payload ciphertext count does not match candidate/chunk shape");
+            return 1;
+        }
+        if (encrypted_payload && (candidate_payload_ct_blob == nullptr ||
+            candidate_payload_ct_lens == nullptr || candidate_payload_ct_blob_len == 0)) {
+            set_error(err, err_len, "encrypted payload ciphertext bytes and lengths are required");
+            return 1;
+        }
+        if (encrypted_distance && (candidate_distance_ct_count != n_candidates ||
+            candidate_distance_ct_blob == nullptr || candidate_distance_ct_lens == nullptr ||
+            candidate_distance_ct_blob_len == 0)) {
+            set_error(err, err_len, "encrypted distance ciphertext shape is invalid");
+            return 1;
+        }
+
+        std::vector<size_t> payload_offsets;
+        if (encrypted_payload) {
+            payload_offsets.resize(static_cast<size_t>(candidate_payload_ct_count));
+            size_t offset = 0;
+            for (int i = 0; i < candidate_payload_ct_count; i++) {
+                const size_t len = candidate_payload_ct_lens[i];
+                if (len == 0 || offset > candidate_payload_ct_blob_len ||
+                    len > candidate_payload_ct_blob_len - offset) {
+                    set_error(err, err_len, "invalid encrypted payload ciphertext length");
+                    return 1;
+                }
+                payload_offsets[static_cast<size_t>(i)] = offset;
+                offset += len;
+            }
+            if (offset != candidate_payload_ct_blob_len) {
+                set_error(err, err_len, "encrypted payload ciphertext blob length does not match lens");
+                return 1;
+            }
+        }
+        std::vector<size_t> distance_offsets;
+        if (encrypted_distance) {
+            distance_offsets.resize(static_cast<size_t>(candidate_distance_ct_count));
+            size_t offset = 0;
+            for (int i = 0; i < candidate_distance_ct_count; i++) {
+                const size_t len = candidate_distance_ct_lens[i];
+                if (len == 0 || offset > candidate_distance_ct_blob_len ||
+                    len > candidate_distance_ct_blob_len - offset) {
+                    set_error(err, err_len, "invalid encrypted distance ciphertext length");
+                    return 1;
+                }
+                distance_offsets[static_cast<size_t>(i)] = offset;
+                offset += len;
+            }
+            if (offset != candidate_distance_ct_blob_len) {
+                set_error(err, err_len, "encrypted distance ciphertext blob length does not match lens");
+                return 1;
+            }
+        }
 
         auto cc = (ctx_handle != nullptr)
             ? as_ctx(ctx_handle)->cc
@@ -2409,6 +2626,11 @@ int ARESChunkedFusePayloadCKKS(
             std::stringstream is(raw);
             Serial::Deserialize(init, is, SerType::BINARY);
         }
+        if (init == nullptr || init->GetCryptoContext() != cc) {
+            set_error(err, err_len, "initiator ciphertext context does not match scorer context");
+            return 1;
+        }
+        const std::string collective_key_tag = init->GetKeyTag();
         std::vector<Ciphertext<DCRTPoly>> candidates;
         candidates.reserve(static_cast<size_t>(n_candidates));
         size_t offset = 0;
@@ -2422,6 +2644,14 @@ int ARESChunkedFusePayloadCKKS(
             std::string raw(reinterpret_cast<const char*>(candidate_ct_blob + offset), n);
             std::stringstream is(raw);
             Serial::Deserialize(ct, is, SerType::BINARY);
+            if (ct == nullptr || ct->GetCryptoContext() != cc) {
+                set_error(err, err_len, "candidate ciphertext context does not match scorer context");
+                return 1;
+            }
+            if (ct->GetKeyTag() != collective_key_tag) {
+                set_error(err, err_len, "candidate ciphertext key tag does not match initiator ciphertext");
+                return 1;
+            }
             candidates.push_back(ct);
             offset += n;
         }
@@ -2444,11 +2674,28 @@ int ARESChunkedFusePayloadCKKS(
         for (int i = 0; i < n_candidates; i++) {
             auto prod = cc->EvalMult(init, candidates[i]);
             auto sim = cc->EvalSum(prod, profile_dim);
-            double dlat = static_cast<double>(initiator_lat_q - candidate_lat_q[i]);
-            double dlon = static_cast<double>(initiator_lon_q - candidate_lon_q[i]);
-            double dist = dlat * dlat + dlon * dlon;
             auto score = cc->EvalMult(sim, beta / 2.0);
-            score = cc->EvalAdd(score, (beta / 2.0) - alpha * dist + gamma * static_cast<double>(candidate_brownies[i]));
+            if (encrypted_distance) {
+                const size_t distance_len = candidate_distance_ct_lens[i];
+                std::string raw(
+                    reinterpret_cast<const char*>(candidate_distance_ct_blob + distance_offsets[static_cast<size_t>(i)]),
+                    distance_len);
+                std::stringstream is(raw);
+                Ciphertext<DCRTPoly> distance;
+                Serial::Deserialize(distance, is, SerType::BINARY);
+                if (distance == nullptr || distance->GetCryptoContext() != cc ||
+                    distance->GetKeyTag() != collective_key_tag) {
+                    set_error(err, err_len, "encrypted distance ciphertext does not match scorer context or key");
+                    return 1;
+                }
+                score = cc->EvalAdd(score, cc->EvalMult(distance, -alpha));
+                score = cc->EvalAdd(score, (beta / 2.0) + gamma * static_cast<double>(candidate_brownies[i]));
+            } else {
+                double dlat = static_cast<double>(initiator_lat_q - candidate_lat_q[i]);
+                double dlon = static_cast<double>(initiator_lon_q - candidate_lon_q[i]);
+                double dist = dlat * dlat + dlon * dlon;
+                score = cc->EvalAdd(score, (beta / 2.0) - alpha * dist + gamma * static_cast<double>(candidate_brownies[i]));
+            }
             ct_scores.push_back(score);
         }
 
@@ -2505,9 +2752,33 @@ int ARESChunkedFusePayloadCKKS(
             Ciphertext<DCRTPoly> fused_chunk;
             bool have = false;
             for (int i = 0; i < n_candidates; i++) {
-                auto bits = package_chunk_bits(candidate_packages, i, package_bytes, c, chunk_size);
-                auto bits_pt = cc->MakeCKKSPackedPlaintext(bits);
-                auto weighted = cc->EvalMult(masks[i], bits_pt);
+                Ciphertext<DCRTPoly> weighted;
+                if (plain_payload) {
+                    auto bits = package_chunk_bits(candidate_packages, i, package_bytes, c, chunk_size);
+                    auto bits_pt = cc->MakeCKKSPackedPlaintext(bits);
+                    weighted = cc->EvalMult(masks[i], bits_pt);
+                } else {
+                    const size_t index = static_cast<size_t>(i * n_chunks + c);
+                    const size_t payload_len = candidate_payload_ct_lens[index];
+                    std::string raw(
+                        reinterpret_cast<const char*>(candidate_payload_ct_blob + payload_offsets[index]),
+                        payload_len);
+                    std::stringstream is(raw);
+                    Ciphertext<DCRTPoly> payload_ct;
+                    Serial::Deserialize(payload_ct, is, SerType::BINARY);
+                    if (payload_ct == nullptr || payload_ct->GetCryptoContext() != cc) {
+                        set_error(err, err_len, "encrypted payload ciphertext context does not match scorer context");
+                        return 1;
+                    }
+                    if (payload_ct->GetKeyTag() != collective_key_tag) {
+                        set_error(err, err_len, "encrypted payload ciphertext key tag does not match initiator ciphertext");
+                        return 1;
+                    }
+                    // EvalMult clones both operands and calls OpenFHE's CKKS
+                    // AdjustForMultInPlace, which jointly aligns levels and scales.
+                    // Pre-reducing here repeats that expensive work once per level.
+                    weighted = cc->EvalMult(masks[i], payload_ct);
+                }
                 fused_chunk = have ? cc->EvalAdd(fused_chunk, weighted) : weighted;
                 have = true;
             }
@@ -2534,6 +2805,86 @@ int ARESChunkedFusePayloadCKKS(
         set_error(err, err_len, "unknown OpenFHE chunked-fuse failure");
         return 1;
     }
+}
+
+int ARESChunkedFusePayloadCKKS(
+    CryptoContextHandle ctx_handle, uint32_t ring_dim, double scaling_factor, uint32_t depth,
+    const uint8_t* initiator_ct, size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob, const size_t* candidate_ct_lens,
+    const int* candidate_lat_q, const int* candidate_lon_q, const int* candidate_brownies,
+    int n_candidates, int profile_dim, int initiator_lat_q, int initiator_lon_q,
+    double alpha, double beta, double gamma, const char* comparator, int comparator_degree,
+    double comparator_gain, double comparator_input_scale, double comparator_bound,
+    const char* selector_schedule, const uint8_t* eval_mult_key, size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key, size_t eval_sum_key_len, const int* candidate_packages,
+    int package_bytes, int payload_slot_count, uint8_t** out_cts, size_t* out_cts_len,
+    size_t* out_chunk_lens, int* out_n_chunks, char* err, size_t err_len
+) {
+    return chunkedFusePayloadCKKSImpl(
+        ctx_handle, ring_dim, scaling_factor, depth, initiator_ct, initiator_ct_len,
+        candidate_ct_blob, candidate_ct_lens, candidate_lat_q, candidate_lon_q,
+        candidate_brownies, nullptr, 0, nullptr, 0, n_candidates, profile_dim, initiator_lat_q, initiator_lon_q,
+        alpha, beta, gamma, comparator, comparator_degree, comparator_gain,
+        comparator_input_scale, comparator_bound, selector_schedule, eval_mult_key,
+        eval_mult_key_len, eval_sum_key, eval_sum_key_len, candidate_packages, package_bytes,
+        nullptr, 0, nullptr, 0, payload_slot_count, out_cts, out_cts_len, out_chunk_lens,
+        out_n_chunks, err, err_len);
+}
+
+int ARESChunkedFuseEncryptedPayloadCKKS(
+    CryptoContextHandle ctx_handle, uint32_t ring_dim, double scaling_factor, uint32_t depth,
+    const uint8_t* initiator_ct, size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob, const size_t* candidate_ct_lens,
+    const int* candidate_lat_q, const int* candidate_lon_q, const int* candidate_brownies,
+    int n_candidates, int profile_dim, int initiator_lat_q, int initiator_lon_q,
+    double alpha, double beta, double gamma, const char* comparator, int comparator_degree,
+    double comparator_gain, double comparator_input_scale, double comparator_bound,
+    const char* selector_schedule, const uint8_t* eval_mult_key, size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key, size_t eval_sum_key_len,
+    const uint8_t* candidate_payload_ct_blob, size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens, int candidate_payload_ct_count,
+    int payload_slot_count, uint8_t** out_cts, size_t* out_cts_len, size_t* out_chunk_lens,
+    int* out_n_chunks, char* err, size_t err_len
+) {
+    return chunkedFusePayloadCKKSImpl(
+        ctx_handle, ring_dim, scaling_factor, depth, initiator_ct, initiator_ct_len,
+        candidate_ct_blob, candidate_ct_lens, candidate_lat_q, candidate_lon_q,
+        candidate_brownies, nullptr, 0, nullptr, 0, n_candidates, profile_dim, initiator_lat_q, initiator_lon_q,
+        alpha, beta, gamma, comparator, comparator_degree, comparator_gain,
+        comparator_input_scale, comparator_bound, selector_schedule, eval_mult_key,
+        eval_mult_key_len, eval_sum_key, eval_sum_key_len, nullptr, 0,
+        candidate_payload_ct_blob, candidate_payload_ct_blob_len, candidate_payload_ct_lens,
+        candidate_payload_ct_count, payload_slot_count, out_cts, out_cts_len, out_chunk_lens,
+        out_n_chunks, err, err_len);
+}
+
+int ARESChunkedFuseEncryptedInputsCKKS(
+    CryptoContextHandle ctx_handle, uint32_t ring_dim, double scaling_factor, uint32_t depth,
+    const uint8_t* initiator_ct, size_t initiator_ct_len,
+    const uint8_t* candidate_ct_blob, const size_t* candidate_ct_lens,
+    const int* candidate_brownies, int n_candidates, int profile_dim,
+    double alpha, double beta, double gamma, const char* comparator, int comparator_degree,
+    double comparator_gain, double comparator_input_scale, double comparator_bound,
+    const char* selector_schedule, const uint8_t* eval_mult_key, size_t eval_mult_key_len,
+    const uint8_t* eval_sum_key, size_t eval_sum_key_len,
+    const uint8_t* candidate_distance_ct_blob, size_t candidate_distance_ct_blob_len,
+    const size_t* candidate_distance_ct_lens, int candidate_distance_ct_count,
+    const uint8_t* candidate_payload_ct_blob, size_t candidate_payload_ct_blob_len,
+    const size_t* candidate_payload_ct_lens, int candidate_payload_ct_count,
+    int payload_slot_count, uint8_t** out_cts, size_t* out_cts_len, size_t* out_chunk_lens,
+    int* out_n_chunks, char* err, size_t err_len
+) {
+    return chunkedFusePayloadCKKSImpl(
+        ctx_handle, ring_dim, scaling_factor, depth, initiator_ct, initiator_ct_len,
+        candidate_ct_blob, candidate_ct_lens, nullptr, nullptr, candidate_brownies,
+        candidate_distance_ct_blob, candidate_distance_ct_blob_len, candidate_distance_ct_lens,
+        candidate_distance_ct_count, n_candidates, profile_dim, 0, 0,
+        alpha, beta, gamma, comparator, comparator_degree, comparator_gain,
+        comparator_input_scale, comparator_bound, selector_schedule, eval_mult_key,
+        eval_mult_key_len, eval_sum_key, eval_sum_key_len, nullptr, 0,
+        candidate_payload_ct_blob, candidate_payload_ct_blob_len, candidate_payload_ct_lens,
+        candidate_payload_ct_count, payload_slot_count, out_cts, out_cts_len, out_chunk_lens,
+        out_n_chunks, err, err_len);
 }
 
 // ── Scheme-switching argmin (CKKS→FHEW LUT, depth-independent, single-key only) ──
