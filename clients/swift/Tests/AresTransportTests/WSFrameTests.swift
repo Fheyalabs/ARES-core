@@ -3,6 +3,30 @@ import Crypto
 @testable import AresTransport
 
 final class WSFrameTests: XCTestCase {
+    func testReplayCursorRejectsNegativeSequence() {
+        XCTAssertThrowsError(try WSReplayCursor(sequence: -1))
+    }
+
+    func testTypedReplayCursorIncludesExactResumeSequence() throws {
+        let request = try Session.webSocketRequest(
+            serverURL: "https://api.example.test",
+            pseudonym: "bidder-00",
+            replayCursor: try WSReplayCursor(sequence: 9_223_372_036_854_775)
+        )
+
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.queryItems?.first(where: { $0.name == "resume_after" })?.value, "9223372036854775")
+    }
+
+    func testTypedAndLegacyReplayCursorsCannotBeCombined() throws {
+        XCTAssertThrowsError(try Session.webSocketRequest(
+            serverURL: "https://api.example.test",
+            pseudonym: "bidder-00",
+            resumeAfter: 3,
+            replayCursor: try WSReplayCursor(sequence: 4)
+        ))
+    }
+
     func testAuthTokenMatchesHMACSHA256Hex() {
         let token = Session.deriveAuthToken(secret: "s3cret", pseudonym: "bidder-00")
         let expected = HMAC<SHA256>.authenticationCode(

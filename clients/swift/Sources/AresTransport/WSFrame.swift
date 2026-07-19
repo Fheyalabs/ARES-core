@@ -1,6 +1,19 @@
 import Foundation
 import AresClient   // DAGNode
 
+/// A client-owned, durably persisted position in a recipient's server outbox.
+/// The transport never advances this value automatically.
+public struct WSReplayCursor: Codable, Equatable, Hashable, Sendable {
+    public let sequence: Int64
+
+    public init(sequence: Int64) throws {
+        guard sequence >= 0 else {
+            throw TransportError.dialFailed("negative resume cursor")
+        }
+        self.sequence = sequence
+    }
+}
+
 public struct InboundFrame: Sendable {
     public let type: String
     public let sessionID: String

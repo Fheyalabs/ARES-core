@@ -17,8 +17,20 @@ import okio.ByteString
 import okio.ByteString.Companion.toByteString
 import java.util.concurrent.TimeUnit
 
-/** A single inbound WebSocket frame with its decoded type and session_id. */
-class InboundFrame(val type: String, val sessionId: String, val raw: String)
+/** A client-owned, durably persisted position in a recipient's server outbox. */
+data class WSReplayCursor(val sequence: Long) {
+    init {
+        require(sequence >= 0) { "replay cursor must be non-negative" }
+    }
+}
+
+/** A single inbound WebSocket frame with decoded routing fields and exact bytes. */
+class InboundFrame(
+    val type: String,
+    val sessionId: String,
+    val seq: Long,
+    val raw: ByteArray
+)
 
 /** Signals a transport-level error (dial failure, send failure, timeout, etc.). */
 class TransportException(msg: String) : RuntimeException(msg)
@@ -48,6 +60,7 @@ class Session private constructor(
     companion object {
         private val typeRe = Regex("\"type\"\\s*:\\s*\"([^\"]*)\"")
         private val sidRe  = Regex("\"session_id\"\\s*:\\s*\"([^\"]*)\"")
+        private val seqRe  = Regex("\"seq\"\\s*:\\s*(-?\\d+)")
 
         /**
          * Open a WebSocket connection to [serverURL] as participant [pseudonym].
@@ -63,30 +76,47 @@ class Session private constructor(
             pseudonym: String,
             sessionID: String,
             authSecret: String = "",
+            replayCursor: WSReplayCursor? = null,
         ): Session {
+            val url = webSocketURL(serverURL, pseudonym, authSecret, replayCursor)
             val trimmed = serverURL.trimEnd('/')
-            val scheme = if (trimmed.startsWith("https")) "wss" else "ws"
-            val host   = trimmed.removePrefix("https://").removePrefix("http://")
-            var url    = "$scheme://$host/v2/ws?pseudonym=$pseudonym"
-            if (authSecret.isNotEmpty()) {
-                url += "&auth=${Signing.authToken(authSecret, pseudonym)}"
-            }
             val client = OkHttpClient.Builder()
                 .readTimeout(0, TimeUnit.MILLISECONDS)
                 .pingInterval(20, TimeUnit.SECONDS)
                 .build()
             val inbox = Channel<InboundFrame>(Channel.UNLIMITED)
             val listener = object : WebSocketListener() {
-                override fun onMessage(webSocket: WebSocket, text: String)  { deliver(text) }
-                override fun onMessage(webSocket: WebSocket, bytes: ByteString) { deliver(bytes.utf8()) }
-                private fun deliver(text: String) {
-                    val t   = typeRe.find(text)?.groupValues?.get(1) ?: ""
-                    val sid = sidRe.find(text)?.groupValues?.get(1)  ?: ""
-                    inbox.trySend(InboundFrame(t, sid, text))
-                }
+                override fun onMessage(webSocket: WebSocket, text: String)  { deliver(text.encodeToByteArray()) }
+                override fun onMessage(webSocket: WebSocket, bytes: ByteString) { deliver(bytes.toByteArray()) }
+                private fun deliver(raw: ByteArray) { inbox.trySend(decodeInbound(raw)) }
             }
             val ws = client.newWebSocket(Request.Builder().url(url).build(), listener)
             return Session(pseudonym, sessionID, trimmed, ws, inbox)
+        }
+
+        internal fun webSocketURL(
+            serverURL: String,
+            pseudonym: String,
+            authSecret: String = "",
+            replayCursor: WSReplayCursor? = null,
+        ): String {
+            val trimmed = serverURL.trimEnd('/')
+            val scheme = if (trimmed.startsWith("https")) "wss" else "ws"
+            val host = trimmed.removePrefix("https://").removePrefix("http://")
+            var url = "$scheme://$host/v2/ws?pseudonym=$pseudonym"
+            if (authSecret.isNotEmpty()) {
+                url += "&auth=${Signing.authToken(authSecret, pseudonym)}"
+            }
+            replayCursor?.let { url += "&resume_after=${it.sequence}" }
+            return url
+        }
+
+        internal fun decodeInbound(raw: ByteArray): InboundFrame {
+            val text = raw.decodeToString()
+            val type = typeRe.find(text)?.groupValues?.get(1) ?: ""
+            val sessionID = sidRe.find(text)?.groupValues?.get(1) ?: ""
+            val sequence = seqRe.find(text)?.groupValues?.get(1)?.toLongOrNull() ?: 0L
+            return InboundFrame(type, sessionID, sequence, raw.copyOf())
         }
     }
 
