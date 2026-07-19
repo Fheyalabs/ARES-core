@@ -17,6 +17,9 @@
 - Production artifacts may not use /usr/local, /opt/homebrew, ARES_OPENFHE, FHEYA_ARES_CORE_SWIFT_PATH, or ARES_CORE_KOTLIN_PATH.
 - Missing bridge source, native output, required architecture, target-NDK JNI
   headers, or an in-repository output directory fails closed.
+- The pinned Android build applies one tracked, exact-context OpenFHE 1.5.1
+  compatibility patch for Android's absent `execinfo` backtrace APIs; its
+  hash is release provenance, not an unrecorded source mutation.
 - This plan does not claim to produce Fheya's Rust privacy-core or complete its combined release manifest.
 
 ## File Structure

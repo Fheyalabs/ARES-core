@@ -1,6 +1,8 @@
 package native_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -262,6 +264,44 @@ func TestAndroidAARStagesJNIAlongsideOpenFHE(t *testing.T) {
 		"jni/x86_64/libOPENFHEpke.so",
 		"jni/x86_64/libOPENFHEbinfhe.so",
 	})
+}
+
+func TestAndroidAARRecordsPinnedNoBacktraceCompatibilityPatch(t *testing.T) {
+	url, commit := newFakeOpenFHETagRepo(t, applePinnedVersion)
+	pin := writeTestPin(t, applePinnedVersion, url, commit)
+	out := t.TempDir()
+	res := runScript(t, androidScriptPath(t), []string{out}, fullAndroidPath(t), androidTestEnv(t, map[string]string{
+		"ARES_NATIVE_TEST_MODE":               "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
+		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+	}))
+	if res.exitCode != 0 {
+		t.Fatalf("expected success, got exit=%d\nstdout=%s\nstderr=%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	manifestPath := filepath.Join(out, "OpenFHE-"+applePinnedVersion+"-android.staging-manifest.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	const patchPath = "clients/native/patches/openfhe-v1.5.1-android-no-backtrace.patch"
+	if got := manifest["openfhe_compatibility_patch_path"]; got != patchPath {
+		t.Fatalf("openfhe_compatibility_patch_path = %v, want %s", got, patchPath)
+	}
+	patch, err := os.ReadFile(filepath.Join(repoRoot(t), patchPath))
+	if err != nil {
+		t.Fatalf("read compatibility patch: %v", err)
+	}
+	sum := sha256.Sum256(patch)
+	wantHash := hex.EncodeToString(sum[:])
+	if got := manifest["openfhe_compatibility_patch_sha256"]; got != wantHash {
+		t.Fatalf("openfhe_compatibility_patch_sha256 = %v, want %s", got, wantHash)
+	}
 }
 
 func TestAndroidAARBuildsOptionalExtraABIsWhenRequested(t *testing.T) {

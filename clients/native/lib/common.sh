@@ -269,6 +269,34 @@ clone_pinned_openfhe() {
   log_info "OpenFHE source revision verified: ${actual_commit}"
 }
 
+# Android's libc does not provide the execinfo backtrace APIs used by the
+# generic GNU/Linux branch in OpenFHE 1.5.1. The tracked compatibility patch
+# selects OpenFHE's existing empty-call-stack fallback for Android. It is
+# applied only through git's exact-context check, so an upstream source change
+# fails closed instead of receiving a fuzzy source edit.
+android_openfhe_compatibility_patch_path() {
+  printf '%s' 'clients/native/patches/openfhe-v1.5.1-android-no-backtrace.patch'
+}
+
+apply_android_openfhe_compatibility_patch() {
+  local source_dir="$1"
+  local patch_rel patch_path
+  patch_rel="$(android_openfhe_compatibility_patch_path)"
+  patch_path="${REPO_ROOT}/${patch_rel}"
+  [ -f "${patch_path}" ] || die "Android OpenFHE compatibility patch is missing: ${patch_path}"
+
+  git -C "${source_dir}" apply --check "${patch_path}" \
+    || die "Android OpenFHE compatibility patch does not apply cleanly to the pinned source"
+  git -C "${source_dir}" apply "${patch_path}" \
+    || die "failed to apply Android OpenFHE compatibility patch"
+
+  local changed
+  changed="$(git -C "${source_dir}" diff --name-only)"
+  [ "${changed}" = "src/core/lib/utils/get-call-stack.cpp" ] \
+    || die "Android OpenFHE compatibility patch changed unexpected files: ${changed:-none}"
+  sha256_of "${patch_path}"
+}
+
 # require_all_present LABEL REQUIRED_LIST... ACTUAL_LIST... fails closed if
 # any entry named in the (space-separated) required list is absent from
 # the (space-separated) actual list -- used to enforce that every required
@@ -328,10 +356,13 @@ write_sbom() {
 }
 
 # write_provenance PATH ARTIFACT_NAME ARTIFACT_SHA256 ARES_CORE_REVISION
-# OPENFHE_COMMIT BUILDER_ID emits a minimal, valid SLSA-provenance-shaped
-# statement tying the artifact hash to its exact source materials.
+# OPENFHE_COMMIT BUILDER_ID [PATCH_PATH PATCH_SHA256] emits a minimal,
+# SLSA-provenance-shaped statement tying the artifact hash to its exact source
+# materials. PATCH_PATH/PATCH_SHA256 are optional for normal builds and
+# required for a compatibility-patched native artifact.
 write_provenance() {
   local path="$1" artifact_name="$2" artifact_sha256="$3" ares_core_revision="$4" openfhe_commit="$5" builder_id="$6"
+  local patch_path="${7:-}" patch_sha256="${8:-}"
   jq -n \
     --arg predicateType "https://slsa.dev/provenance/v1" \
     --arg artifact_name "${artifact_name}" \
@@ -339,6 +370,8 @@ write_provenance() {
     --arg ares_core_revision "${ares_core_revision}" \
     --arg openfhe_commit "${openfhe_commit}" \
     --arg builder_id "${builder_id}" \
+    --arg patch_path "${patch_path}" \
+    --arg patch_sha256 "${patch_sha256}" \
     --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
       predicateType: $predicateType,
@@ -350,9 +383,12 @@ write_provenance() {
             { uri: "git+https://github.com/openfheorg/openfhe-development.git", digest: { sha1: $openfhe_commit } }
           ]
         },
-        materials: [
-          { uri: ("git+https://github.com/Fheyalabs/ARES-core.git@" + $ares_core_revision) }
-        ],
+        materials: (
+          [{ uri: ("git+https://github.com/Fheyalabs/ARES-core.git@" + $ares_core_revision) }]
+          + if $patch_path == "" then [] else
+              [{ uri: ("git+https://github.com/Fheyalabs/ARES-core.git/" + $patch_path), digest: { sha256: $patch_sha256 } }]
+            end
+        ),
         generatedAt: $generated_at
       }
     }' > "${path}"
@@ -373,6 +409,8 @@ emit_native_manifest() {
   local sbom_path="$8" provenance_path="$9"
   shift 9
   local -a targets=("$@")
+  local compatibility_patch_path="${NATIVE_ARTIFACT_COMPATIBILITY_PATCH_PATH:-}"
+  local compatibility_patch_sha256="${NATIVE_ARTIFACT_COMPATIBILITY_PATCH_SHA256:-}"
 
   local sbom_sha256 provenance_sha256
   sbom_sha256="$(sha256_of "${sbom_path}")"
@@ -393,6 +431,8 @@ emit_native_manifest() {
     --arg sbom_sha256 "${sbom_sha256}" \
     --arg provenance_path "${provenance_path}" \
     --arg provenance_sha256 "${provenance_sha256}" \
+    --arg compatibility_patch_path "${compatibility_patch_path}" \
+    --arg compatibility_patch_sha256 "${compatibility_patch_sha256}" \
     --argjson target_architectures "${targets_json}" \
     --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
@@ -409,5 +449,9 @@ emit_native_manifest() {
       provenance_path: $provenance_path,
       provenance_sha256: $provenance_sha256,
       generated_at: $generated_at
-    }' > "${path}"
+    }
+    + if $compatibility_patch_path == "" then {} else {
+        openfhe_compatibility_patch_path: $compatibility_patch_path,
+        openfhe_compatibility_patch_sha256: $compatibility_patch_sha256
+      } end' > "${path}"
 }

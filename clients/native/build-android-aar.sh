@@ -164,6 +164,9 @@ main() {
 
   local openfhe_src="${work_dir}/openfhe-src"
   clone_pinned_openfhe "${openfhe_src}"
+  local compatibility_patch_path compatibility_patch_sha256
+  compatibility_patch_path="$(android_openfhe_compatibility_patch_path)"
+  compatibility_patch_sha256="$(apply_android_openfhe_compatibility_patch "${openfhe_src}")"
 
   local aar_root="${work_dir}/aar-root"
   rm -rf "${aar_root}"
@@ -196,13 +199,16 @@ main() {
   local provenance_path="${output_dir}/OpenFHE-${version}-android.provenance.json"
   write_sbom "${sbom_path}" "AresPrivacyCore (OpenFHE)" "${version}" "${commit}"
   write_provenance "${provenance_path}" "$(basename "${artifact_aar}")" "${artifact_sha256}" \
-    "${ares_rev}" "${commit}" "ares-core/clients/native/build-android-aar.sh"
+    "${ares_rev}" "${commit}" "ares-core/clients/native/build-android-aar.sh" \
+    "${compatibility_patch_path}" "${compatibility_patch_sha256}"
 
   local manifest_path="${output_dir}/OpenFHE-${version}-android.staging-manifest.json"
-  emit_native_manifest "${manifest_path}" "android_aar" "${artifact_aar}" "${artifact_sha256}" \
-    "${version}" "${commit}" "${ares_rev}" \
-    "${sbom_path}" "${provenance_path}" \
-    "${built_abis[@]}"
+  NATIVE_ARTIFACT_COMPATIBILITY_PATCH_PATH="${compatibility_patch_path}" \
+  NATIVE_ARTIFACT_COMPATIBILITY_PATCH_SHA256="${compatibility_patch_sha256}" \
+    emit_native_manifest "${manifest_path}" "android_aar" "${artifact_aar}" "${artifact_sha256}" \
+      "${version}" "${commit}" "${ares_rev}" \
+      "${sbom_path}" "${provenance_path}" \
+      "${built_abis[@]}"
 
   log_info "staged artifact:  ${artifact_aar}"
   log_info "staged sbom:      ${sbom_path}"

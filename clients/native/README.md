@@ -40,6 +40,15 @@ release build. The only override is `ARES_NATIVE_TEST_MODE=1` plus an
 explicitly-named `ARES_NATIVE_TEST_*` variable, gated so it can never
 activate by accident; see "Testing" below.
 
+Android additionally applies the tracked
+`clients/native/patches/openfhe-v1.5.1-android-no-backtrace.patch` after the
+OpenFHE commit check. OpenFHE 1.5.1 mistakes Android Clang for generic
+GNU/Linux and calls `execinfo` APIs that the Android NDK does not provide. The
+one-line patch selects OpenFHE's existing empty-call-stack fallback for
+Android. It is applied with `git apply --check`, must change exactly
+`src/core/lib/utils/get-call-stack.cpp`, and its path and SHA-256 are recorded
+in the Android manifest and provenance.
+
 ## Usage
 
 ```
@@ -86,6 +95,8 @@ a partial or best-effort one, when:
 - the cloned OpenFHE tag's actual `HEAD` commit does not exactly equal the
   pinned `openfhe_source_commit` — a moved or re-pointed upstream tag is
   caught, not trusted;
+- the exact-context Android compatibility patch cannot apply cleanly, or it
+  would modify any file other than OpenFHE's call-stack implementation;
 - any required platform slice (Apple: `ios-arm64`, `ios-arm64-simulator`,
   `macos-arm64`) or ABI (Android: `arm64-v8a`, `x86_64`) fails to build or
   produce its bridge and OpenFHE libraries;

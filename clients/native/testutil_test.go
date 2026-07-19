@@ -266,6 +266,14 @@ func newFakeOpenFHETagRepo(t *testing.T, version string) (url, commit string) {
 	if err := os.WriteFile(filepath.Join(dir, "CMakeLists.txt"), []byte("# fake openfhe source\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	callStackDir := filepath.Join(dir, "src", "core", "lib", "utils")
+	if err := os.MkdirAll(callStackDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	callStack := strings.Repeat("\n", 29) + "//==================================================================================\n#include \"utils/get-call-stack.h\"\n\n#if defined(__linux__) && defined(__GNUC__)\n// clang-format off\n#include \"utils/demangle.h\"\n"
+	if err := os.WriteFile(filepath.Join(callStackDir, "get-call-stack.cpp"), []byte(callStack), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	runGit(t, dir, "add", "-A")
 	runGit(t, dir, "commit", "-q", "-m", "fake openfhe source")
 	runGit(t, dir, "tag", version)
