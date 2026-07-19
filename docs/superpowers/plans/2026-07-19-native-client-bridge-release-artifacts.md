@@ -15,7 +15,8 @@
 - Required Apple slices: ios-arm64, ios-arm64-simulator, macos-arm64. Required Android ABIs: arm64-v8a, x86_64.
 - Bridge source is canonical: pkg/ares/crypto/cgo/openfhe_wrapper.{h,cpp} and clients/kotlin/native/jni_openfhe.cpp. No copied crypto implementation.
 - Production artifacts may not use /usr/local, /opt/homebrew, ARES_OPENFHE, FHEYA_ARES_CORE_SWIFT_PATH, or ARES_CORE_KOTLIN_PATH.
-- Missing bridge source, native output, required architecture, JNI headers, or an in-repository output directory fails closed.
+- Missing bridge source, native output, required architecture, target-NDK JNI
+  headers, or an in-repository output directory fails closed.
 - This plan does not claim to produce Fheya's Rust privacy-core or complete its combined release manifest.
 
 ## File Structure
@@ -153,7 +154,7 @@ Expected: FAIL because the current AAR contains only raw OpenFHE shared librarie
 
 - [ ] **Step 3: Build and stage JNI per ABI**
 
-After each OpenFHE install, configure the Android bridge project using that NDK toolchain and OPENFHE_PREFIX. Require JDK JNI include headers and libares_fhe_jni.so. Set its Android runpath to $ORIGIN and copy it with the three OpenFHE shared libraries into jni/<abi>. Publish AresPrivacyCore-v1.5.1-android.aar and preserve fail-closed NDK/ABI behavior.
+After each OpenFHE install, configure the Android bridge project using that NDK toolchain and OPENFHE_PREFIX. Require the NDK target JNI header and libares_fhe_jni.so. Set its Android runpath to $ORIGIN and copy it with the three OpenFHE shared libraries into jni/<abi>. Publish AresPrivacyCore-v1.5.1-android.aar and preserve fail-closed NDK/ABI behavior.
 
 - [ ] **Step 4: Run GREEN**
 
@@ -249,4 +250,3 @@ git commit -m "docs(native): record bridge artifact evidence"
 - Canonical C/C++ sources are compiled directly; nothing reimplements FHE in Swift or Kotlin.
 - All platform-specific functionality has a red-first mocked test and an explicit real-build evidence boundary.
 - The result provides platform-consumable bridge artifacts, but deliberately does not pretend to complete Fheya's separate Rust privacy-core provenance or the final release-artifact gate.
-

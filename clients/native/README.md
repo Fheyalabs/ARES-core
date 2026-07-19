@@ -89,8 +89,8 @@ a partial or best-effort one, when:
 - any required platform slice (Apple: `ios-arm64`, `ios-arm64-simulator`,
   `macos-arm64`) or ABI (Android: `arm64-v8a`, `x86_64`) fails to build or
   produce its bridge and OpenFHE libraries;
-- `JAVA_HOME` is absent or does not provide both `include/jni.h` and a
-  supported `jni_md.h` platform header for the Android JNI build;
+- the configured Android NDK does not provide exactly one target
+  `sysroot/usr/include/jni.h` header for the Android JNI build;
 - the output directory argument is missing, or resolves inside this
   repository.
 

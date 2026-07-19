@@ -13,13 +13,7 @@ if(NOT EXISTS "${ARES_WRAPPER_SOURCE}")
     message(FATAL_ERROR "ARES_WRAPPER_SOURCE must name pkg/ares/crypto/cgo/openfhe_wrapper.cpp: ${ARES_WRAPPER_SOURCE}")
 endif()
 if(NOT EXISTS "${ARES_JNI_INCLUDE_DIR}/jni.h")
-    message(FATAL_ERROR "ARES_JNI_INCLUDE_DIR does not contain jni.h: ${ARES_JNI_INCLUDE_DIR}")
-endif()
-find_path(ARES_JNI_MD_INCLUDE_DIR jni_md.h
-    PATHS "${ARES_JNI_INCLUDE_DIR}/darwin" "${ARES_JNI_INCLUDE_DIR}/linux"
-    NO_DEFAULT_PATH)
-if(NOT ARES_JNI_MD_INCLUDE_DIR)
-    message(FATAL_ERROR "ARES_JNI_INCLUDE_DIR has no supported jni_md.h subdirectory: ${ARES_JNI_INCLUDE_DIR}")
+    message(FATAL_ERROR "ARES_JNI_INCLUDE_DIR does not contain target jni.h: ${ARES_JNI_INCLUDE_DIR}")
 endif()
 if(NOT IS_DIRECTORY "${OPENFHE_PREFIX}/include/openfhe" OR NOT IS_DIRECTORY "${OPENFHE_PREFIX}/lib")
     message(FATAL_ERROR "OPENFHE_PREFIX must name an installed OpenFHE prefix")
@@ -29,7 +23,6 @@ add_library(ares_fhe_jni SHARED "${ARES_JNI_SOURCE}" "${ARES_WRAPPER_SOURCE}")
 target_compile_features(ares_fhe_jni PRIVATE cxx_std_17)
 target_include_directories(ares_fhe_jni PRIVATE
     "${ARES_JNI_INCLUDE_DIR}"
-    "${ARES_JNI_MD_INCLUDE_DIR}"
     "${OPENFHE_PREFIX}/include/openfhe"
     "${OPENFHE_PREFIX}/include/openfhe/pke"
     "${OPENFHE_PREFIX}/include/openfhe/core"

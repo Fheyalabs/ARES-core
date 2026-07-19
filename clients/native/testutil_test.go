@@ -328,9 +328,8 @@ func writeTestNDKPin(t *testing.T, minMajor string) string {
 	return path
 }
 
-// newFakeAndroidNDK creates a directory shaped like a real Android NDK
-// root: build/cmake/android.toolchain.cmake and source.properties with the
-// given Pkg.Revision.
+// newFakeAndroidNDK creates the Android-specific build and target-JNI
+// structure the staging script requires, with the given Pkg.Revision.
 func newFakeAndroidNDK(t *testing.T, revision string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -345,23 +344,14 @@ func newFakeAndroidNDK(t *testing.T, revision string) string {
 	if err := os.WriteFile(filepath.Join(dir, "source.properties"), []byte(props), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	jniDir := filepath.Join(dir, "toolchains", "llvm", "prebuilt", "darwin-arm64", "sysroot", "usr", "include")
+	if err := os.MkdirAll(jniDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jniDir, "jni.h"), []byte("/* fake Android target JNI header */\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	return dir
-}
-
-func newFakeJNIHome(t *testing.T) string {
-	t.Helper()
-	home := t.TempDir()
-	include := filepath.Join(home, "include")
-	if err := os.MkdirAll(filepath.Join(include, "darwin"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(include, "jni.h"), []byte("/* fake JNI header */\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(include, "darwin", "jni_md.h"), []byte("/* fake JNI platform header */\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return home
 }
 
 func repoRoot(t *testing.T) string {

@@ -28,7 +28,6 @@ func androidTestEnv(t *testing.T, extra map[string]string) map[string]string {
 	t.Helper()
 	env := map[string]string{
 		"ANDROID_NDK_HOME": newFakeAndroidNDK(t, "27.1.12345678"),
-		"JAVA_HOME":        newFakeJNIHome(t),
 	}
 	for k, v := range extra {
 		env[k] = v
@@ -111,6 +110,22 @@ func TestAndroidAARFailsClosedOnMissingToolchainFile(t *testing.T) {
 	}
 	if !strings.Contains(res.stderr, "android.toolchain.cmake") {
 		t.Fatalf("expected a missing-toolchain-file failure, got stderr=%s", res.stderr)
+	}
+}
+
+func TestAndroidAARUsesTargetJNIHeadersWithoutHostJava(t *testing.T) {
+	url, commit := newFakeOpenFHETagRepo(t, applePinnedVersion)
+	pin := writeTestPin(t, applePinnedVersion, url, commit)
+	ndkRoot := newFakeAndroidNDK(t, "27.1.12345678")
+	out := t.TempDir()
+	res := runScript(t, androidScriptPath(t), []string{out}, fullAndroidPath(t), map[string]string{
+		"ANDROID_NDK_HOME":                    ndkRoot,
+		"ARES_NATIVE_TEST_MODE":               "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
+		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("expected an NDK-only JNI build to succeed, got exit=%d\nstdout=%s\nstderr=%s", res.exitCode, res.stdout, res.stderr)
 	}
 }
 

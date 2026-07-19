@@ -142,7 +142,7 @@ main() {
   local ndk_root
   ndk_root="$(require_android_ndk)"
   local jni_include_dir
-  jni_include_dir="$(require_jni_include_dir)"
+  jni_include_dir="$(require_android_jni_include_dir "${ndk_root}")"
 
   local output_dir
   output_dir="$(require_untracked_output_dir "${1:-}")"

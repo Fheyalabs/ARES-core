@@ -134,15 +134,30 @@ jni_bridge_source_path() {
   printf '%s' "${path}"
 }
 
-require_jni_include_dir() {
-  local java_home="${JAVA_HOME:-}"
-  [ -n "${java_home}" ] || die "JAVA_HOME is required to locate JNI headers for the Android bridge build"
-  local include_dir="${java_home}/include"
-  [ -f "${include_dir}/jni.h" ] || die "JAVA_HOME has no include/jni.h: ${java_home}"
-  if [ ! -f "${include_dir}/darwin/jni_md.h" ] && [ ! -f "${include_dir}/linux/jni_md.h" ]; then
-    die "JAVA_HOME has no supported JNI platform header below ${include_dir}"
+# Android's target JNI declarations are shipped by the configured NDK. Using
+# a host JDK's jni.h (and, on macOS, its Darwin-specific jni_md.h) in an
+# Android cross-compile can silently build against the wrong ABI. Require one
+# unambiguous target header from the NDK instead of accepting JAVA_HOME.
+require_android_jni_include_dir() {
+  local ndk_root="$1"
+  [ -n "${ndk_root}" ] || die "Android NDK root is required to locate target JNI headers"
+  local prebuilt_dir="${ndk_root}/toolchains/llvm/prebuilt"
+  [ -d "${prebuilt_dir}" ] || die "Android NDK at ${ndk_root} has no LLVM prebuilt toolchain directory"
+
+  local -a headers=()
+  local header
+  for header in "${prebuilt_dir}"/*/sysroot/usr/include/jni.h; do
+    [ -f "${header}" ] || continue
+    headers+=("${header}")
+  done
+
+  if [ "${#headers[@]}" -eq 0 ]; then
+    die "Android NDK at ${ndk_root} has no target sysroot JNI header"
   fi
-  printf '%s' "${include_dir}"
+  if [ "${#headers[@]}" -ne 1 ]; then
+    die "Android NDK at ${ndk_root} has ambiguous target sysroot JNI headers (${#headers[@]} found)"
+  fi
+  printf '%s' "$(dirname "${headers[0]}")"
 }
 
 # stage_copenfhe_headers emits the public C module interface consumed by the
