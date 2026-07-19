@@ -90,8 +90,13 @@ combine_openfhe_static_libs() {
   local install_dir="$1" combined="$2"
   local -a libs=()
   local component
+  # OpenFHE's CMake install rules name the static-library targets with an
+  # explicit "_static" suffix (e.g. OPENFHEcore_static -> libOPENFHEcore_static.a)
+  # to coexist with the shared-library target of the same base name
+  # (libOPENFHEcore.so, what Android links against) -- confirmed against
+  # src/{core,pke,binfhe}/CMakeLists.txt, not assumed.
   for component in OPENFHEcore OPENFHEpke OPENFHEbinfhe; do
-    local lib_path="${install_dir}/lib/lib${component}.a"
+    local lib_path="${install_dir}/lib/lib${component}_static.a"
     [ -f "${lib_path}" ] || die "expected static library missing after build: ${lib_path}"
     libs+=("${lib_path}")
   done

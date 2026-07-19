@@ -91,6 +91,12 @@ func writeExecutable(t *testing.T, path, body string) {
 // MOCK_CMAKE_FAIL_PREFIX_SUBSTRING is set in the environment and the
 // resolved install prefix contains that substring, configure fails --
 // used to simulate exactly one platform/ABI's build failing.
+//
+// The static-library filenames (lib*_static.a) match OpenFHE's own
+// src/{core,pke,binfhe}/CMakeLists.txt install rules exactly -- confirmed
+// against a real clone during a real (non-mocked) build of this commit,
+// not assumed. The shared-library filenames (lib*.so, no suffix) match the
+// same source for the SHARED target name.
 const mockCMakeScript = `#!/usr/bin/env bash
 set -euo pipefail
 if [ "${1:-}" = "--version" ]; then
@@ -106,9 +112,9 @@ if [ "${1:-}" = "--build" ]; then
   fi
   prefix="$(cat "${prefix_file}")"
   mkdir -p "${prefix}/lib" "${prefix}/include/openfhe"
-  : > "${prefix}/lib/libOPENFHEcore.a"
-  : > "${prefix}/lib/libOPENFHEpke.a"
-  : > "${prefix}/lib/libOPENFHEbinfhe.a"
+  : > "${prefix}/lib/libOPENFHEcore_static.a"
+  : > "${prefix}/lib/libOPENFHEpke_static.a"
+  : > "${prefix}/lib/libOPENFHEbinfhe_static.a"
   : > "${prefix}/lib/libOPENFHEcore.so"
   : > "${prefix}/lib/libOPENFHEpke.so"
   : > "${prefix}/lib/libOPENFHEbinfhe.so"
