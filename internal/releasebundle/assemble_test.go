@@ -1,6 +1,8 @@
 package releasebundle_test
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -135,6 +137,108 @@ let package = Package(
 	_, err := releasebundle.Assemble(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on environment-driven dependency substitution, got nil error")
+	}
+}
+
+func TestAssembleRejectsBridgeEvidenceOnlyInSwiftComment(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		SwiftManifestOverride: `// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "AresClient",
+    targets: [
+        // .binaryTarget(name: "COpenFHEBridge", path: "Artifacts/AresPrivacyCore.xcframework"),
+        .target(name: "AresClient"),
+    ]
+)
+`,
+	})
+
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a release manifest whose required bridge target exists only in a comment")
+	}
+	if !strings.Contains(err.Error(), "COpenFHEBridge") {
+		t.Errorf("error does not identify the missing bridge target: %v", err)
+	}
+}
+
+func TestAssembleRejectsBridgeEvidenceOnlyInSwiftString(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		SwiftManifestOverride: `// swift-tools-version: 6.0
+import PackageDescription
+
+let diagnostic = #".binaryTarget(name: "COpenFHEBridge", path: "Artifacts/AresPrivacyCore.xcframework")"#
+let package = Package(
+    name: "AresClient",
+    targets: [
+        .target(name: "AresClient"),
+    ]
+)
+`,
+	})
+
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a release manifest whose required bridge target exists only in a string literal")
+	}
+	if !strings.Contains(err.Error(), "COpenFHEBridge") {
+		t.Errorf("error does not identify the missing bridge target: %v", err)
+	}
+}
+
+func TestAssembleRejectsSymlinkedStagedArtifact(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	artifact := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.xcframework.zip")
+	outside := filepath.Join(t.TempDir(), "outside-apple.xcframework.zip")
+	raw, err := os.ReadFile(artifact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(artifact); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, artifact); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a staged artifact symlink even when its target has the expected hash")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error does not identify the symlinked artifact: %v", err)
+	}
+}
+
+func TestAssembleRejectsSymlinkedStagingManifest(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	manifest := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.staging-manifest.json")
+	outside := filepath.Join(t.TempDir(), "outside-apple.staging-manifest.json")
+	raw, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outside, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(manifest); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a staging-manifest symlink")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("error does not identify the symlinked staging manifest: %v", err)
 	}
 }
 

@@ -136,7 +136,7 @@ func loadStagingManifest(bundleDir, kind string) (*ArtifactManifest, error) {
 			continue
 		}
 		path := filepath.Join(bundleDir, entry.Name())
-		raw, err := os.ReadFile(path)
+		raw, err := readRegularFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("reading staging manifest %s: %w", path, err)
 		}
@@ -186,7 +186,7 @@ func verifyManifestHashes(bundleDir string, m *ArtifactManifest) error {
 }
 
 func sha256OfPath(path string) (string, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFile(path)
 	if err != nil {
 		return "", err
 	}
@@ -225,7 +225,7 @@ type pinFile struct {
 // artifacts that were staged against a since-rotated pin.
 func verifyAgainstOpenFHEPin(repoRoot string, m *ArtifactManifest) error {
 	pinPath := filepath.Join(repoRoot, "clients", "native", "openfhe.pin.json")
-	raw, err := os.ReadFile(pinPath)
+	raw, err := readRegularFile(pinPath)
 	if err != nil {
 		return fmt.Errorf("reading tracked OpenFHE pin %s: %w", pinPath, err)
 	}
@@ -252,7 +252,7 @@ func verifyAgainstOpenFHEPin(repoRoot string, m *ArtifactManifest) error {
 // or unpinned one.
 func verifyAndroidNDKPinPresent(repoRoot string) error {
 	pinPath := filepath.Join(repoRoot, "clients", "native", "android-ndk.pin.json")
-	raw, err := os.ReadFile(pinPath)
+	raw, err := readRegularFile(pinPath)
 	if err != nil {
 		return fmt.Errorf("reading tracked Android NDK pin %s: %w", pinPath, err)
 	}
@@ -296,7 +296,7 @@ func verifyCleanSourceRevision(repoRoot, wantRevision string) error {
 // clients/swift/Package.release.swift and returns its SHA-256.
 func verifySwiftReleaseManifest(repoRoot string) (string, error) {
 	path := filepath.Join(repoRoot, "clients", "swift", "Package.release.swift")
-	raw, err := os.ReadFile(path)
+	raw, err := readRegularFile(path)
 	if err != nil {
 		return "", fmt.Errorf("reading %s: %w", path, err)
 	}
@@ -305,6 +305,24 @@ func verifySwiftReleaseManifest(repoRoot string) (string, error) {
 	}
 	sum := sha256.Sum256(raw)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// readRegularFile rejects symlinks and every non-regular file before reading
+// release evidence. A release bundle must be self-contained: following a
+// filesystem reference outside the reviewed staging or source tree would make
+// the checked path and the actually consumed bytes diverge.
+func readRegularFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("symlink is not permitted")
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("expected a regular file, got mode %s", info.Mode())
+	}
+	return os.ReadFile(path)
 }
 
 func runGitCapture(dir string, args ...string) (string, error) {

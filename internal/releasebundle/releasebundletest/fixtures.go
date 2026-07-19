@@ -63,7 +63,7 @@ func NewRepoRoot(t testing.TB, swiftManifest string) (repoRoot, commit string) {
 	t.Helper()
 	dir := t.TempDir()
 	runGit(t, dir, "init", "-q")
-	runGit(t, dir, "config", "user.email", "releasebundle-test@fheya.de")
+	runGit(t, dir, "config", "user.email", "releasebundle-test@example.invalid")
 	runGit(t, dir, "config", "user.name", "releasebundle-test")
 
 	writeFile(t, filepath.Join(dir, "clients", "native", "openfhe.pin.json"), mustJSON(t, map[string]string{
