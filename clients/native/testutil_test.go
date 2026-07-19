@@ -105,6 +105,19 @@ if [ "${1:-}" = "--version" ]; then
 fi
 if [ "${1:-}" = "--build" ]; then
   build_dir="$2"
+  target=""
+  prev=""
+  for arg in "$@"; do
+    if [ "${prev}" = "--target" ]; then
+      target="${arg}"
+    fi
+    prev="${arg}"
+  done
+  if [ "${target}" = "ares_privacy_core" ]; then
+    mkdir -p "${build_dir}/lib"
+    : > "${build_dir}/lib/libares_privacy_core.a"
+    exit 0
+  fi
   prefix_file="${build_dir}/.mock-install-prefix"
   if [ ! -f "${prefix_file}" ]; then
     echo "mock cmake: no configure state found for ${build_dir}" >&2
@@ -124,17 +137,32 @@ fi
 
 build_dir=""
 prefix=""
+source_dir=""
 prev=""
 for arg in "$@"; do
   if [ "${prev}" = "-B" ]; then
     build_dir="${arg}"
+  fi
+  if [ "${prev}" = "-S" ]; then
+    source_dir="${arg}"
   fi
   case "${arg}" in
     -DCMAKE_INSTALL_PREFIX=*) prefix="${arg#-DCMAKE_INSTALL_PREFIX=}" ;;
   esac
   prev="${arg}"
 done
-if [ -z "${build_dir}" ] || [ -z "${prefix}" ]; then
+if [ -z "${build_dir}" ]; then
+  echo "mock cmake: configure call missing -B: $*" >&2
+  exit 1
+fi
+case "${source_dir}" in
+  */clients/native/bridge/apple)
+    mkdir -p "${build_dir}"
+    : > "${build_dir}/.mock-apple-bridge"
+    exit 0
+    ;;
+esac
+if [ -z "${prefix}" ]; then
   echo "mock cmake: configure call missing -B or -DCMAKE_INSTALL_PREFIX=: $*" >&2
   exit 1
 fi
@@ -161,10 +189,18 @@ fi
 if [ "${1:-}" = "-create-xcframework" ]; then
   shift
   output=""
+  headers=""
+  libraries=()
   prev=""
   for arg in "$@"; do
     if [ "${prev}" = "-output" ]; then
       output="${arg}"
+    fi
+    if [ "${prev}" = "-headers" ]; then
+      headers="${arg}"
+    fi
+    if [ "${prev}" = "-library" ]; then
+      libraries+=("${arg}")
     fi
     prev="${arg}"
   done
@@ -174,6 +210,13 @@ if [ "${1:-}" = "-create-xcframework" ]; then
   fi
   mkdir -p "${output}"
   : > "${output}/Info.plist"
+  for library in "${libraries[@]}"; do
+    slice="$(basename "$(dirname "${library}")")"
+    slice_dir="${output}/${slice}"
+    mkdir -p "${slice_dir}/Headers"
+    cp "${library}" "${slice_dir}/$(basename "${library}")"
+    cp -R "${headers}/." "${slice_dir}/Headers/"
+  done
   exit 0
 fi
 echo "mock xcodebuild: unhandled invocation: $*" >&2

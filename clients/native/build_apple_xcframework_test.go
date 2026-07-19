@@ -222,6 +222,33 @@ func TestAppleXCFrameworkProducesDeterministicStagingManifest(t *testing.T) {
 	}
 }
 
+func TestAppleXCFrameworkStagesCanonicalBridgeModule(t *testing.T) {
+	url, commit := newFakeOpenFHETagRepo(t, applePinnedVersion)
+	pin := writeTestPin(t, applePinnedVersion, url, commit)
+	out := t.TempDir()
+	res := runScript(t, appleScriptPath(t), []string{out}, fullApplePath(t), map[string]string{
+		"ARES_NATIVE_TEST_MODE":               "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
+		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+	})
+	if res.exitCode != 0 {
+		t.Fatalf("expected success, got exit=%d\nstdout=%s\nstderr=%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	artifact := filepath.Join(out, "AresPrivacyCore-"+applePinnedVersion+"-apple.xcframework.zip")
+	assertZipContainsEntries(t, artifact, []string{
+		"AresPrivacyCore.xcframework/ios-arm64/libAresPrivacyCore.a",
+		"AresPrivacyCore.xcframework/ios-arm64/Headers/openfhe_wrapper.h",
+		"AresPrivacyCore.xcframework/ios-arm64/Headers/module.modulemap",
+		"AresPrivacyCore.xcframework/ios-arm64-simulator/libAresPrivacyCore.a",
+		"AresPrivacyCore.xcframework/ios-arm64-simulator/Headers/openfhe_wrapper.h",
+		"AresPrivacyCore.xcframework/ios-arm64-simulator/Headers/module.modulemap",
+		"AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a",
+		"AresPrivacyCore.xcframework/macos-arm64/Headers/openfhe_wrapper.h",
+		"AresPrivacyCore.xcframework/macos-arm64/Headers/module.modulemap",
+	})
+}
+
 func assertPathHashMatches(t *testing.T, m map[string]any, pathKey, hashKey string) {
 	t.Helper()
 	path, _ := m[pathKey].(string)

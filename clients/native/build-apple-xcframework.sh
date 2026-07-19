@@ -21,6 +21,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 # required -- a build that produces only some of them fails closed rather
 # than shipping an incomplete xcframework.
 REQUIRED_PLATFORMS=(ios-arm64 ios-arm64-simulator macos-arm64)
+BRIDGE_APPLE_CMAKE_DIR="${SCRIPT_DIR}/bridge/apple"
 
 # Native builds are serialized deliberately: this script never launches
 # more than one platform slice's cmake configure/build/install at a time,
@@ -86,9 +87,43 @@ build_openfhe_slice() {
   rm -rf "${build_dir}"
 }
 
-combine_openfhe_static_libs() {
-  local install_dir="$1" combined="$2"
-  local -a libs=()
+build_bridge_slice() {
+  local install_dir="$1" bridge_build_dir="$2" platform="$3"
+  rm -rf "${bridge_build_dir}"
+
+  local -a cmake_args=(
+    -S "${BRIDGE_APPLE_CMAKE_DIR}" -B "${bridge_build_dir}"
+    -DOPENFHE_PREFIX="${install_dir}"
+    -DARES_WRAPPER_SOURCE="$(bridge_source_path)"
+  )
+  case "${platform}" in
+    ios-arm64)
+      cmake_args+=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphoneos -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0)
+      ;;
+    ios-arm64-simulator)
+      cmake_args+=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0)
+      ;;
+    macos-arm64)
+      cmake_args+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0)
+      ;;
+    *)
+      die "unknown Apple bridge platform slice: ${platform}"
+      ;;
+  esac
+
+  log_info "configuring canonical bridge for ${platform}"
+  cmake "${cmake_args[@]}" >&2
+  log_info "building canonical bridge for ${platform} (jobs=${BUILD_JOBS})"
+  cmake --build "${bridge_build_dir}" -j"${BUILD_JOBS}" --target ares_privacy_core >&2
+
+  local bridge_archive="${bridge_build_dir}/lib/libares_privacy_core.a"
+  [ -f "${bridge_archive}" ] || die "Apple bridge build for ${platform} produced no static archive: ${bridge_archive}"
+  printf '%s' "${bridge_archive}"
+}
+
+combine_bridge_and_openfhe_static_libs() {
+  local install_dir="$1" bridge_archive="$2" combined="$3"
+  local -a libs=("${bridge_archive}")
   local component
   # OpenFHE's CMake install rules name the static-library targets with an
   # explicit "_static" suffix (e.g. OPENFHEcore_static -> libOPENFHEcore_static.a)
@@ -137,23 +172,27 @@ main() {
 
   local -a built_platforms=()
   local -a slice_libs=()
-  local headers_dir=""
+  local headers_dir="${work_dir}/COpenFHEBridgeHeaders"
+  stage_copenfhe_headers "${headers_dir}"
 
   local platform
   for platform in "${REQUIRED_PLATFORMS[@]}"; do
     local install_dir="${work_dir}/install/${platform}"
     build_openfhe_slice "${openfhe_src}" "${install_dir}" "${platform}"
-    local combined="${work_dir}/combined/${platform}/libOpenFHE.a"
-    combine_openfhe_static_libs "${install_dir}" "${combined}"
+    local bridge_build_dir="${work_dir}/bridge-build/${platform}"
+    local bridge_archive
+    bridge_archive="$(build_bridge_slice "${install_dir}" "${bridge_build_dir}" "${platform}")"
+    local combined="${work_dir}/combined/${platform}/libAresPrivacyCore.a"
+    combine_bridge_and_openfhe_static_libs "${install_dir}" "${bridge_archive}" "${combined}"
     slice_libs+=("${combined}")
     built_platforms+=("${platform}")
-    headers_dir="${install_dir}/include/openfhe"
   done
 
   require_all_present "apple xcframework platform slices" "${REQUIRED_PLATFORMS[@]}" -- "${built_platforms[@]}"
-  [ -d "${headers_dir}" ] || die "OpenFHE public headers not found after build: ${headers_dir}"
+  [ -f "${headers_dir}/openfhe_wrapper.h" ] || die "canonical bridge header was not staged: ${headers_dir}/openfhe_wrapper.h"
+  [ -f "${headers_dir}/module.modulemap" ] || die "canonical bridge module map was not staged: ${headers_dir}/module.modulemap"
 
-  local xcframework_dir="${work_dir}/OpenFHE.xcframework"
+  local xcframework_dir="${work_dir}/AresPrivacyCore.xcframework"
   rm -rf "${xcframework_dir}"
   local -a xcodebuild_args=(-create-xcframework)
   local lib
@@ -174,7 +213,7 @@ main() {
     log_info "ARES_NATIVE_APPLE_CODESIGN_IDENTITY not set; staging unsigned (SHA-256 is the primary integrity check; record this as provenance-pinned but not code-signed)"
   fi
 
-  local artifact_zip="${output_dir}/OpenFHE-${version}-apple.xcframework.zip"
+  local artifact_zip="${output_dir}/AresPrivacyCore-${version}-apple.xcframework.zip"
   rm -f "${artifact_zip}"
   ( cd "${work_dir}" && zip -r -q "${artifact_zip}" "$(basename "${xcframework_dir}")" )
 
@@ -183,7 +222,7 @@ main() {
 
   local sbom_path="${output_dir}/OpenFHE-${version}-apple.sbom.json"
   local provenance_path="${output_dir}/OpenFHE-${version}-apple.provenance.json"
-  write_sbom "${sbom_path}" "OpenFHE" "${version}" "${commit}"
+  write_sbom "${sbom_path}" "AresPrivacyCore (OpenFHE)" "${version}" "${commit}"
   write_provenance "${provenance_path}" "$(basename "${artifact_zip}")" "${artifact_sha256}" \
     "${ares_rev}" "${commit}" "ares-core/clients/native/build-apple-xcframework.sh"
 
