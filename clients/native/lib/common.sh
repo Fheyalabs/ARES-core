@@ -134,6 +134,17 @@ jni_bridge_source_path() {
   printf '%s' "${path}"
 }
 
+require_jni_include_dir() {
+  local java_home="${JAVA_HOME:-}"
+  [ -n "${java_home}" ] || die "JAVA_HOME is required to locate JNI headers for the Android bridge build"
+  local include_dir="${java_home}/include"
+  [ -f "${include_dir}/jni.h" ] || die "JAVA_HOME has no include/jni.h: ${java_home}"
+  if [ ! -f "${include_dir}/darwin/jni_md.h" ] && [ ! -f "${include_dir}/linux/jni_md.h" ]; then
+    die "JAVA_HOME has no supported JNI platform header below ${include_dir}"
+  fi
+  printf '%s' "${include_dir}"
+}
+
 # stage_copenfhe_headers emits the public C module interface consumed by the
 # release-only Swift binary target. The caller owns DEST and must keep it out
 # of the repository worktree.

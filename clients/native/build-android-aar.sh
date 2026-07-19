@@ -23,6 +23,7 @@ source "${SCRIPT_DIR}/lib/common.sh"
 REQUIRED_ABIS=(arm64-v8a x86_64)
 ANDROID_PLATFORM="${ARES_NATIVE_ANDROID_PLATFORM:-android-24}"
 BUILD_JOBS="${ARES_NATIVE_BUILD_JOBS:-2}"
+BRIDGE_ANDROID_CMAKE_DIR="${SCRIPT_DIR}/bridge/android"
 
 usage() {
   cat >&2 <<'EOF'
@@ -72,8 +73,10 @@ build_openfhe_abi() {
 }
 
 stage_abi_shared_libs() {
-  local install_dir="$1" jni_abi_dir="$2"
+  local install_dir="$1" bridge_library="$2" jni_abi_dir="$3"
+  [ -f "${bridge_library}" ] || die "Android bridge library is missing: ${bridge_library}"
   mkdir -p "${jni_abi_dir}"
+  cp "${bridge_library}" "${jni_abi_dir}/libares_fhe_jni.so"
   local component found=0
   for component in OPENFHEcore OPENFHEpke OPENFHEbinfhe; do
     local so_path="${install_dir}/lib/lib${component}.so"
@@ -82,6 +85,28 @@ stage_abi_shared_libs() {
     found=$((found + 1))
   done
   [ "${found}" -eq 3 ] || die "expected 3 OpenFHE shared libraries staged for ${jni_abi_dir}, got ${found}"
+}
+
+build_android_bridge() {
+  local install_dir="$1" bridge_build_dir="$2" abi="$3" ndk_root="$4" jni_include_dir="$5"
+  rm -rf "${bridge_build_dir}"
+
+  log_info "configuring canonical JNI bridge for ${abi} (platform=${ANDROID_PLATFORM})"
+  cmake -S "${BRIDGE_ANDROID_CMAKE_DIR}" -B "${bridge_build_dir}" \
+    -DCMAKE_TOOLCHAIN_FILE="${ndk_root}/build/cmake/android.toolchain.cmake" \
+    -DANDROID_ABI="${abi}" \
+    -DANDROID_PLATFORM="${ANDROID_PLATFORM}" \
+    -DOPENFHE_PREFIX="${install_dir}" \
+    -DARES_JNI_SOURCE="$(jni_bridge_source_path)" \
+    -DARES_WRAPPER_SOURCE="$(bridge_source_path)" \
+    -DARES_JNI_INCLUDE_DIR="${jni_include_dir}" \
+    >&2
+  log_info "building canonical JNI bridge for ${abi} (jobs=${BUILD_JOBS})"
+  cmake --build "${bridge_build_dir}" -j"${BUILD_JOBS}" --target ares_fhe_jni >&2
+
+  local bridge_library="${bridge_build_dir}/lib/libares_fhe_jni.so"
+  [ -f "${bridge_library}" ] || die "Android bridge build for ${abi} produced no JNI library: ${bridge_library}"
+  printf '%s' "${bridge_library}"
 }
 
 write_android_manifest() {
@@ -116,6 +141,8 @@ main() {
 
   local ndk_root
   ndk_root="$(require_android_ndk)"
+  local jni_include_dir
+  jni_include_dir="$(require_jni_include_dir)"
 
   local output_dir
   output_dir="$(require_untracked_output_dir "${1:-}")"
@@ -147,7 +174,9 @@ main() {
   for abi in "${abis[@]}"; do
     local install_dir="${work_dir}/install/${abi}"
     build_openfhe_abi "${openfhe_src}" "${install_dir}" "${abi}" "${ndk_root}"
-    stage_abi_shared_libs "${install_dir}" "${aar_root}/jni/${abi}"
+    local bridge_library
+    bridge_library="$(build_android_bridge "${install_dir}" "${work_dir}/bridge-build/${abi}" "${abi}" "${ndk_root}" "${jni_include_dir}")"
+    stage_abi_shared_libs "${install_dir}" "${bridge_library}" "${aar_root}/jni/${abi}"
     built_abis+=("${abi}")
   done
 
@@ -156,7 +185,7 @@ main() {
   write_android_manifest "${aar_root}/AndroidManifest.xml"
   write_empty_classes_jar "${aar_root}/classes.jar" "${work_dir}"
 
-  local artifact_aar="${output_dir}/OpenFHE-${version}-android.aar"
+  local artifact_aar="${output_dir}/AresPrivacyCore-${version}-android.aar"
   rm -f "${artifact_aar}"
   ( cd "${aar_root}" && zip -q -r "${artifact_aar}" AndroidManifest.xml classes.jar jni )
 
@@ -165,7 +194,7 @@ main() {
 
   local sbom_path="${output_dir}/OpenFHE-${version}-android.sbom.json"
   local provenance_path="${output_dir}/OpenFHE-${version}-android.provenance.json"
-  write_sbom "${sbom_path}" "OpenFHE" "${version}" "${commit}"
+  write_sbom "${sbom_path}" "AresPrivacyCore (OpenFHE)" "${version}" "${commit}"
   write_provenance "${provenance_path}" "$(basename "${artifact_aar}")" "${artifact_sha256}" \
     "${ares_rev}" "${commit}" "ares-core/clients/native/build-android-aar.sh"
 

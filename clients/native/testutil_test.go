@@ -118,6 +118,11 @@ if [ "${1:-}" = "--build" ]; then
     : > "${build_dir}/lib/libares_privacy_core.a"
     exit 0
   fi
+  if [ "${target}" = "ares_fhe_jni" ]; then
+    mkdir -p "${build_dir}/lib"
+    : > "${build_dir}/lib/libares_fhe_jni.so"
+    exit 0
+  fi
   prefix_file="${build_dir}/.mock-install-prefix"
   if [ ! -f "${prefix_file}" ]; then
     echo "mock cmake: no configure state found for ${build_dir}" >&2
@@ -159,6 +164,11 @@ case "${source_dir}" in
   */clients/native/bridge/apple)
     mkdir -p "${build_dir}"
     : > "${build_dir}/.mock-apple-bridge"
+    exit 0
+    ;;
+  */clients/native/bridge/android)
+    mkdir -p "${build_dir}"
+    : > "${build_dir}/.mock-android-bridge"
     exit 0
     ;;
 esac
@@ -336,6 +346,22 @@ func newFakeAndroidNDK(t *testing.T, revision string) string {
 		t.Fatal(err)
 	}
 	return dir
+}
+
+func newFakeJNIHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	include := filepath.Join(home, "include")
+	if err := os.MkdirAll(filepath.Join(include, "darwin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(include, "jni.h"), []byte("/* fake JNI header */\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(include, "darwin", "jni_md.h"), []byte("/* fake JNI platform header */\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return home
 }
 
 func repoRoot(t *testing.T) string {

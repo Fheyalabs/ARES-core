@@ -28,6 +28,7 @@ func androidTestEnv(t *testing.T, extra map[string]string) map[string]string {
 	t.Helper()
 	env := map[string]string{
 		"ANDROID_NDK_HOME": newFakeAndroidNDK(t, "27.1.12345678"),
+		"JAVA_HOME":        newFakeJNIHome(t),
 	}
 	for k, v := range extra {
 		env[k] = v
@@ -220,6 +221,32 @@ func TestAndroidAARProducesDeterministicStagingManifest(t *testing.T) {
 	if afterStatus != beforeStatus {
 		t.Fatalf("script left new/changed files inside the repository worktree:\nbefore:\n%s\nafter:\n%s", beforeStatus, afterStatus)
 	}
+}
+
+func TestAndroidAARStagesJNIAlongsideOpenFHE(t *testing.T) {
+	url, commit := newFakeOpenFHETagRepo(t, applePinnedVersion)
+	pin := writeTestPin(t, applePinnedVersion, url, commit)
+	out := t.TempDir()
+	res := runScript(t, androidScriptPath(t), []string{out}, fullAndroidPath(t), androidTestEnv(t, map[string]string{
+		"ARES_NATIVE_TEST_MODE":               "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
+		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+	}))
+	if res.exitCode != 0 {
+		t.Fatalf("expected success, got exit=%d\nstdout=%s\nstderr=%s", res.exitCode, res.stdout, res.stderr)
+	}
+
+	artifact := filepath.Join(out, "AresPrivacyCore-"+applePinnedVersion+"-android.aar")
+	assertZipContainsEntries(t, artifact, []string{
+		"jni/arm64-v8a/libares_fhe_jni.so",
+		"jni/arm64-v8a/libOPENFHEcore.so",
+		"jni/arm64-v8a/libOPENFHEpke.so",
+		"jni/arm64-v8a/libOPENFHEbinfhe.so",
+		"jni/x86_64/libares_fhe_jni.so",
+		"jni/x86_64/libOPENFHEcore.so",
+		"jni/x86_64/libOPENFHEpke.so",
+		"jni/x86_64/libOPENFHEbinfhe.so",
+	})
 }
 
 func TestAndroidAARBuildsOptionalExtraABIsWhenRequested(t *testing.T) {
