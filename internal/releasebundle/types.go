@@ -59,6 +59,11 @@ type ArtifactManifest struct {
 	GeneratedAt              string   `json:"generated_at"`
 	CompatibilityPatchPath   string   `json:"openfhe_compatibility_patch_path,omitempty"`
 	CompatibilityPatchSHA256 string   `json:"openfhe_compatibility_patch_sha256,omitempty"`
+	// AppleMACOSDeploymentTarget is set only on the apple_xcframework
+	// artifact: the macos-arm64 slice's minimum deployment target, as
+	// recorded by build-apple-xcframework.sh's own real Mach-O inspection
+	// (see clients/native/lib/common.sh's verify_apple_macho_deployment_target).
+	AppleMACOSDeploymentTarget string `json:"apple_macos_deployment_target,omitempty"`
 }
 
 // ArtifactRef is the bundle-relative record of one platform artifact inside
@@ -76,6 +81,9 @@ type ArtifactRef struct {
 	SBOMSHA256          string   `json:"sbom_sha256"`
 	ProvenanceFile      string   `json:"provenance_file"`
 	ProvenanceSHA256    string   `json:"provenance_sha256"`
+	// AppleMACOSDeploymentTarget is populated only on the Apple ref; empty
+	// (and omitted) on the Android ref.
+	AppleMACOSDeploymentTarget string `json:"apple_macos_deployment_target,omitempty"`
 }
 
 // ReleaseCacheManifest is the single deterministic manifest Assemble

@@ -54,13 +54,17 @@ func runScript(t *testing.T, script string, args []string, path string, extraEnv
 }
 
 // fullApplePath returns a mock PATH with every required toolchain present
-// and succeeding (cmake, xcodebuild, libtool all mocked to succeed).
+// and succeeding (cmake, xcodebuild, libtool, otool, sw_vers all mocked to
+// succeed, with mockOtoolScript/mockSwVersScript defaulting to values that
+// satisfy the real, tracked apple-deployment-target.pin.json of 14.0).
 func fullApplePath(t *testing.T) string {
 	t.Helper()
 	return newMockPath(t, map[string]string{
 		"cmake":      mockCMakeScript,
 		"xcodebuild": mockXcodebuildScript,
 		"libtool":    mockLibtoolScript,
+		"otool":      mockOtoolScript,
+		"sw_vers":    mockSwVersScript,
 	})
 }
 

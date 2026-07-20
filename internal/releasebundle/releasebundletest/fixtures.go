@@ -23,6 +23,12 @@ const (
 	OpenFHEVersion = "v1.5.1"
 	OpenFHECommit  = "1306d14f8c26bb6150d3e6ad54f28dfe1007689e"
 
+	// AppleMACOSDeploymentTarget is the fixture repo's declared macOS
+	// deployment target and the default value NewBundle's Apple staging
+	// manifest records -- both must agree for the zero-value Opts to
+	// build a gate-accepted bundle.
+	AppleMACOSDeploymentTarget = "14.0"
+
 	ValidSwiftReleaseManifest = `// swift-tools-version: 6.0
 import PackageDescription
 
@@ -53,6 +59,7 @@ type Opts struct {
 	AndroidAresRevOverride        string              // if set, used only for the android manifest (creates a cross-platform mismatch)
 	AndroidOpenFHEVersionOverride string              // if set, used only for the android manifest
 	SwiftManifestOverride         string              // if set, replaces Package.release.swift content
+	AppleMACOSDeploymentTargetOverride string         // if set, used instead of AppleMACOSDeploymentTarget in the Apple manifest
 }
 
 // NewRepoRoot creates a real, tiny, committed git repository shaped like
@@ -73,6 +80,9 @@ func NewRepoRoot(t testing.TB, swiftManifest string) (repoRoot, commit string) {
 	}))
 	writeFile(t, filepath.Join(dir, "clients", "native", "android-ndk.pin.json"), mustJSON(t, map[string]string{
 		"android_ndk_min_major_version": "26",
+	}))
+	writeFile(t, filepath.Join(dir, "clients", "native", "apple-deployment-target.pin.json"), mustJSON(t, map[string]string{
+		"macos_minimum_deployment_target": AppleMACOSDeploymentTarget,
 	}))
 	writeFile(t, filepath.Join(dir, "clients", "swift", "Package.release.swift"), []byte(swiftManifest))
 
@@ -117,15 +127,20 @@ func NewBundle(t testing.TB, opts Opts) (bundleDir, repoRoot string) {
 		androidABIs = releasebundle.RequiredAndroidABIs
 	}
 
+	appleMACOSDeploymentTarget := AppleMACOSDeploymentTarget
+	if opts.AppleMACOSDeploymentTargetOverride != "" {
+		appleMACOSDeploymentTarget = opts.AppleMACOSDeploymentTargetOverride
+	}
+
 	bundleDir = t.TempDir()
 
-	writeAppleStagingSet(t, bundleDir, appleSlices, OpenFHEVersion, OpenFHECommit, aresRev)
+	writeAppleStagingSet(t, bundleDir, appleSlices, OpenFHEVersion, OpenFHECommit, aresRev, appleMACOSDeploymentTarget)
 	writeAndroidStagingSet(t, bundleDir, androidABIs, opts.AndroidLibsOverride, androidOpenFHEVersion, OpenFHECommit, androidAresRev)
 
 	return bundleDir, repoRoot
 }
 
-func writeAppleStagingSet(t testing.TB, bundleDir string, slices []string, openfheVersion, openfheCommit, aresRev string) {
+func writeAppleStagingSet(t testing.TB, bundleDir string, slices []string, openfheVersion, openfheCommit, aresRev, macosDeploymentTarget string) {
 	t.Helper()
 
 	artifactPath := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.xcframework.zip")
@@ -138,19 +153,20 @@ func writeAppleStagingSet(t testing.TB, bundleDir string, slices []string, openf
 	writeFile(t, provenancePath, mustJSON(t, map[string]string{"predicateType": "https://slsa.dev/provenance/v1"}))
 
 	manifest := releasebundle.ArtifactManifest{
-		SchemaVersion:          1,
-		ArtifactKind:           releasebundle.ArtifactKindAppleXCFramework,
-		ArtifactPath:           "/original/build/machine/path/" + filepath.Base(artifactPath),
-		ArtifactSHA256:         sha256OfFile(t, artifactPath),
-		OpenFHEVersion:         openfheVersion,
-		OpenFHESourceCommit:    openfheCommit,
-		AresCoreSourceRevision: aresRev,
-		TargetArchitectures:    slices,
-		SBOMPath:               sbomPath,
-		SBOMSHA256:             sha256OfFile(t, sbomPath),
-		ProvenancePath:         provenancePath,
-		ProvenanceSHA256:       sha256OfFile(t, provenancePath),
-		GeneratedAt:            "2026-07-19T00:00:00Z",
+		SchemaVersion:              1,
+		ArtifactKind:               releasebundle.ArtifactKindAppleXCFramework,
+		ArtifactPath:               "/original/build/machine/path/" + filepath.Base(artifactPath),
+		ArtifactSHA256:             sha256OfFile(t, artifactPath),
+		OpenFHEVersion:             openfheVersion,
+		OpenFHESourceCommit:        openfheCommit,
+		AresCoreSourceRevision:     aresRev,
+		TargetArchitectures:        slices,
+		SBOMPath:                   sbomPath,
+		SBOMSHA256:                 sha256OfFile(t, sbomPath),
+		ProvenancePath:             provenancePath,
+		ProvenanceSHA256:           sha256OfFile(t, provenancePath),
+		GeneratedAt:                "2026-07-19T00:00:00Z",
+		AppleMACOSDeploymentTarget: macosDeploymentTarget,
 	}
 	writeFile(t, filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.staging-manifest.json"), mustJSON(t, manifest))
 }

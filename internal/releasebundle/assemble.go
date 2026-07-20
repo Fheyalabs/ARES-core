@@ -72,6 +72,9 @@ func Assemble(bundleDir, repoRoot string) (*ReleaseCacheManifest, error) {
 	if err := checkAppleXCFrameworkContents(appleArtifactPath, RequiredApplePlatforms); err != nil {
 		return nil, err
 	}
+	if err := verifyAppleDeploymentTarget(bundleDir, repoRoot, apple, appleArtifactPath); err != nil {
+		return nil, err
+	}
 	androidArtifactPath := filepath.Join(bundleDir, filepath.Base(android.ArtifactPath))
 	if err := checkAndroidAARContents(androidArtifactPath, RequiredAndroidABIs); err != nil {
 		return nil, err
@@ -109,14 +112,15 @@ func WriteManifest(path string, m *ReleaseCacheManifest) error {
 
 func toArtifactRef(m *ArtifactManifest) ArtifactRef {
 	return ArtifactRef{
-		ArtifactKind:        m.ArtifactKind,
-		ArtifactFile:        filepath.Base(m.ArtifactPath),
-		ArtifactSHA256:      m.ArtifactSHA256,
-		TargetArchitectures: m.TargetArchitectures,
-		SBOMFile:            filepath.Base(m.SBOMPath),
-		SBOMSHA256:          m.SBOMSHA256,
-		ProvenanceFile:      filepath.Base(m.ProvenancePath),
-		ProvenanceSHA256:    m.ProvenanceSHA256,
+		ArtifactKind:               m.ArtifactKind,
+		ArtifactFile:               filepath.Base(m.ArtifactPath),
+		ArtifactSHA256:             m.ArtifactSHA256,
+		TargetArchitectures:        m.TargetArchitectures,
+		SBOMFile:                   filepath.Base(m.SBOMPath),
+		SBOMSHA256:                 m.SBOMSHA256,
+		ProvenanceFile:             filepath.Base(m.ProvenancePath),
+		ProvenanceSHA256:           m.ProvenanceSHA256,
+		AppleMACOSDeploymentTarget: m.AppleMACOSDeploymentTarget,
 	}
 }
 

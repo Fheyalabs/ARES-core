@@ -21,6 +21,16 @@ else
   PIN_FILE="${NATIVE_DIR}/openfhe.pin.json"
 fi
 
+# APPLE_DEPLOYMENT_TARGET_PIN_FILE is the tracked source of truth for the
+# minimum macOS version the Apple XCFramework's macos-arm64 slice must
+# support. Same test-only override gate as every other pin: it can never
+# activate against a real release invocation by accident.
+if [ "${ARES_NATIVE_TEST_MODE:-}" = "1" ] && [ -n "${ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE:-}" ]; then
+  APPLE_DEPLOYMENT_TARGET_PIN_FILE="${ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE}"
+else
+  APPLE_DEPLOYMENT_TARGET_PIN_FILE="${NATIVE_DIR}/apple-deployment-target.pin.json"
+fi
+
 log_info()  { printf '[native] %s\n' "$*" >&2; }
 log_error() { printf '[native] ERROR: %s\n' "$*" >&2; }
 
@@ -297,6 +307,104 @@ apply_android_openfhe_compatibility_patch() {
   sha256_of "${patch_path}"
 }
 
+# apple_version_gt A B returns success (0) if MAJOR.MINOR version A is
+# strictly greater than B, comparing the major and minor components
+# numerically -- never lexicographically, so "9.0" is correctly not
+# greater than "10.0". Callers must have already validated both A and B
+# are well-formed MAJOR.MINOR strings.
+apple_version_gt() {
+  local a_major="${1%%.*}" a_minor="${1#*.}"
+  local b_major="${2%%.*}" b_minor="${2#*.}"
+  a_minor="${a_minor%%.*}"
+  b_minor="${b_minor%%.*}"
+  if [ "${a_major}" -gt "${b_major}" ]; then
+    return 0
+  fi
+  if [ "${a_major}" -eq "${b_major}" ] && [ "${a_minor}" -gt "${b_minor}" ]; then
+    return 0
+  fi
+  return 1
+}
+
+# require_apple_version_format LABEL VALUE fails closed unless VALUE is a
+# well-formed MAJOR.MINOR version string (both components present and
+# purely numeric) -- an empty, non-numeric, or single-component value is
+# rejected rather than guessed at.
+require_apple_version_format() {
+  local label="$1" value="$2"
+  local major="${value%%.*}"
+  local minor="${value#*.}"
+  minor="${minor%%.*}"
+  case "${major}" in
+    ''|*[!0-9]*) die "${label} has a malformed major version component (want MAJOR.MINOR): ${value}" ;;
+  esac
+  if [ "${minor}" = "${value}" ]; then
+    die "${label} is missing a minor version component (want MAJOR.MINOR): ${value}"
+  fi
+  case "${minor}" in
+    ''|*[!0-9]*) die "${label} has a malformed minor version component (want MAJOR.MINOR): ${value}" ;;
+  esac
+}
+
+# require_macos_deployment_target reads, validates, and prints the pinned
+# minimum macOS deployment target for the macos-arm64 slice. It fails
+# closed if the pin file is missing, the value is absent, the value is not
+# a well-formed MAJOR.MINOR version string, or the pinned value is newer
+# than the host's own macOS version -- a target this machine cannot build
+# or validate against, and never a sane "minimum supported" value for a
+# macOS build in any case.
+require_macos_deployment_target() {
+  [ -f "${APPLE_DEPLOYMENT_TARGET_PIN_FILE}" ] || die "Apple deployment-target pin file not found: ${APPLE_DEPLOYMENT_TARGET_PIN_FILE}"
+  local target
+  target="$(jq -r '.macos_minimum_deployment_target // empty' "${APPLE_DEPLOYMENT_TARGET_PIN_FILE}" 2>/dev/null || true)"
+  [ -n "${target}" ] || die "Apple deployment-target pin ${APPLE_DEPLOYMENT_TARGET_PIN_FILE} is missing macos_minimum_deployment_target"
+  require_apple_version_format "Apple deployment-target pin ${APPLE_DEPLOYMENT_TARGET_PIN_FILE}'s macos_minimum_deployment_target" "${target}"
+
+  require_cmd sw_vers
+  local host_version
+  host_version="$(sw_vers -productVersion)"
+  if [ "${host_version#*.}" = "${host_version}" ]; then
+    host_version="${host_version}.0"
+  fi
+  require_apple_version_format "host macOS version (sw_vers -productVersion)" "${host_version}"
+
+  if apple_version_gt "${target}" "${host_version}"; then
+    die "pinned macOS deployment target ${target} is newer than the host macOS version ${host_version}; refusing to build against an unvalidatable target"
+  fi
+
+  printf '%s' "${target}"
+}
+
+# verify_apple_macho_deployment_target LIB_PATH EXPECTED fails closed
+# unless every LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX "minos" value `otool
+# -l` finds inside LIB_PATH (a static archive or object file) exactly
+# equals EXPECTED. otool is used rather than vtool because vtool refuses
+# to open a static archive ("file is not mach-o"), confirmed directly,
+# while otool -l reports each archive member's load commands. This
+# inspects the real Mach-O metadata rather than trusting that passing
+# -DCMAKE_OSX_DEPLOYMENT_TARGET was actually honored by every translation
+# unit -- the exact class of gap that can let a macOS-14-pinned build
+# silently link against a newer host-default minimum in practice.
+verify_apple_macho_deployment_target() {
+  local lib_path="$1" expected="$2"
+  require_cmd otool
+  [ -f "${lib_path}" ] || die "cannot inspect missing Mach-O file: ${lib_path}"
+  local output
+  output="$(otool -l "${lib_path}" 2>&1)" || die "otool failed to inspect Mach-O deployment target metadata: ${lib_path}"
+  local minos_values
+  minos_values="$(printf '%s\n' "${output}" | awk '/^ *minos /{print $2}')"
+  [ -n "${minos_values}" ] || die "no LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos load command found in ${lib_path}; cannot verify its deployment target"
+  local value
+  while IFS= read -r value; do
+    [ -n "${value}" ] || continue
+    if [ "${value}" != "${expected}" ]; then
+      die "Mach-O deployment target mismatch in ${lib_path}: inspected minos=${value}, pinned target=${expected}"
+    fi
+  done <<EOF2
+${minos_values}
+EOF2
+}
+
 # require_all_present LABEL REQUIRED_LIST... ACTUAL_LIST... fails closed if
 # any entry named in the (space-separated) required list is absent from
 # the (space-separated) actual list -- used to enforce that every required
@@ -411,6 +519,7 @@ emit_native_manifest() {
   local -a targets=("$@")
   local compatibility_patch_path="${NATIVE_ARTIFACT_COMPATIBILITY_PATCH_PATH:-}"
   local compatibility_patch_sha256="${NATIVE_ARTIFACT_COMPATIBILITY_PATCH_SHA256:-}"
+  local apple_macos_deployment_target="${NATIVE_ARTIFACT_APPLE_MACOS_DEPLOYMENT_TARGET:-}"
 
   local sbom_sha256 provenance_sha256
   sbom_sha256="$(sha256_of "${sbom_path}")"
@@ -433,6 +542,7 @@ emit_native_manifest() {
     --arg provenance_sha256 "${provenance_sha256}" \
     --arg compatibility_patch_path "${compatibility_patch_path}" \
     --arg compatibility_patch_sha256 "${compatibility_patch_sha256}" \
+    --arg apple_macos_deployment_target "${apple_macos_deployment_target}" \
     --argjson target_architectures "${targets_json}" \
     --arg generated_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     '{
@@ -453,5 +563,8 @@ emit_native_manifest() {
     + if $compatibility_patch_path == "" then {} else {
         openfhe_compatibility_patch_path: $compatibility_patch_path,
         openfhe_compatibility_patch_sha256: $compatibility_patch_sha256
+      } end
+    + if $apple_macos_deployment_target == "" then {} else {
+        apple_macos_deployment_target: $apple_macos_deployment_target
       } end' > "${path}"
 }

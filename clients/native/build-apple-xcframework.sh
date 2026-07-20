@@ -23,6 +23,14 @@ source "${SCRIPT_DIR}/lib/common.sh"
 REQUIRED_PLATFORMS=(ios-arm64 ios-arm64-simulator macos-arm64)
 BRIDGE_APPLE_CMAKE_DIR="${SCRIPT_DIR}/bridge/apple"
 
+# MACOS_DEPLOYMENT_TARGET is resolved once in main() (see
+# require_macos_deployment_target in lib/common.sh: fails closed on an
+# unset, malformed, or host-newer pin) and referenced by both
+# build_openfhe_slice and build_bridge_slice for the macos-arm64 case,
+# matching how BUILD_JOBS below is a script-global read by function body
+# rather than threaded through every call site.
+MACOS_DEPLOYMENT_TARGET=""
+
 # Native builds are serialized deliberately: this script never launches
 # more than one platform slice's cmake configure/build/install at a time,
 # and the release workflow never runs this script concurrently with
@@ -40,6 +48,13 @@ provenance statement, and a staging manifest into OUTPUT_DIR.
 
 OUTPUT_DIR is required and must resolve outside this repository's working
 tree; there is no default and no path inside the repo is accepted.
+
+The macos-arm64 slice's minimum deployment target is read from the tracked
+clients/native/apple-deployment-target.pin.json (macos_minimum_deployment_target)
+and fails closed if unset, malformed, or newer than the host's own macOS
+version. The real Mach-O metadata of every macos-arm64 static library this
+script produces is inspected with otool -l and must exactly match that
+pinned target.
 
 Environment:
   ARES_NATIVE_BUILD_JOBS               compiler parallelism per slice (default: 2)
@@ -66,7 +81,7 @@ build_openfhe_slice() {
       cmake_args+=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0)
       ;;
     macos-arm64)
-      cmake_args+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0)
+      cmake_args+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}")
       ;;
     *)
       die "unknown apple platform slice: ${platform}"
@@ -74,11 +89,36 @@ build_openfhe_slice() {
   esac
 
   log_info "configuring OpenFHE for ${platform}"
-  cmake "${cmake_args[@]}" >&2
+  if [ "${platform}" = "macos-arm64" ]; then
+    # CMAKE_OSX_DEPLOYMENT_TARGET alone is not reliably honored by every
+    # translation unit in a project this size (this is the exact gap that
+    # let a macOS-14-pinned build previously link against the host's
+    # macOS-26 default). Also exporting MACOSX_DEPLOYMENT_TARGET pins
+    # clang's own default for any sub-invocation that reads the
+    # environment instead of (or in addition to) the CMake cache variable.
+    MACOSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}" cmake "${cmake_args[@]}" >&2
+  else
+    cmake "${cmake_args[@]}" >&2
+  fi
   log_info "building OpenFHE for ${platform} (jobs=${BUILD_JOBS})"
-  cmake --build "${build_dir}" -j"${BUILD_JOBS}" --target install >&2
+  if [ "${platform}" = "macos-arm64" ]; then
+    MACOSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}" cmake --build "${build_dir}" -j"${BUILD_JOBS}" --target install >&2
+  else
+    cmake --build "${build_dir}" -j"${BUILD_JOBS}" --target install >&2
+  fi
 
   [ -d "${install_dir}/lib" ] || die "OpenFHE build for ${platform} produced no install/lib directory: ${install_dir}/lib"
+
+  if [ "${platform}" = "macos-arm64" ]; then
+    # Verify the real Mach-O metadata of every OpenFHE static library this
+    # slice just produced, rather than trusting that the CMake/environment
+    # deployment-target flags above were actually honored -- see
+    # verify_apple_macho_deployment_target in lib/common.sh.
+    local component
+    for component in OPENFHEcore OPENFHEpke OPENFHEbinfhe; do
+      verify_apple_macho_deployment_target "${install_dir}/lib/lib${component}_static.a" "${MACOS_DEPLOYMENT_TARGET}"
+    done
+  fi
 
   # Reclaim the build directory (object files; far larger than the
   # installed libs/headers) immediately once install succeeds, so peak
@@ -104,7 +144,7 @@ build_bridge_slice() {
       cmake_args+=(-DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT=iphonesimulator -DCMAKE_OSX_DEPLOYMENT_TARGET=17.0)
       ;;
     macos-arm64)
-      cmake_args+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0)
+      cmake_args+=(-DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}")
       ;;
     *)
       die "unknown Apple bridge platform slice: ${platform}"
@@ -112,17 +152,28 @@ build_bridge_slice() {
   esac
 
   log_info "configuring canonical bridge for ${platform}"
-  cmake "${cmake_args[@]}" >&2
+  if [ "${platform}" = "macos-arm64" ]; then
+    MACOSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}" cmake "${cmake_args[@]}" >&2
+  else
+    cmake "${cmake_args[@]}" >&2
+  fi
   log_info "building canonical bridge for ${platform} (jobs=${BUILD_JOBS})"
-  cmake --build "${bridge_build_dir}" -j"${BUILD_JOBS}" --target ares_privacy_core >&2
+  if [ "${platform}" = "macos-arm64" ]; then
+    MACOSX_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}" cmake --build "${bridge_build_dir}" -j"${BUILD_JOBS}" --target ares_privacy_core >&2
+  else
+    cmake --build "${bridge_build_dir}" -j"${BUILD_JOBS}" --target ares_privacy_core >&2
+  fi
 
   local bridge_archive="${bridge_build_dir}/lib/libares_privacy_core.a"
   [ -f "${bridge_archive}" ] || die "Apple bridge build for ${platform} produced no static archive: ${bridge_archive}"
+  if [ "${platform}" = "macos-arm64" ]; then
+    verify_apple_macho_deployment_target "${bridge_archive}" "${MACOS_DEPLOYMENT_TARGET}"
+  fi
   printf '%s' "${bridge_archive}"
 }
 
 combine_bridge_and_openfhe_static_libs() {
-  local install_dir="$1" bridge_archive="$2" combined="$3"
+  local install_dir="$1" bridge_archive="$2" combined="$3" platform="$4"
   local -a libs=("${bridge_archive}")
   local component
   # OpenFHE's CMake install rules name the static-library targets with an
@@ -138,6 +189,12 @@ combine_bridge_and_openfhe_static_libs() {
   mkdir -p "$(dirname "${combined}")"
   libtool -static -o "${combined}" "${libs[@]}"
   [ -f "${combined}" ] || die "libtool did not produce combined static library: ${combined}"
+
+  if [ "${platform}" = "macos-arm64" ]; then
+    # Final safety net: verify the exact artifact that gets zipped into the
+    # shipped xcframework, not just its individual pre-combination inputs.
+    verify_apple_macho_deployment_target "${combined}" "${MACOS_DEPLOYMENT_TARGET}"
+  fi
 }
 
 main() {
@@ -152,8 +209,13 @@ main() {
   require_cmd xcodebuild
   require_cmd libtool
   require_cmd zip
+  require_cmd sw_vers
+  require_cmd otool
 
   require_version_output "Xcode" '^Xcode [0-9]+\.' xcodebuild -version >/dev/null
+
+  MACOS_DEPLOYMENT_TARGET="$(require_macos_deployment_target)"
+  log_info "pinned macOS deployment target: ${MACOS_DEPLOYMENT_TARGET}"
 
   local output_dir
   output_dir="$(require_untracked_output_dir "${1:-}")"
@@ -183,7 +245,7 @@ main() {
     local bridge_archive
     bridge_archive="$(build_bridge_slice "${install_dir}" "${bridge_build_dir}" "${platform}")"
     local combined="${work_dir}/combined/${platform}/libAresPrivacyCore.a"
-    combine_bridge_and_openfhe_static_libs "${install_dir}" "${bridge_archive}" "${combined}"
+    combine_bridge_and_openfhe_static_libs "${install_dir}" "${bridge_archive}" "${combined}" "${platform}"
     slice_libs+=("${combined}")
     built_platforms+=("${platform}")
   done
@@ -227,6 +289,7 @@ main() {
     "${ares_rev}" "${commit}" "ares-core/clients/native/build-apple-xcframework.sh"
 
   local manifest_path="${output_dir}/OpenFHE-${version}-apple.staging-manifest.json"
+  NATIVE_ARTIFACT_APPLE_MACOS_DEPLOYMENT_TARGET="${MACOS_DEPLOYMENT_TARGET}" \
   emit_native_manifest "${manifest_path}" "apple_xcframework" "${artifact_zip}" "${artifact_sha256}" \
     "${version}" "${commit}" "${ares_rev}" \
     "${sbom_path}" "${provenance_path}" \

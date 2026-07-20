@@ -233,6 +233,48 @@ echo "mock xcodebuild: unhandled invocation: $*" >&2
 exit 1
 `
 
+// mockOtoolScript understands exactly `otool -l PATH`, ignoring PATH's
+// actual contents (the mocked cmake/libtool above produce empty
+// placeholder files, not real Mach-O objects) and reporting a single
+// LC_BUILD_VERSION load command whose minos value is
+// MOCK_OTOOL_MINOS (default: matches the repo's real tracked
+// clients/native/apple-deployment-target.pin.json, "14.0") -- so a test
+// can simulate a build whose real linked output disagrees with what was
+// pinned, independent of what the mocked cmake/libtool actually wrote to
+// disk.
+const mockOtoolScript = `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "-l" ]; then
+  minos="${MOCK_OTOOL_MINOS:-14.0}"
+  cat <<EOF
+Load command 1
+      cmd LC_BUILD_VERSION
+  cmdsize 24
+ platform 1
+    minos ${minos}
+      sdk 26.0
+   ntools 0
+EOF
+  exit 0
+fi
+echo "mock otool: unhandled invocation: $*" >&2
+exit 1
+`
+
+// mockSwVersScript understands exactly `sw_vers -productVersion`,
+// reporting MOCK_SW_VERS_PRODUCT_VERSION (default: a recent real macOS
+// version, newer than any deployment target these tests pin) so a test
+// can simulate running on an older host without needing one.
+const mockSwVersScript = `#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = "-productVersion" ]; then
+  echo "${MOCK_SW_VERS_PRODUCT_VERSION:-26.2}"
+  exit 0
+fi
+echo "mock sw_vers: unhandled invocation: $*" >&2
+exit 1
+`
+
 const mockLibtoolScript = `#!/usr/bin/env bash
 set -euo pipefail
 output=""
@@ -327,6 +369,23 @@ func writeTestNDKPin(t *testing.T, minMajor string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "android-ndk.pin.json")
 	raw, err := json.Marshal(map[string]string{"android_ndk_min_major_version": minMajor})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// writeTestAppleDeploymentTargetPin writes a pin file for use with
+// ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE. target is written
+// as-is (including deliberately malformed/empty values, so mutation tests
+// can exercise the malformed-pin rejection path).
+func writeTestAppleDeploymentTargetPin(t *testing.T, target string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "apple-deployment-target.pin.json")
+	raw, err := json.Marshal(map[string]string{"macos_minimum_deployment_target": target})
 	if err != nil {
 		t.Fatal(err)
 	}
