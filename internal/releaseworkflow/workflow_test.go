@@ -67,6 +67,10 @@ type workflow struct {
 }
 
 func loadWorkflow(t *testing.T) (workflow, string) {
+	return loadWorkflowFile(t, "release-clients.yml")
+}
+
+func loadWorkflowFile(t *testing.T, name string) (workflow, string) {
 	t.Helper()
 	wd, err := os.Getwd()
 	if err != nil {
@@ -74,7 +78,7 @@ func loadWorkflow(t *testing.T) (workflow, string) {
 	}
 	// internal/releaseworkflow -> repo root
 	repoRoot := filepath.Join(wd, "..", "..")
-	path := filepath.Join(repoRoot, ".github", "workflows", "release-clients.yml")
+	path := filepath.Join(repoRoot, ".github", "workflows", name)
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("reading %s: %v", path, err)
@@ -84,6 +88,31 @@ func loadWorkflow(t *testing.T) (workflow, string) {
 		t.Fatalf("parsing %s as YAML: %v", path, err)
 	}
 	return wf, string(raw)
+}
+
+func TestOrdinaryGoWorkflowRunsFullSuiteOnUbuntu(t *testing.T) {
+	wf, _ := loadWorkflowFile(t, "go.yml")
+	testJob, ok := wf.Jobs["test"]
+	if !ok {
+		t.Fatal("ordinary Go workflow has no test job")
+	}
+	if testJob.RunsOn != "ubuntu-latest" {
+		t.Errorf("ordinary Go test job runs-on = %q, want ubuntu-latest", testJob.RunsOn)
+	}
+
+	var testRun string
+	for _, step := range testJob.Steps {
+		if strings.Contains(step.Run, "go test") {
+			testRun = step.Run
+			break
+		}
+	}
+	if !strings.Contains(testRun, "go test ./...") {
+		t.Errorf("ordinary Ubuntu workflow does not run the complete Go suite: %q", testRun)
+	}
+	if strings.Contains(testRun, "GOOS=darwin") || strings.Contains(testRun, "-run") {
+		t.Errorf("ordinary Ubuntu workflow narrows or cross-targets the complete Go suite: %q", testRun)
+	}
 }
 
 func TestReleaseClientsWorkflowIsValidYAML(t *testing.T) {

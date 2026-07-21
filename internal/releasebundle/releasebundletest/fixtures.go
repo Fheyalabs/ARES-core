@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/Fheyalabs/ares-core/internal/releasebundle"
@@ -27,7 +28,9 @@ const (
 	// deployment target and the default value NewBundle's Apple staging
 	// manifest records -- both must agree for the zero-value Opts to
 	// build a gate-accepted bundle.
-	AppleMACOSDeploymentTarget = "14.0"
+	AppleMACOSDeploymentTarget  = "14.0"
+	appleMachOMinosMarker       = "ARES_RELEASEBUNDLE_TEST_MINOS="
+	canonicalMacOSLibraryMember = "AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a"
 
 	ValidSwiftReleaseManifest = `// swift-tools-version: 6.0
 import PackageDescription
@@ -52,14 +55,18 @@ let package = Package(
 // deliberately broken fixture instead of hand-corrupting zip bytes after
 // the fact. The zero value builds a complete, valid, gate-accepted bundle.
 type Opts struct {
-	AppleSlices                        []string
-	AndroidABIs                        []string
-	AndroidLibsOverride                map[string][]string // abi -> lib list; overrides the default full set for that ABI only
-	AresRevOverride                    string              // if set, used for BOTH platform manifests instead of the fixture repo's real HEAD
-	AndroidAresRevOverride             string              // if set, used only for the android manifest (creates a cross-platform mismatch)
-	AndroidOpenFHEVersionOverride      string              // if set, used only for the android manifest
-	SwiftManifestOverride              string              // if set, replaces Package.release.swift content
-	AppleMACOSDeploymentTargetOverride string              // if set, used instead of AppleMACOSDeploymentTarget in the Apple manifest
+	AppleSlices                         []string
+	AndroidABIs                         []string
+	AndroidLibsOverride                 map[string][]string // abi -> lib list; overrides the default full set for that ABI only
+	AresRevOverride                     string              // if set, used for BOTH platform manifests instead of the fixture repo's real HEAD
+	AndroidAresRevOverride              string              // if set, used only for the android manifest (creates a cross-platform mismatch)
+	AndroidOpenFHEVersionOverride       string              // if set, used only for the android manifest
+	SwiftManifestOverride               string              // if set, replaces Package.release.swift content
+	AppleMACOSDeploymentTargetOverride  string              // if set, used instead of AppleMACOSDeploymentTarget in the Apple manifest
+	AppleMachOMinosOverride             string              // if set, encoded in the canonical macOS library for the hermetic otool fixture
+	AppleDecoyFirstMachOMinos           string              // if set, adds a matching-looking decoy before the canonical macOS library
+	OmitCanonicalAppleMacOSLibrary      bool                // if set, only headers (and any requested decoy) are staged for macos-arm64
+	DuplicateCanonicalAppleMacOSLibrary bool                // if set, writes the exact canonical member twice
 }
 
 // NewRepoRoot creates a real, tiny, committed git repository shaped like
@@ -98,6 +105,7 @@ func NewRepoRoot(t testing.TB, swiftManifest string) (repoRoot, commit string) {
 // matching fixture repo root, per opts.
 func NewBundle(t testing.TB, opts Opts) (bundleDir, repoRoot string) {
 	t.Helper()
+	installHermeticOtool(t)
 
 	swiftManifest := ValidSwiftReleaseManifest
 	if opts.SwiftManifestOverride != "" {
@@ -134,17 +142,17 @@ func NewBundle(t testing.TB, opts Opts) (bundleDir, repoRoot string) {
 
 	bundleDir = t.TempDir()
 
-	writeAppleStagingSet(t, bundleDir, appleSlices, OpenFHEVersion, OpenFHECommit, aresRev, appleMACOSDeploymentTarget)
+	writeAppleStagingSet(t, bundleDir, appleSlices, OpenFHEVersion, OpenFHECommit, aresRev, appleMACOSDeploymentTarget, opts)
 	writeAndroidStagingSet(t, bundleDir, androidABIs, opts.AndroidLibsOverride, androidOpenFHEVersion, OpenFHECommit, androidAresRev)
 
 	return bundleDir, repoRoot
 }
 
-func writeAppleStagingSet(t testing.TB, bundleDir string, slices []string, openfheVersion, openfheCommit, aresRev, macosDeploymentTarget string) {
+func writeAppleStagingSet(t testing.TB, bundleDir string, slices []string, openfheVersion, openfheCommit, aresRev, macosDeploymentTarget string, opts Opts) {
 	t.Helper()
 
 	artifactPath := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.xcframework.zip")
-	buildAppleFixtureZip(t, artifactPath, slices)
+	buildAppleFixtureZip(t, artifactPath, slices, opts)
 
 	sbomPath := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.sbom.json")
 	writeFile(t, sbomPath, mustJSON(t, map[string]string{"bomFormat": "CycloneDX", "component": "OpenFHE"}))
@@ -205,13 +213,8 @@ func writeAndroidStagingSet(t testing.TB, bundleDir string, abis []string, libsO
 // xcodebuild-created AresPrivacyCore.xcframework.zip: one directory per
 // requested platform slice, each containing libAresPrivacyCore.a and the
 // COpenFHEBridge module headers.
-func buildAppleFixtureZip(t testing.TB, path string, slices []string) {
+func buildAppleFixtureZip(t testing.TB, path string, slices []string, opts Opts) {
 	t.Helper()
-	macOSArchive := buildFixtureMacOSStaticArchive(t)
-	macOSArchiveBytes, err := os.ReadFile(macOSArchive)
-	if err != nil {
-		t.Fatal(err)
-	}
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -219,10 +222,22 @@ func buildAppleFixtureZip(t testing.TB, path string, slices []string) {
 	defer f.Close()
 	zw := zip.NewWriter(f)
 	addZipFile(t, zw, "AresPrivacyCore.xcframework/Info.plist", "fake plist")
+	if opts.AppleDecoyFirstMachOMinos != "" {
+		addZipFile(t, zw, "decoy/macos-arm64/libAresPrivacyCore.a", appleMachOMinosMarker+opts.AppleDecoyFirstMachOMinos+"\n")
+	}
+	macOSMachOMinos := AppleMACOSDeploymentTarget
+	if opts.AppleMachOMinosOverride != "" {
+		macOSMachOMinos = opts.AppleMachOMinosOverride
+	}
 	for _, slice := range slices {
 		libraryPath := "AresPrivacyCore.xcframework/" + slice + "/libAresPrivacyCore.a"
 		if slice == "macos-arm64" {
-			addZipBytes(t, zw, libraryPath, macOSArchiveBytes)
+			if !opts.OmitCanonicalAppleMacOSLibrary {
+				addZipFile(t, zw, libraryPath, appleMachOMinosMarker+macOSMachOMinos+"\n")
+				if opts.DuplicateCanonicalAppleMacOSLibrary {
+					addZipFile(t, zw, libraryPath, appleMachOMinosMarker+macOSMachOMinos+"\n")
+				}
+			}
 		} else {
 			addZipFile(t, zw, libraryPath, "fake static lib for "+slice)
 		}
@@ -234,26 +249,55 @@ func buildAppleFixtureZip(t testing.TB, path string, slices []string) {
 	}
 }
 
-// buildFixtureMacOSStaticArchive creates the minimal real metadata fixture
-// the release gate requires: a macos-arm64 static archive whose Mach-O
-// LC_BUILD_VERSION minos exactly matches the fixture's tracked pin. This is
-// intentionally tiny and never builds OpenFHE.
-func buildFixtureMacOSStaticArchive(t testing.TB) string {
+// installHermeticOtool gives shared bundle and CLI tests a cross-platform
+// inspector without weakening production: releasebundle still resolves and
+// invokes `otool` normally, while this test fixture controls PATH and encodes
+// the reported minos value in the staged member bytes.
+func installHermeticOtool(t testing.TB) {
 	t.Helper()
 	dir := t.TempDir()
-	source := filepath.Join(dir, "fixture.c")
-	writeFile(t, source, []byte("int fixture(void) { return 0; }\n"))
-	object := filepath.Join(dir, "fixture.o")
-	cmd := exec.Command("clang", "-mmacosx-version-min="+AppleMACOSDeploymentTarget, "-c", source, "-o", object)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("clang fixture Mach-O: %v\n%s", err, out)
+	path := filepath.Join(dir, "otool")
+	script := `#!/bin/sh
+set -eu
+if [ "$#" -ne 2 ] || [ "$1" != "-l" ]; then
+  echo "hermetic otool: expected -l PATH" >&2
+  exit 2
+fi
+IFS= read -r marker < "$2" || true
+case "${marker}" in
+  ARES_RELEASEBUNDLE_TEST_MINOS=*) minos="${marker#ARES_RELEASEBUNDLE_TEST_MINOS=}" ;;
+  *) echo "hermetic otool: extracted member has no minos marker" >&2; exit 3 ;;
+esac
+printf '%s\n' \
+  'Load command 1' \
+  '      cmd LC_BUILD_VERSION' \
+  '  cmdsize 24' \
+  ' platform 1' \
+  "    minos ${minos}" \
+  '      sdk 26.0' \
+  '   ntools 0'
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
 	}
-	archive := filepath.Join(dir, "libAresPrivacyCore.a")
-	cmd = exec.Command("ar", "rcs", archive, object)
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("ar fixture Mach-O archive: %v\n%s", err, out)
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// RequireHermeticOtool asserts the positive-path fixture is independent of
+// any host Darwin toolchain before bundle or CLI behavior is exercised.
+func RequireHermeticOtool(t testing.TB) {
+	t.Helper()
+	path, err := exec.LookPath("otool")
+	if err != nil {
+		t.Fatalf("hermetic otool is unavailable: %v", err)
 	}
-	return archive
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), appleMachOMinosMarker) {
+		t.Fatalf("otool at %s is not the hermetic release-bundle fixture", path)
+	}
 }
 
 // buildAndroidFixtureAAR writes a zip shaped like a real

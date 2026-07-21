@@ -20,6 +20,7 @@ import (
 
 func TestAssembleRecordsAppleDeploymentTargetInReleaseCacheManifest(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	releasebundletest.RequireHermeticOtool(t)
 
 	m, err := releasebundle.Assemble(bundleDir, repoRoot)
 	if err != nil {
@@ -51,7 +52,7 @@ func TestAssembleRejectsMissingAppleDeploymentTarget(t *testing.T) {
 }
 
 func TestAssembleRejectsMalformedAppleDeploymentTarget(t *testing.T) {
-	for _, malformed := range []string{"14", "abc", "14.x", "14.0.1.2", ""} {
+	for _, malformed := range []string{"14", "abc", "14.x", "14.0.1.2", "", "014.0", "14.00"} {
 		t.Run(malformed, func(t *testing.T) {
 			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 			overwriteAppleManifestField(t, bundleDir, "apple_macos_deployment_target", malformed)
@@ -165,6 +166,90 @@ func TestAssembleRejectsMalformedAppleDeploymentTargetPin(t *testing.T) {
 	}
 }
 
+func TestAssembleRejectsNonCanonicalAppleDeploymentTargetPin(t *testing.T) {
+	for _, nonCanonical := range []string{"014.0", "14.00"} {
+		t.Run(nonCanonical, func(t *testing.T) {
+			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+			pinPath := filepath.Join(repoRoot, "clients", "native", "apple-deployment-target.pin.json")
+			if err := os.WriteFile(pinPath, []byte(`{"macos_minimum_deployment_target":"`+nonCanonical+`"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			commitAll(t, repoRoot, "write non-canonical apple deployment-target pin")
+			retargetStagedRevision(t, bundleDir, repoRoot)
+
+			_, err := releasebundle.Assemble(bundleDir, repoRoot)
+			if err == nil {
+				t.Fatalf("expected Assemble to reject non-canonical declared Apple deployment target %q, got nil error", nonCanonical)
+			}
+			if !strings.Contains(err.Error(), "apple-deployment-target.pin.json") {
+				t.Errorf("error does not identify the tracked pin: %v", err)
+			}
+		})
+	}
+}
+
+func TestAssembleRejectsNonCanonicalInspectedMachOMinOS(t *testing.T) {
+	for _, nonCanonical := range []string{"014.0", "14.00"} {
+		t.Run(nonCanonical, func(t *testing.T) {
+			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+				AppleMachOMinosOverride: nonCanonical,
+			})
+
+			_, err := releasebundle.Assemble(bundleDir, repoRoot)
+			if err == nil {
+				t.Fatalf("expected Assemble to reject non-canonical inspected Mach-O minos %q, got nil error", nonCanonical)
+			}
+			if !strings.Contains(err.Error(), nonCanonical) {
+				t.Errorf("error does not identify the inspected non-canonical minos: %v", err)
+			}
+		})
+	}
+}
+
+func TestAssembleInspectsCanonicalMacOSMemberDespiteDecoyFirst(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		AppleDecoyFirstMachOMinos: "14.0",
+		AppleMachOMinosOverride:   "15.0",
+	})
+
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject the canonical macOS member's 15.0 minos despite a decoy-first 14.0 member, got nil error")
+	}
+	if !strings.Contains(err.Error(), "15.0") {
+		t.Errorf("error does not prove the canonical 15.0 member was inspected: %v", err)
+	}
+}
+
+func TestAssembleRejectsMissingCanonicalMacOSMemberDespiteDecoy(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		AppleDecoyFirstMachOMinos:      "14.0",
+		OmitCanonicalAppleMacOSLibrary: true,
+	})
+
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject an Apple archive with only a matching-looking decoy macOS member, got nil error")
+	}
+	if !strings.Contains(err.Error(), "canonical") {
+		t.Errorf("error does not identify the missing canonical macOS member: %v", err)
+	}
+}
+
+func TestAssembleRejectsDuplicateCanonicalMacOSMembers(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		DuplicateCanonicalAppleMacOSLibrary: true,
+	})
+
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject duplicate canonical macOS members, got nil error")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error does not identify duplicate canonical macOS members: %v", err)
+	}
+}
+
 // retargetStagedRevision re-points bundleDir's staged Apple and Android
 // manifests' ares_core_source_revision at repoRoot's current HEAD, so a
 // test that commits an additional change to repoRoot (to reach a specific
@@ -192,6 +277,7 @@ func retargetStagedRevision(t *testing.T, bundleDir, repoRoot string) {
 // miss, exactly the bug class described in this task (a build that
 // records/claims one target but actually links a newer one).
 func TestAssembleInspectsRealMachODeploymentTargetOnDarwin(t *testing.T) {
+	hostPath := os.Getenv("PATH")
 	if runtime.GOOS != "darwin" {
 		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
 	}
@@ -203,6 +289,7 @@ func TestAssembleInspectsRealMachODeploymentTargetOnDarwin(t *testing.T) {
 	}
 
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	t.Setenv("PATH", hostPath)
 	realLib := compileRealMachOStaticLib(t, "15.0") // newer than the fixture's declared/recorded 14.0
 	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
 
@@ -216,6 +303,7 @@ func TestAssembleInspectsRealMachODeploymentTargetOnDarwin(t *testing.T) {
 }
 
 func TestAssembleRejectsRealMachOOlderThanDeclaredPinOnDarwin(t *testing.T) {
+	hostPath := os.Getenv("PATH")
 	if runtime.GOOS != "darwin" {
 		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
 	}
@@ -227,6 +315,7 @@ func TestAssembleRejectsRealMachOOlderThanDeclaredPinOnDarwin(t *testing.T) {
 	}
 
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	t.Setenv("PATH", hostPath)
 	realLib := compileRealMachOStaticLib(t, "12.0") // older than the fixture's declared/recorded 14.0
 	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
 
@@ -244,6 +333,7 @@ func TestAssembleRejectsRealMachOOlderThanDeclaredPinOnDarwin(t *testing.T) {
 // exactly matches the declared pin must not be rejected by the inspection
 // step.
 func TestAssembleAcceptsRealMachOMatchingDeploymentTargetOnDarwin(t *testing.T) {
+	hostPath := os.Getenv("PATH")
 	if runtime.GOOS != "darwin" {
 		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
 	}
@@ -255,6 +345,7 @@ func TestAssembleAcceptsRealMachOMatchingDeploymentTargetOnDarwin(t *testing.T) 
 	}
 
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	t.Setenv("PATH", hostPath)
 	realLib := compileRealMachOStaticLib(t, releasebundletest.AppleMACOSDeploymentTarget)
 	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
 
@@ -317,7 +408,7 @@ func replaceAppleXCFrameworkMacOSSlice(t *testing.T, bundleDir, realLibPath stri
 			t.Fatal(err)
 		}
 		var content []byte
-		if strings.Contains("/"+f.Name, "/macos-arm64/") && strings.HasSuffix(f.Name, "libAresPrivacyCore.a") {
+		if f.Name == "AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a" {
 			content = realLibBytes
 		} else {
 			content, err = io.ReadAll(rc)

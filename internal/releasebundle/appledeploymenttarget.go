@@ -9,9 +9,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 )
+
+const canonicalAppleMacOSLibraryMember = "AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a"
 
 // appleDeploymentTargetPinFile mirrors clients/native/apple-deployment-target.pin.json's
 // single tracked field: the declared minimum macOS deployment target every
@@ -40,62 +41,19 @@ func readDeclaredAppleDeploymentTarget(repoRoot string) (string, error) {
 	return pin.MACOSMinimumDeploymentTarget, nil
 }
 
-var appleVersionPattern = regexp.MustCompile(`^([0-9]+)\.([0-9]+)$`)
+var appleVersionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 
 // validateAppleVersionFormat fails closed unless value is a well-formed
-// MAJOR.MINOR version string -- empty, missing a component, or non-numeric
-// values are all rejected rather than guessed at.
+// canonical MAJOR.MINOR version string. Empty values, missing components,
+// non-numeric values, and leading zeroes are rejected rather than normalized.
 func validateAppleVersionFormat(value string) error {
 	if value == "" {
 		return fmt.Errorf("value is empty (want MAJOR.MINOR)")
 	}
 	if !appleVersionPattern.MatchString(value) {
-		return fmt.Errorf("value %q is not a well-formed MAJOR.MINOR version", value)
+		return fmt.Errorf("value %q is not a canonical MAJOR.MINOR version", value)
 	}
 	return nil
-}
-
-// compareAppleVersions returns -1, 0, or 1 as a is numerically less than,
-// equal to, or greater than b. Both must already be validated
-// MAJOR.MINOR strings (validateAppleVersionFormat).
-func compareAppleVersions(a, b string) (int, error) {
-	aMajor, aMinor, err := splitAppleVersion(a)
-	if err != nil {
-		return 0, err
-	}
-	bMajor, bMinor, err := splitAppleVersion(b)
-	if err != nil {
-		return 0, err
-	}
-	if aMajor != bMajor {
-		if aMajor < bMajor {
-			return -1, nil
-		}
-		return 1, nil
-	}
-	if aMinor != bMinor {
-		if aMinor < bMinor {
-			return -1, nil
-		}
-		return 1, nil
-	}
-	return 0, nil
-}
-
-func splitAppleVersion(v string) (major, minor int, err error) {
-	match := appleVersionPattern.FindStringSubmatch(v)
-	if match == nil {
-		return 0, 0, fmt.Errorf("value %q is not a well-formed MAJOR.MINOR version", v)
-	}
-	major, err = strconv.Atoi(match[1])
-	if err != nil {
-		return 0, 0, fmt.Errorf("value %q has an unparsable major version: %w", v, err)
-	}
-	minor, err = strconv.Atoi(match[2])
-	if err != nil {
-		return 0, 0, fmt.Errorf("value %q has an unparsable minor version: %w", v, err)
-	}
-	return major, minor, nil
 }
 
 // verifyAppleDeploymentTarget fails closed unless the Apple artifact's
@@ -113,11 +71,7 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 	if err != nil {
 		return err
 	}
-	cmp, err := compareAppleVersions(apple.AppleMACOSDeploymentTarget, declared)
-	if err != nil {
-		return err
-	}
-	if cmp != 0 {
+	if apple.AppleMACOSDeploymentTarget != declared {
 		return fmt.Errorf("apple artifact's recorded macOS deployment target %s does not exactly match the declared supported target %s",
 			apple.AppleMACOSDeploymentTarget, declared)
 	}
@@ -130,11 +84,7 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 		if err := validateAppleVersionFormat(value); err != nil {
 			return fmt.Errorf("apple artifact %s: inspected Mach-O minos value is malformed: %w", artifactPath, err)
 		}
-		cmp, err := compareAppleVersions(value, declared)
-		if err != nil {
-			return err
-		}
-		if cmp != 0 {
+		if value != declared {
 			return fmt.Errorf("apple artifact %s: inspected Mach-O minimum macOS %s does not exactly match the declared supported target %s",
 				artifactPath, value, declared)
 		}
@@ -142,9 +92,9 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 	return nil
 }
 
-// inspectAppleMacOSSliceDeploymentTarget extracts the macos-arm64 slice's
-// combined static library from the staged xcframework zip and runs the
-// real `otool -l` against it, returning every LC_BUILD_VERSION/
+// inspectAppleMacOSSliceDeploymentTarget extracts the canonical macos-arm64
+// library member from the staged xcframework zip and runs the real `otool -l`
+// against it, returning every LC_BUILD_VERSION/
 // LC_VERSION_MIN_MACOSX "minos" value found. It fails closed when otool is
 // unavailable or the archive member is not a real Mach-O object.
 func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, error) {
@@ -159,16 +109,19 @@ func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, erro
 	}
 	defer r.Close()
 
-	var member *zip.File
+	var matches []*zip.File
 	for _, f := range r.File {
-		if strings.Contains("/"+f.Name, "/macos-arm64/") && strings.HasSuffix(f.Name, "libAresPrivacyCore.a") {
-			member = f
-			break
+		if f.Name == canonicalAppleMacOSLibraryMember {
+			matches = append(matches, f)
 		}
 	}
-	if member == nil {
-		return nil, fmt.Errorf("no macos-arm64 libAresPrivacyCore.a member found in %s", artifactPath)
+	if len(matches) == 0 {
+		return nil, fmt.Errorf("canonical macOS library member %s is missing from %s", canonicalAppleMacOSLibraryMember, artifactPath)
 	}
+	if len(matches) != 1 {
+		return nil, fmt.Errorf("duplicate canonical macOS library member %s appears %d times in %s", canonicalAppleMacOSLibraryMember, len(matches), artifactPath)
+	}
+	member := matches[0]
 
 	rc, err := member.Open()
 	if err != nil {

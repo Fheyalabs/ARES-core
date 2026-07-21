@@ -35,6 +35,7 @@ func buildGateBinary(t *testing.T) string {
 func TestEndToEndAssembleThenVerifyAcceptsAValidBundle(t *testing.T) {
 	bin := buildGateBinary(t)
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	releasebundletest.RequireHermeticOtool(t)
 	manifestPath := filepath.Join(t.TempDir(), "release-cache-manifest.json")
 
 	assembleOut, err := exec.Command(bin, "assemble",
@@ -63,6 +64,48 @@ func TestEndToEndAssembleThenVerifyAcceptsAValidBundle(t *testing.T) {
 	if !strings.Contains(string(verifyOut), "verified OK") {
 		t.Errorf("verify output does not confirm success: %s", verifyOut)
 	}
+}
+
+func TestEndToEndAssembleFailsClosedWithoutOtool(t *testing.T) {
+	bin := buildGateBinary(t)
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	manifestPath := filepath.Join(t.TempDir(), "release-cache-manifest.json")
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(gitPath, filepath.Join(toolDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(bin, "assemble",
+		"-bundle-dir="+bundleDir,
+		"-repo-root="+repoRoot,
+		"-out="+manifestPath,
+	)
+	cmd.Env = environmentWithPath(toolDir)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected assemble to fail without otool, got success:\n%s", out)
+	}
+	if !strings.Contains(string(out), "otool") {
+		t.Errorf("failure does not identify unavailable otool: %s", out)
+	}
+	if _, statErr := os.Stat(manifestPath); statErr == nil {
+		t.Fatal("assemble must not write a manifest when otool is unavailable")
+	}
+}
+
+func environmentWithPath(path string) []string {
+	env := make([]string, 0, len(os.Environ()))
+	for _, item := range os.Environ() {
+		if strings.HasPrefix(item, "PATH=") {
+			continue
+		}
+		env = append(env, item)
+	}
+	return append(env, "PATH="+path)
 }
 
 func TestEndToEndVerifyRejectsATamperedArtifact(t *testing.T) {

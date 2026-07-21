@@ -31,8 +31,12 @@ release-artifact gate.
   when this pin was written.
 - `android-ndk.pin.json` — `android_ndk_min_major_version`, the minimum
   Android NDK major version `build-android-aar.sh` accepts.
+- `apple-deployment-target.pin.json` —
+  `macos_minimum_deployment_target`, currently `14.0`, the canonical
+  `MAJOR.MINOR` minimum for the shipped macOS slice. Leading zero forms such
+  as `014.0` or `14.00` are not canonical release values.
 
-Both files are the sole tracked source of truth for what is releasable.
+These files are the sole tracked source of truth for what is releasable.
 Neither script accepts an ordinary environment variable to redirect them —
 that would reopen exactly the bypass `clients/swift/FheyaClient/Package.swift`'s
 `FHEYA_ARES_CORE_SWIFT_PATH` local-development escape hatch represents for a
@@ -89,6 +93,9 @@ a partial or best-effort one, when:
 - any required toolchain command is missing (`git`, `jq`, `cmake`, plus
   `xcodebuild`/`libtool`/`zip` for Apple; `cmake` plus the NDK for Android);
 - the installed Xcode version does not report a parsable `Xcode N.M` string;
+- the tracked Apple deployment target is missing, non-canonical, newer than
+  the build host, or does not exactly equal every `minos` value inspected
+  from each produced macOS Mach-O archive;
 - `ANDROID_NDK_HOME` (or `ANDROID_NDK_ROOT`) is unset, does not exist, has
   no `build/cmake/android.toolchain.cmake`, has no `source.properties`, or
   reports a major version below `android-ndk.pin.json`'s pinned minimum;
@@ -132,9 +139,14 @@ check regardless of signing state.
   "sbom_sha256": "...",
   "provenance_path": "...",
   "provenance_sha256": "...",
+  "apple_macos_deployment_target": "14.0",
   "generated_at": "..."
 }
 ```
+
+`apple_macos_deployment_target` is required for `apple_xcframework` and
+omitted for `android_aar`. The Apple build records the tracked value only
+after inspecting the produced macOS libraries with `otool`.
 
 This is deliberately shaped to compose with the sibling Fheya-server
 release-audit gate's schema
@@ -242,6 +254,11 @@ unless:
   currently tracked `clients/native/openfhe.pin.json` (an artifact staged
   against a since-rotated pin is rejected, not silently bundled);
 - `clients/native/android-ndk.pin.json` is present and well-formed;
+- the tracked `clients/native/apple-deployment-target.pin.json` value, the
+  Apple staging manifest's `apple_macos_deployment_target`, and every
+  inspected Mach-O `minos` value are the same canonical string (`14.0` for
+  this release line); numeric aliases such as `014.0` and `14.00` are
+  rejected rather than normalized;
 - the repo root's checkout is clean (`git status --porcelain` empty) and
   its `HEAD` exactly equals the artifacts' recorded
   `ares_core_source_revision` — the "clean-cache" guarantee: a bundle
@@ -261,6 +278,12 @@ None of the above is re-derived from the native build scripts or their
 `emit_native_manifest` output at gate time — the gate opens the actual
 staged files and recomputes everything itself, the same fail-closed
 posture as the scripts that produced them.
+
+The production release gate requires macOS and a working `otool`; missing
+inspection tooling is a hard failure, not permission to trust producer
+metadata. `.github/workflows/release-clients.yml` therefore pins the gate
+job to `macos-14`. Running the production CLI on Linux without `otool` also
+fails closed.
 
 `release-artifact-gate verify -manifest=... -bundle-dir=... -repo-root=...`
 re-assembles the bundle from scratch and requires the result to be
@@ -290,6 +313,7 @@ built a specific staged AAR.
     "artifact_file": "AresPrivacyCore-v1.5.1-apple.xcframework.zip",
     "artifact_sha256": "...",
     "target_architectures": ["ios-arm64", "ios-arm64-simulator", "macos-arm64"],
+    "apple_macos_deployment_target": "14.0",
     "sbom_file": "...", "sbom_sha256": "...",
     "provenance_file": "...", "provenance_sha256": "..."
   },
@@ -318,12 +342,20 @@ against fixture bundles (a real, tiny, committed local git repository plus
 hand-built fixture zip archives shaped like the real artifacts), including
 mutation coverage for a mismatched source revision, a mismatched artifact
 hash, a local SwiftPM path dependency, an environment-driven dependency
-substitution, and an absent required Android ABI/JNI library.
+substitution, an absent required Android ABI/JNI library, non-canonical
+deployment-target forms, and decoy/duplicate macOS archive members.
 `cmd/release-artifact-gate/main_test.go` drives the built CLI binary as a
 real subprocess through `assemble` then `verify` against a fixture bundle,
 including a tampered-artifact rejection case, so the exit-code and
 stdout/stderr contract is exercised end to end, not just the underlying Go
 functions.
+
+The shared positive fixtures install an explicit test-only `otool` in their
+subprocess `PATH` and encode deterministic `minos` values in fixture archive
+members. This keeps `.github/workflows/go.yml`'s ordinary `ubuntu-latest`
+`go test ./...` run hermetic without adding a production environment bypass.
+Darwin-only tests separately compile tiny real Mach-O archives and inspect
+them with the host `otool`; neither test path runs an OpenFHE build.
 
 ```
 go test ./internal/releasebundle/... ./cmd/release-artifact-gate/... -v -count=1
