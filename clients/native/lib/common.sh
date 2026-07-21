@@ -360,7 +360,7 @@ require_apple_version_format() {
     || die "${label} has a non-canonical minor version component: ${value}"
 }
 
-# require_macos_deployment_target reads, validates, and prints the pinned
+# require_macos_deployment_target SW_VERS_PATH reads, validates, and prints the pinned
 # minimum macOS deployment target for the macos-arm64 slice. It fails
 # closed if the pin file is missing, the value is absent, the value is not
 # a well-formed MAJOR.MINOR version string, or the pinned value is newer
@@ -368,15 +368,17 @@ require_apple_version_format() {
 # or validate against, and never a sane "minimum supported" value for a
 # macOS build in any case.
 require_macos_deployment_target() {
+  local sw_vers_path="$1"
+  require_trusted_apple_tool_path "${sw_vers_path}" "sw_vers"
   [ -f "${APPLE_DEPLOYMENT_TARGET_PIN_FILE}" ] || die "Apple deployment-target pin file not found: ${APPLE_DEPLOYMENT_TARGET_PIN_FILE}"
   local target
   target="$(jq -r '.macos_minimum_deployment_target // empty' "${APPLE_DEPLOYMENT_TARGET_PIN_FILE}" 2>/dev/null || true)"
   [ -n "${target}" ] || die "Apple deployment-target pin ${APPLE_DEPLOYMENT_TARGET_PIN_FILE} is missing macos_minimum_deployment_target"
   require_apple_version_format "Apple deployment-target pin ${APPLE_DEPLOYMENT_TARGET_PIN_FILE}'s macos_minimum_deployment_target" "${target}"
 
-  require_cmd sw_vers
   local host_version
-  host_version="$(sw_vers -productVersion)"
+  host_version="$("${sw_vers_path}" -productVersion)" \
+    || die "trusted ${sw_vers_path} failed to report the host macOS version"
   case "${host_version}" in
     *.*.*.*) die "host macOS version has too many components: ${host_version}" ;;
     *.*.*)
@@ -398,7 +400,25 @@ require_macos_deployment_target() {
   printf '%s' "${target}"
 }
 
-# verify_apple_macho_deployment_target LIB_PATH EXPECTED fails closed
+# require_trusted_apple_tool_path PATH NAME accepts only a canonical absolute,
+# regular executable. Production passes fixed /usr/bin paths; native Go tests
+# source the producer through a test-only harness and inject regular mock files.
+require_trusted_apple_tool_path() {
+  local tool_path="$1" tool_name="$2"
+  [ -n "${tool_path}" ] || die "trusted ${tool_name} path is empty"
+  case "${tool_path}" in
+    /*) ;;
+    *) die "trusted ${tool_name} path is not absolute: ${tool_path}" ;;
+  esac
+  case "${tool_path}" in
+    *//*|*/./*|*/../*) die "trusted ${tool_name} path is not canonical: ${tool_path}" ;;
+  esac
+  [ ! -L "${tool_path}" ] || die "trusted ${tool_name} path is a symbolic link: ${tool_path}"
+  [ -f "${tool_path}" ] && [ -x "${tool_path}" ] \
+    || die "trusted ${tool_name} is not a regular executable: ${tool_path}"
+}
+
+# verify_apple_macho_deployment_target LIB_PATH EXPECTED OTOOL_PATH fails closed
 # unless every LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX "minos" value `otool
 # -l` finds inside LIB_PATH (a static archive or object file) exactly
 # equals EXPECTED. otool is used rather than vtool because vtool refuses
@@ -409,11 +429,11 @@ require_macos_deployment_target() {
 # unit -- the exact class of gap that can let a macOS-14-pinned build
 # silently link against a newer host-default minimum in practice.
 verify_apple_macho_deployment_target() {
-  local lib_path="$1" expected="$2"
-  require_cmd otool
+  local lib_path="$1" expected="$2" otool_path="$3"
+  require_trusted_apple_tool_path "${otool_path}" "otool"
   [ -f "${lib_path}" ] || die "cannot inspect missing Mach-O file: ${lib_path}"
   local output
-  output="$(otool -l "${lib_path}" 2>&1)" || die "otool failed to inspect Mach-O deployment target metadata: ${lib_path}"
+  output="$("${otool_path}" -l "${lib_path}" 2>&1)" || die "${otool_path} failed to inspect Mach-O deployment target metadata: ${lib_path}"
   local minos_values
   minos_values="$(printf '%s\n' "${output}" | awk '/^ *minos /{print $2}')"
   [ -n "${minos_values}" ] || die "no LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos load command found in ${lib_path}; cannot verify its deployment target"

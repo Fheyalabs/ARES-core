@@ -20,16 +20,19 @@ import (
 )
 
 type step struct {
-	Name string         `yaml:"name"`
-	Uses string         `yaml:"uses"`
-	Run  string         `yaml:"run"`
-	With map[string]any `yaml:"with"`
+	Name            string         `yaml:"name"`
+	Uses            string         `yaml:"uses"`
+	Run             string         `yaml:"run"`
+	If              string         `yaml:"if"`
+	ContinueOnError bool           `yaml:"continue-on-error"`
+	With            map[string]any `yaml:"with"`
 }
 
 type job struct {
 	Name   string `yaml:"name"`
 	Needs  needs  `yaml:"needs"`
 	RunsOn string `yaml:"runs-on"`
+	If     string `yaml:"if"`
 	Steps  []step `yaml:"steps"`
 }
 
@@ -176,9 +179,135 @@ func TestReleaseClientsWorkflowNeverUsesTestOnlyOverrides(t *testing.T) {
 		"ARES_NATIVE_TEST_PIN_FILE",
 		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL",
 		"ARES_NATIVE_TEST_NDK_PIN_FILE",
+		"ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE",
 	} {
 		if strings.Contains(raw, forbidden) {
 			t.Errorf("workflow references test-only override %q; a real release dispatch must never activate a test escape hatch", forbidden)
+		}
+	}
+}
+
+func TestReleaseClientsWorkflowInvokesProductionAppleEntrypointDirectly(t *testing.T) {
+	wf, _ := loadWorkflow(t)
+	appleJob, ok := wf.Jobs["apple-xcframework"]
+	if !ok {
+		t.Fatal("release workflow has no apple-xcframework job")
+	}
+	var buildRun string
+	for _, candidateStep := range appleJob.Steps {
+		if strings.Contains(candidateStep.Run, "build-apple-xcframework.sh") {
+			buildRun = candidateStep.Run
+			break
+		}
+	}
+	if !strings.Contains(buildRun, `./clients/native/build-apple-xcframework.sh "${out}"`) {
+		t.Errorf("release workflow does not directly execute the production Apple entrypoint: %q", buildRun)
+	}
+	for _, forbidden := range []string{"source ", "run_apple_xcframework_build", "sw_vers_path", "otool_path"} {
+		if strings.Contains(buildRun, forbidden) {
+			t.Errorf("release workflow Apple invocation exposes test-harness boundary %q: %q", forbidden, buildRun)
+		}
+	}
+}
+
+func TestAutomaticMacOSReleaseSecurityWorkflow(t *testing.T) {
+	wf, raw := loadWorkflowFile(t, "release-security-macos.yml")
+
+	for _, event := range []string{"push", "pull_request"} {
+		trigger, ok := wf.On[event]
+		if !ok {
+			t.Errorf("automatic macOS release-security workflow has no %s trigger", event)
+			continue
+		}
+		triggerMap, ok := trigger.(map[string]any)
+		if !ok {
+			t.Errorf("%s trigger = %T, want a mapping with relevant paths", event, trigger)
+			continue
+		}
+		pathValues, ok := triggerMap["paths"].([]any)
+		if !ok {
+			t.Errorf("%s trigger paths = %T, want a path list", event, triggerMap["paths"])
+			continue
+		}
+		paths := make(map[string]bool, len(pathValues))
+		for _, value := range pathValues {
+			path, _ := value.(string)
+			paths[path] = true
+		}
+		for _, required := range []string{
+			"internal/releasebundle/**",
+			"cmd/release-artifact-gate/**",
+			"clients/native/**",
+			"internal/releaseworkflow/**",
+			".github/workflows/release-security-macos.yml",
+		} {
+			if !paths[required] {
+				t.Errorf("%s trigger omits relevant path %q (paths: %v)", event, required, paths)
+			}
+		}
+	}
+	if len(wf.On) != 2 {
+		t.Errorf("automatic macOS workflow triggers = %v, want only push and pull_request", wf.On)
+	}
+	if got, _ := wf.Permissions["contents"].(string); got != "read" || len(wf.Permissions) != 1 {
+		t.Errorf("automatic macOS workflow permissions = %v, want only contents: read", wf.Permissions)
+	}
+
+	requiredPackages := []string{
+		"./internal/releasebundle",
+		"./cmd/release-artifact-gate",
+		"./clients/native",
+		"./internal/releaseworkflow",
+	}
+	type candidate struct {
+		job     job
+		testRun string
+	}
+	var candidates []candidate
+	for _, candidateJob := range wf.Jobs {
+		for _, candidateStep := range candidateJob.Steps {
+			matched := strings.Contains(candidateStep.Run, "go test")
+			for _, pkg := range requiredPackages {
+				matched = matched && strings.Contains(candidateStep.Run, pkg)
+			}
+			if matched {
+				candidates = append(candidates, candidate{job: candidateJob, testRun: candidateStep.Run})
+				break
+			}
+		}
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("found %d jobs running all focused release-security packages, want exactly 1", len(candidates))
+	}
+	releaseSecurityJob := candidates[0].job
+	focusedTestRun := candidates[0].testRun
+	if releaseSecurityJob.RunsOn != "macos-14" {
+		t.Errorf("automatic release-security job runs-on = %q, want macos-14", releaseSecurityJob.RunsOn)
+	}
+	if releaseSecurityJob.If != "" {
+		t.Errorf("automatic release-security job has skip condition %q", releaseSecurityJob.If)
+	}
+	for _, candidateStep := range releaseSecurityJob.Steps {
+		if candidateStep.If != "" {
+			t.Errorf("automatic release-security step %q has skip condition %q", candidateStep.Name, candidateStep.If)
+		}
+		if candidateStep.ContinueOnError {
+			t.Errorf("automatic release-security step %q ignores failures", candidateStep.Name)
+		}
+	}
+	for _, required := range []string{"-race", "-count=1"} {
+		if !strings.Contains(focusedTestRun, required) {
+			t.Errorf("focused go test command omits %s: %q", required, focusedTestRun)
+		}
+	}
+	for _, forbidden := range []string{"-run", "-short", "-tags openfhe", "|| true", "set +e"} {
+		if strings.Contains(focusedTestRun, forbidden) {
+			t.Errorf("focused go test command contains forbidden narrowing/failure/build option %q: %q", forbidden, focusedTestRun)
+		}
+	}
+	for _, forbidden := range []string{"build-apple-xcframework.sh", "openfhe-development", "cmake --build", "make -j"} {
+		if strings.Contains(strings.ToLower(raw), strings.ToLower(forbidden)) {
+			t.Errorf("automatic release-security workflow invokes an OpenFHE build indicator %q", forbidden)
 		}
 	}
 }

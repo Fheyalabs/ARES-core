@@ -66,6 +66,8 @@ type Opts struct {
 	AppleMachOMinosOverride             string              // if set, encoded in the canonical macOS library for the hermetic otool fixture
 	AppleDecoyFirstMachOMinos           string              // if set, adds a matching-looking decoy before the canonical macOS library
 	AppleExtraZipMembers                []string            // additional member names used by ZIP-name mutation tests
+	AppleNonUTF8ZipMember               string              // additional member whose ZIP NonUTF8 flag is set
+	AppleSymlinkZipMember               string              // additional member encoded as a symbolic link
 	OmitCanonicalAppleMacOSLibrary      bool                // if set, only headers (and any requested decoy) are staged for macos-arm64
 	DuplicateCanonicalAppleMacOSLibrary bool                // if set, writes the exact canonical member twice
 }
@@ -228,6 +230,15 @@ func buildAppleFixtureZip(t testing.TB, path string, slices []string, opts Opts)
 	for _, name := range opts.AppleExtraZipMembers {
 		addZipFile(t, zw, name, appleMachOMinosMarker+AppleMACOSDeploymentTarget+"\n")
 	}
+	if opts.AppleNonUTF8ZipMember != "" {
+		header := &zip.FileHeader{Name: opts.AppleNonUTF8ZipMember, Method: zip.Store, NonUTF8: true}
+		addZipHeader(t, zw, header, []byte("non-UTF-8 marker"))
+	}
+	if opts.AppleSymlinkZipMember != "" {
+		header := &zip.FileHeader{Name: opts.AppleSymlinkZipMember, Method: zip.Store}
+		header.SetMode(os.ModeSymlink | 0o777)
+		addZipHeader(t, zw, header, []byte("../../outside"))
+	}
 	macOSMachOMinos := AppleMACOSDeploymentTarget
 	if opts.AppleMachOMinosOverride != "" {
 		macOSMachOMinos = opts.AppleMachOMinosOverride
@@ -389,6 +400,17 @@ func addZipFile(t testing.TB, zw *zip.Writer, name, content string) {
 func addZipBytes(t testing.TB, zw *zip.Writer, name string, content []byte) {
 	t.Helper()
 	w, err := zw.Create(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write(content); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func addZipHeader(t testing.TB, zw *zip.Writer, header *zip.FileHeader, content []byte) {
+	t.Helper()
+	w, err := zw.CreateHeader(header)
 	if err != nil {
 		t.Fatal(err)
 	}

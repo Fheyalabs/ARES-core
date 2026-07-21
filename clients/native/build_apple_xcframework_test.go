@@ -15,6 +15,23 @@ const applePinnedVersion = "v1.5.1"
 
 func appleScriptPath(t *testing.T) string {
 	t.Helper()
+	productionScript := appleProductionScriptPath(t)
+	harness := filepath.Join(t.TempDir(), "build-apple-xcframework-test-harness.sh")
+	body := `#!/usr/bin/env bash
+set -euo pipefail
+source "` + productionScript + `"
+sw_vers_path="$(command -v sw_vers || true)"
+otool_path="$(command -v otool || true)"
+run_apple_xcframework_build "${sw_vers_path}" "${otool_path}" "$@"
+`
+	if err := os.WriteFile(harness, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return harness
+}
+
+func appleProductionScriptPath(t *testing.T) string {
+	t.Helper()
 	return filepath.Join(repoRoot(t), "clients", "native", "build-apple-xcframework.sh")
 }
 
@@ -97,6 +114,8 @@ func TestAppleXCFrameworkFailsClosedWithoutCMake(t *testing.T) {
 	path := newMockPath(t, map[string]string{
 		"xcodebuild": mockXcodebuildScript,
 		"libtool":    mockLibtoolScript,
+		"otool":      mockOtoolScript,
+		"sw_vers":    mockSwVersScript,
 	})
 	out := t.TempDir()
 	res := runScript(t, appleScriptPath(t), []string{out}, path, nil)
@@ -112,6 +131,8 @@ func TestAppleXCFrameworkFailsClosedWithoutXcodebuild(t *testing.T) {
 	path := newMockPath(t, map[string]string{
 		"cmake":   mockCMakeScript,
 		"libtool": mockLibtoolScript,
+		"otool":   mockOtoolScript,
+		"sw_vers": mockSwVersScript,
 	})
 	out := t.TempDir()
 	res := runScript(t, appleScriptPath(t), []string{out}, path, nil)

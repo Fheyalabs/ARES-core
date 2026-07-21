@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -39,6 +40,64 @@ func TestAppleXCFrameworkFailsClosedWithoutOtool(t *testing.T) {
 	}
 	if !strings.Contains(res.stderr, "otool") {
 		t.Fatalf("expected an otool-related failure, got stderr=%s", res.stderr)
+	}
+}
+
+func TestAppleXCFrameworkNormalModeIgnoresPATHShadowedAppleTools(t *testing.T) {
+	productionScript := appleProductionScriptPath(t)
+	raw, err := os.ReadFile(productionScript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{
+		`readonly TRUSTED_SW_VERS_PATH="/usr/bin/sw_vers"`,
+		`readonly TRUSTED_OTOOL_PATH="/usr/bin/otool"`,
+		`run_apple_xcframework_build "${TRUSTED_SW_VERS_PATH}" "${TRUSTED_OTOOL_PATH}" "$@"`,
+	} {
+		if !strings.Contains(string(raw), required) {
+			t.Errorf("normal producer omits fixed trusted-tool boundary %q", required)
+		}
+	}
+
+	markerDir := t.TempDir()
+	swVersMarker := filepath.Join(markerDir, "sw-vers-invoked")
+	otoolMarker := filepath.Join(markerDir, "otool-invoked")
+	path := newMockPath(t, map[string]string{
+		"cmake":      mockCMakeScript,
+		"xcodebuild": mockXcodebuildScript,
+		"libtool":    mockLibtoolScript,
+		"sw_vers": `#!/bin/sh
+set -eu
+: > "${SHADOW_SW_VERS_MARKER}"
+printf '%s\n' '99.0'
+`,
+		"otool": `#!/bin/sh
+set -eu
+: > "${SHADOW_OTOOL_MARKER}"
+printf '%s\n' '    minos 14.0'
+`,
+	})
+
+	res := runScript(t, productionScript, nil, path, map[string]string{
+		"SHADOW_SW_VERS_MARKER": swVersMarker,
+		"SHADOW_OTOOL_MARKER":   otoolMarker,
+	})
+	if res.exitCode == 0 {
+		t.Fatalf("PATH-shadowed Apple tools made the normal producer succeed: stdout=%s stderr=%s", res.stdout, res.stderr)
+	}
+	for tool, marker := range map[string]string{"sw_vers": swVersMarker, "otool": otoolMarker} {
+		if _, err := os.Stat(marker); err == nil {
+			t.Errorf("normal producer invoked PATH-shadowed %s", tool)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("checking %s marker: %v", tool, err)
+		}
+	}
+	wantFailure := "output directory argument is required"
+	if runtime.GOOS != "darwin" {
+		wantFailure = "requires Darwin"
+	}
+	if !strings.Contains(res.stderr, wantFailure) {
+		t.Fatalf("normal producer did not reach the expected pre-build failure through trusted tools: stderr=%s", res.stderr)
 	}
 }
 

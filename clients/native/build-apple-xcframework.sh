@@ -23,13 +23,18 @@ source "${SCRIPT_DIR}/lib/common.sh"
 REQUIRED_PLATFORMS=(ios-arm64 ios-arm64-simulator macos-arm64)
 BRIDGE_APPLE_CMAKE_DIR="${SCRIPT_DIR}/bridge/apple"
 
-# MACOS_DEPLOYMENT_TARGET is resolved once in main() (see
+# MACOS_DEPLOYMENT_TARGET is resolved once in run_apple_xcframework_build (see
 # require_macos_deployment_target in lib/common.sh: fails closed on an
 # unset, malformed, or host-newer pin) and referenced by both
 # build_openfhe_slice and build_bridge_slice for the macos-arm64 case,
 # matching how BUILD_JOBS below is a script-global read by function body
 # rather than threaded through every call site.
 MACOS_DEPLOYMENT_TARGET=""
+APPLE_OTOOL_PATH=""
+
+readonly TRUSTED_UNAME_PATH="/usr/bin/uname"
+readonly TRUSTED_SW_VERS_PATH="/usr/bin/sw_vers"
+readonly TRUSTED_OTOOL_PATH="/usr/bin/otool"
 
 # Native builds are serialized deliberately: this script never launches
 # more than one platform slice's cmake configure/build/install at a time,
@@ -116,7 +121,7 @@ build_openfhe_slice() {
     # verify_apple_macho_deployment_target in lib/common.sh.
     local component
     for component in OPENFHEcore OPENFHEpke OPENFHEbinfhe; do
-      verify_apple_macho_deployment_target "${install_dir}/lib/lib${component}_static.a" "${MACOS_DEPLOYMENT_TARGET}"
+      verify_apple_macho_deployment_target "${install_dir}/lib/lib${component}_static.a" "${MACOS_DEPLOYMENT_TARGET}" "${APPLE_OTOOL_PATH}"
     done
   fi
 
@@ -167,7 +172,7 @@ build_bridge_slice() {
   local bridge_archive="${bridge_build_dir}/lib/libares_privacy_core.a"
   [ -f "${bridge_archive}" ] || die "Apple bridge build for ${platform} produced no static archive: ${bridge_archive}"
   if [ "${platform}" = "macos-arm64" ]; then
-    verify_apple_macho_deployment_target "${bridge_archive}" "${MACOS_DEPLOYMENT_TARGET}"
+    verify_apple_macho_deployment_target "${bridge_archive}" "${MACOS_DEPLOYMENT_TARGET}" "${APPLE_OTOOL_PATH}"
   fi
   printf '%s' "${bridge_archive}"
 }
@@ -193,11 +198,17 @@ combine_bridge_and_openfhe_static_libs() {
   if [ "${platform}" = "macos-arm64" ]; then
     # Final safety net: verify the exact artifact that gets zipped into the
     # shipped xcframework, not just its individual pre-combination inputs.
-    verify_apple_macho_deployment_target "${combined}" "${MACOS_DEPLOYMENT_TARGET}"
+    verify_apple_macho_deployment_target "${combined}" "${MACOS_DEPLOYMENT_TARGET}" "${APPLE_OTOOL_PATH}"
   fi
 }
 
-main() {
+run_apple_xcframework_build() {
+  local sw_vers_path="$1" otool_path="$2"
+  shift 2
+  require_trusted_apple_tool_path "${sw_vers_path}" "sw_vers"
+  require_trusted_apple_tool_path "${otool_path}" "otool"
+  APPLE_OTOOL_PATH="${otool_path}"
+
   if [ "${1:-}" = "-h" ] || [ "${1:-}" = "--help" ]; then
     usage
     exit 0
@@ -209,12 +220,10 @@ main() {
   require_cmd xcodebuild
   require_cmd libtool
   require_cmd zip
-  require_cmd sw_vers
-  require_cmd otool
 
   require_version_output "Xcode" '^Xcode [0-9]+\.' xcodebuild -version >/dev/null
 
-  MACOS_DEPLOYMENT_TARGET="$(require_macos_deployment_target)"
+  MACOS_DEPLOYMENT_TARGET="$(require_macos_deployment_target "${sw_vers_path}")"
   log_info "pinned macOS deployment target: ${MACOS_DEPLOYMENT_TARGET}"
 
   local output_dir
@@ -301,4 +310,18 @@ main() {
   log_info "staged manifest:  ${manifest_path}"
 }
 
-main "$@"
+# Direct execution is the production/release entrypoint. Tests source this
+# file and call run_apple_xcframework_build through their own generated harness;
+# no environment variable or command-line option can redirect these paths.
+main() {
+  require_trusted_apple_tool_path "${TRUSTED_UNAME_PATH}" "uname"
+  local host_os
+  host_os="$("${TRUSTED_UNAME_PATH}" -s)" \
+    || die "trusted ${TRUSTED_UNAME_PATH} failed to report the host operating system"
+  [ "${host_os}" = "Darwin" ] || die "Apple XCFramework production requires Darwin (host is ${host_os})"
+  run_apple_xcframework_build "${TRUSTED_SW_VERS_PATH}" "${TRUSTED_OTOOL_PATH}" "$@"
+}
+
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

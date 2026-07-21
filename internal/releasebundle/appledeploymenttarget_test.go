@@ -290,6 +290,70 @@ func TestAssembleRejectsAppleZIPAliasesOfCanonicalMacOSMember(t *testing.T) {
 	}
 }
 
+func TestAssembleRejectsCaseInsensitiveAppleZIPAliases(t *testing.T) {
+	const caseAlias = "aresprivacycore.xcframework/macos-arm64/libaresprivacycore.a"
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		AppleExtraZipMembers: []string{caseAlias},
+	})
+
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a case-insensitive alias of the canonical macOS member, got nil error")
+	}
+	if !strings.Contains(err.Error(), "collides") {
+		t.Errorf("error does not identify the case-insensitive collision: %v", err)
+	}
+}
+
+func TestAssembleRejectsNonASCIIAppleZIPMembers(t *testing.T) {
+	for _, name := range []string{
+		"AresPrivacyCore.xcframework/macos-arm64/Headers/caf\u00e9.h",
+		"AresPrivacyCore.xcframework/macos-arm64/Headers/cafe\u0301.h",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+				AppleExtraZipMembers: []string{name},
+			})
+
+			_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
+			if err == nil {
+				t.Fatalf("expected Assemble to reject non-ASCII Apple ZIP member %q, got nil error", name)
+			}
+			if !strings.Contains(err.Error(), "portable ASCII") {
+				t.Errorf("error does not identify the portable-ASCII restriction: %v", err)
+			}
+		})
+	}
+}
+
+func TestAssembleRejectsAppleZIPMemberWithNonUTF8Flag(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		AppleNonUTF8ZipMember: "AresPrivacyCore.xcframework/macos-arm64/Headers/caf\u00e9.h",
+	})
+
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject an Apple ZIP member with NonUTF8 set, got nil error")
+	}
+	if !strings.Contains(err.Error(), "NonUTF8") {
+		t.Errorf("error does not identify the NonUTF8 flag: %v", err)
+	}
+}
+
+func TestAssembleRejectsAppleZIPMemberSymlink(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+		AppleSymlinkZipMember: "AresPrivacyCore.xcframework/macos-arm64/Headers/alias.h",
+	})
+
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a symbolic-link Apple ZIP member, got nil error")
+	}
+	if !strings.Contains(err.Error(), "symbolic link") {
+		t.Errorf("error does not identify the symbolic-link member: %v", err)
+	}
+}
+
 // retargetStagedRevision re-points bundleDir's staged Apple and Android
 // manifests' ares_core_source_revision at repoRoot's current HEAD, so a
 // test that commits an additional change to repoRoot (to reach a specific
