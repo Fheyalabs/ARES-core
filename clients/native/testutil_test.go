@@ -105,6 +105,15 @@ if [ "${1:-}" = "--version" ]; then
 fi
 if [ "${1:-}" = "--build" ]; then
   build_dir="$2"
+
+  if [ -f "${build_dir}/.mock-required-macos-deployment-target" ]; then
+    expected="$(cat "${build_dir}/.mock-required-macos-deployment-target")"
+    if [ "${MACOSX_DEPLOYMENT_TARGET:-}" != "${expected}" ]; then
+      echo "mock cmake: build MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-<unset>}, want ${expected}" >&2
+      exit 1
+    fi
+  fi
+
   target=""
   prev=""
   for arg in "$@"; do
@@ -159,6 +168,35 @@ done
 if [ -z "${build_dir}" ]; then
   echo "mock cmake: configure call missing -B: $*" >&2
   exit 1
+fi
+if [ -n "${MOCK_CMAKE_EXPECT_MACOS_DEPLOYMENT_TARGET:-}" ]; then
+  expected_flag="-DCMAKE_OSX_DEPLOYMENT_TARGET=${MOCK_CMAKE_EXPECT_MACOS_DEPLOYMENT_TARGET}"
+  saw_expected_flag=0
+  saw_apple_architecture=0
+  saw_ios_system=0
+  for arg in "$@"; do
+    if [ "${arg}" = "${expected_flag}" ]; then
+      saw_expected_flag=1
+    fi
+    if [ "${arg}" = "-DCMAKE_OSX_ARCHITECTURES=arm64" ]; then
+      saw_apple_architecture=1
+    fi
+    if [ "${arg}" = "-DCMAKE_SYSTEM_NAME=iOS" ]; then
+      saw_ios_system=1
+    fi
+  done
+  if [ "${saw_apple_architecture}" = "1" ] && [ "${saw_ios_system}" = "0" ]; then
+    if [ "${saw_expected_flag}" != "1" ]; then
+      echo "mock cmake: macOS configure is missing ${expected_flag}" >&2
+      exit 1
+    fi
+    if [ "${MACOSX_DEPLOYMENT_TARGET:-}" != "${MOCK_CMAKE_EXPECT_MACOS_DEPLOYMENT_TARGET}" ]; then
+      echo "mock cmake: configure MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET:-<unset>}, want ${MOCK_CMAKE_EXPECT_MACOS_DEPLOYMENT_TARGET}" >&2
+      exit 1
+    fi
+    mkdir -p "${build_dir}"
+    printf '%s' "${MOCK_CMAKE_EXPECT_MACOS_DEPLOYMENT_TARGET}" > "${build_dir}/.mock-required-macos-deployment-target"
+  fi
 fi
 case "${source_dir}" in
   */clients/native/bridge/apple)

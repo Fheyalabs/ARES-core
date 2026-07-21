@@ -47,9 +47,9 @@ func TestAppleXCFrameworkFailsClosedOnMissingDeploymentTargetPin(t *testing.T) {
 	pin := writeTestPin(t, applePinnedVersion, url, commit)
 	out := t.TempDir()
 	res := runScript(t, appleScriptPath(t), []string{out}, fullApplePath(t), map[string]string{
-		"ARES_NATIVE_TEST_MODE":               "1",
-		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
-		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+		"ARES_NATIVE_TEST_MODE":                             "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL":               url,
+		"ARES_NATIVE_TEST_PIN_FILE":                         pin,
 		"ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE": filepath.Join(t.TempDir(), "does-not-exist.json"),
 	})
 	if res.exitCode == 0 {
@@ -68,9 +68,9 @@ func TestAppleXCFrameworkFailsClosedOnMalformedDeploymentTargetPin(t *testing.T)
 			deploymentPin := writeTestAppleDeploymentTargetPin(t, malformed)
 			out := t.TempDir()
 			res := runScript(t, appleScriptPath(t), []string{out}, fullApplePath(t), map[string]string{
-				"ARES_NATIVE_TEST_MODE":               "1",
-				"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
-				"ARES_NATIVE_TEST_PIN_FILE":           pin,
+				"ARES_NATIVE_TEST_MODE":                             "1",
+				"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL":               url,
+				"ARES_NATIVE_TEST_PIN_FILE":                         pin,
 				"ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE": deploymentPin,
 			})
 			if res.exitCode == 0 {
@@ -92,9 +92,9 @@ func TestAppleXCFrameworkFailsClosedOnHostNewerDeploymentTarget(t *testing.T) {
 	deploymentPin := writeTestAppleDeploymentTargetPin(t, "20.0")
 	out := t.TempDir()
 	res := runScript(t, appleScriptPath(t), []string{out}, fullApplePath(t), map[string]string{
-		"ARES_NATIVE_TEST_MODE":               "1",
-		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
-		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+		"ARES_NATIVE_TEST_MODE":                             "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL":               url,
+		"ARES_NATIVE_TEST_PIN_FILE":                         pin,
 		"ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE": deploymentPin,
 		"MOCK_SW_VERS_PRODUCT_VERSION":                      "15.0",
 	})
@@ -138,11 +138,12 @@ func TestAppleXCFrameworkPropagatesDeploymentTargetIntoManifest(t *testing.T) {
 	deploymentPin := writeTestAppleDeploymentTargetPin(t, "13.5")
 	out := t.TempDir()
 	res := runScript(t, appleScriptPath(t), []string{out}, fullApplePath(t), map[string]string{
-		"ARES_NATIVE_TEST_MODE":               "1",
-		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL": url,
-		"ARES_NATIVE_TEST_PIN_FILE":           pin,
+		"ARES_NATIVE_TEST_MODE":                             "1",
+		"ARES_NATIVE_TEST_OPENFHE_SOURCE_URL":               url,
+		"ARES_NATIVE_TEST_PIN_FILE":                         pin,
 		"ARES_NATIVE_TEST_APPLE_DEPLOYMENT_TARGET_PIN_FILE": deploymentPin,
-		"MOCK_OTOOL_MINOS": "13.5",
+		"MOCK_OTOOL_MINOS":                                  "13.5",
+		"MOCK_CMAKE_EXPECT_MACOS_DEPLOYMENT_TARGET":         "13.5",
 	})
 	if res.exitCode != 0 {
 		t.Fatalf("expected success, got exit=%d\nstdout=%s\nstderr=%s", res.exitCode, res.stdout, res.stderr)

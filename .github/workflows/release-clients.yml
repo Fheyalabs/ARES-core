@@ -102,7 +102,10 @@ jobs:
     # keeps this job's real precondition -- both staged bundles exist --
     # readable without having to trace the other job's `needs`).
     needs: [apple-xcframework, android-aar]
-    runs-on: ubuntu-latest
+    # The gate invokes otool against the staged macos-arm64 archive. Keep
+    # this on a pinned macOS image so missing inspection tooling cannot
+    # silently downgrade verification to producer-metadata trust.
+    runs-on: macos-14
     steps:
       # A checkout of the exact same commit the two platform jobs built
       # from (workflow_dispatch pins every job in the run to the same

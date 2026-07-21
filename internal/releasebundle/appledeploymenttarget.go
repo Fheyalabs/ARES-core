@@ -15,7 +15,7 @@ import (
 
 // appleDeploymentTargetPinFile mirrors clients/native/apple-deployment-target.pin.json's
 // single tracked field: the declared minimum macOS deployment target every
-// staged Apple XCFramework's macos-arm64 slice must not exceed.
+// staged Apple XCFramework's macos-arm64 slice must exactly match.
 type appleDeploymentTargetPinFile struct {
 	MACOSMinimumDeploymentTarget string `json:"macos_minimum_deployment_target"`
 }
@@ -99,14 +99,12 @@ func splitAppleVersion(v string) (major, minor int, err error) {
 }
 
 // verifyAppleDeploymentTarget fails closed unless the Apple artifact's
-// recorded macos_minimum_deployment_target is present, well-formed, and no
-// newer than repoRoot's currently tracked declared target. When otool is
-// available on this host, it additionally extracts the macos-arm64
-// slice's combined static library from the real staged archive and
+// recorded macos_minimum_deployment_target is present, well-formed, and an
+// exact match for repoRoot's currently tracked declared target. It extracts
+// the macos-arm64 slice's combined static library from the real staged archive and
 // inspects its actual Mach-O LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos
-// values, rejecting the bundle if any of them are newer than the declared
-// target too -- so a staging manifest's claim alone is never sufficient
-// when the real binary can be checked.
+// values, rejecting the bundle if any differ from the declared target --
+// producer metadata alone is never sufficient.
 func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactManifest, artifactPath string) error {
 	if err := validateAppleVersionFormat(apple.AppleMACOSDeploymentTarget); err != nil {
 		return fmt.Errorf("apple artifact staging manifest has an invalid apple_macos_deployment_target: %w", err)
@@ -119,20 +117,14 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 	if err != nil {
 		return err
 	}
-	if cmp > 0 {
-		return fmt.Errorf("apple artifact's recorded macOS deployment target %s is newer than the declared supported target %s; this xcframework is not a portable release candidate",
+	if cmp != 0 {
+		return fmt.Errorf("apple artifact's recorded macOS deployment target %s does not exactly match the declared supported target %s",
 			apple.AppleMACOSDeploymentTarget, declared)
 	}
 
-	inspectedMinOS, inspected, err := inspectAppleMacOSSliceDeploymentTarget(artifactPath)
+	inspectedMinOS, err := inspectAppleMacOSSliceDeploymentTarget(artifactPath)
 	if err != nil {
 		return fmt.Errorf("inspecting real Mach-O deployment target metadata in %s: %w", artifactPath, err)
-	}
-	if !inspected {
-		// otool is unavailable on this host (e.g. a Linux CI runner). The
-		// portable, manifest-recorded check above already ran and passed;
-		// the stronger real-binary check simply cannot run here.
-		return nil
 	}
 	for _, value := range inspectedMinOS {
 		if err := validateAppleVersionFormat(value); err != nil {
@@ -142,8 +134,8 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 		if err != nil {
 			return err
 		}
-		if cmp > 0 {
-			return fmt.Errorf("apple artifact %s: inspected Mach-O minimum macOS %s is newer than the declared supported target %s; this xcframework is not a portable release candidate",
+		if cmp != 0 {
+			return fmt.Errorf("apple artifact %s: inspected Mach-O minimum macOS %s does not exactly match the declared supported target %s",
 				artifactPath, value, declared)
 		}
 	}
@@ -153,18 +145,17 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 // inspectAppleMacOSSliceDeploymentTarget extracts the macos-arm64 slice's
 // combined static library from the staged xcframework zip and runs the
 // real `otool -l` against it, returning every LC_BUILD_VERSION/
-// LC_VERSION_MIN_MACOSX "minos" value found. The second return value is
-// false (with a nil error) when otool is not on PATH, so the caller can
-// distinguish "tool unavailable" from "tool found nothing to report."
-func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, bool, error) {
+// LC_VERSION_MIN_MACOSX "minos" value found. It fails closed when otool is
+// unavailable or the archive member is not a real Mach-O object.
+func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, error) {
 	otoolPath, err := exec.LookPath("otool")
 	if err != nil {
-		return nil, false, nil
+		return nil, fmt.Errorf("required otool is unavailable: %w", err)
 	}
 
 	r, err := zip.OpenReader(artifactPath)
 	if err != nil {
-		return nil, true, fmt.Errorf("opening apple artifact as zip: %w", err)
+		return nil, fmt.Errorf("opening apple artifact as zip: %w", err)
 	}
 	defer r.Close()
 
@@ -176,42 +167,35 @@ func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, bool
 		}
 	}
 	if member == nil {
-		return nil, true, fmt.Errorf("no macos-arm64 libAresPrivacyCore.a member found in %s", artifactPath)
+		return nil, fmt.Errorf("no macos-arm64 libAresPrivacyCore.a member found in %s", artifactPath)
 	}
 
 	rc, err := member.Open()
 	if err != nil {
-		return nil, true, fmt.Errorf("opening archive member %s: %w", member.Name, err)
+		return nil, fmt.Errorf("opening archive member %s: %w", member.Name, err)
 	}
 	defer rc.Close()
 
 	tmp, err := os.CreateTemp("", "ares-macos-slice-*.a")
 	if err != nil {
-		return nil, true, fmt.Errorf("creating temp file for Mach-O inspection: %w", err)
+		return nil, fmt.Errorf("creating temp file for Mach-O inspection: %w", err)
 	}
 	tmpPath := tmp.Name()
 	defer os.Remove(tmpPath)
 	if _, err := io.Copy(tmp, rc); err != nil {
 		tmp.Close()
-		return nil, true, fmt.Errorf("extracting %s for Mach-O inspection: %w", member.Name, err)
+		return nil, fmt.Errorf("extracting %s for Mach-O inspection: %w", member.Name, err)
 	}
 	if err := tmp.Close(); err != nil {
-		return nil, true, fmt.Errorf("closing extracted Mach-O temp file: %w", err)
+		return nil, fmt.Errorf("closing extracted Mach-O temp file: %w", err)
 	}
 
 	out, err := exec.Command(otoolPath, "-l", tmpPath).CombinedOutput()
 	if err != nil {
-		return nil, true, fmt.Errorf("otool -l failed on extracted %s: %w (%s)", member.Name, err, string(out))
+		return nil, fmt.Errorf("otool -l failed on extracted %s: %w (%s)", member.Name, err, string(out))
 	}
-	// A fixture or otherwise non-Mach-O artifact makes otool report this
-	// (exit 0, no load commands) rather than fail. Not being a real
-	// Mach-O object is a distinct problem from a deployment-target
-	// mismatch and out of scope for this check specifically -- treat it
-	// the same as "otool unavailable" (inspected=false) rather than
-	// failing closed here, so a placeholder/fixture artifact does not
-	// masquerade as a deployment-target violation.
 	if strings.Contains(string(out), "is not an object file") {
-		return nil, false, nil
+		return nil, fmt.Errorf("extracted %s is not a Mach-O archive", member.Name)
 	}
 
 	var values []string
@@ -222,7 +206,7 @@ func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, bool
 		}
 	}
 	if len(values) == 0 {
-		return nil, true, fmt.Errorf("no LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos load command found in %s", member.Name)
+		return nil, fmt.Errorf("no LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos load command found in %s", member.Name)
 	}
-	return values, true, nil
+	return values, nil
 }

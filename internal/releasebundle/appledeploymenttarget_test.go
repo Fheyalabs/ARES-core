@@ -82,16 +82,45 @@ func TestAssembleRejectsAppleDeploymentTargetNewerThanDeclaredPin(t *testing.T) 
 	}
 }
 
-func TestAssembleAcceptsAppleDeploymentTargetOlderThanDeclaredPin(t *testing.T) {
-	// An artifact that supports an OLDER (more permissive) minimum than
-	// currently declared is still a valid, portable release candidate --
-	// only "newer than declared" is a rejection.
+func TestAssembleRejectsAppleDeploymentTargetOlderThanDeclaredPin(t *testing.T) {
+	// The tracked pin is an exact release contract. A staging manifest that
+	// records an older minimum still disagrees with that contract and must
+	// not be able to represent the staged artifact as matching it.
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
 		AppleMACOSDeploymentTargetOverride: "12.0",
 	})
 
-	if _, err := releasebundle.Assemble(bundleDir, repoRoot); err != nil {
-		t.Fatalf("Assemble rejected an older-than-declared (more permissive) deployment target: %v", err)
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a recorded deployment target older than the declared pin, got nil error")
+	}
+	if !strings.Contains(err.Error(), "12.0") || !strings.Contains(err.Error(), "14.0") {
+		t.Errorf("error does not name both the recorded and declared targets: %v", err)
+	}
+}
+
+func TestAssembleFailsClosedWhenOtoolIsUnavailable(t *testing.T) {
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	// NewBundle finishes its git setup before PATH is isolated, leaving this
+	// Assemble call unable to discover the required real-Mach-O inspector.
+	// Keep git available because Assemble separately verifies the fixture
+	// checkout's source revision before reaching the inspection boundary.
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(gitPath, filepath.Join(toolDir, "git")); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", toolDir)
+
+	_, err = releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to fail closed when otool is unavailable, got nil error")
+	}
+	if !strings.Contains(err.Error(), "otool") {
+		t.Errorf("error does not name unavailable otool: %v", err)
 	}
 }
 
@@ -183,6 +212,30 @@ func TestAssembleInspectsRealMachODeploymentTargetOnDarwin(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "15.0") {
 		t.Errorf("error does not name the inspected mismatch: %v", err)
+	}
+}
+
+func TestAssembleRejectsRealMachOOlderThanDeclaredPinOnDarwin(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
+	}
+	if _, err := exec.LookPath("otool"); err != nil {
+		t.Skip("otool is unavailable")
+	}
+	if _, err := exec.LookPath("clang"); err != nil {
+		t.Skip("clang is unavailable")
+	}
+
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	realLib := compileRealMachOStaticLib(t, "12.0") // older than the fixture's declared/recorded 14.0
+	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
+
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	if err == nil {
+		t.Fatal("expected Assemble to reject a real Mach-O whose inspected minos differs from the declared pin, got nil error")
+	}
+	if !strings.Contains(err.Error(), "12.0") || !strings.Contains(err.Error(), "14.0") {
+		t.Errorf("error does not name both the inspected and declared targets: %v", err)
 	}
 }
 
@@ -375,4 +428,3 @@ func commitRemoval(t *testing.T, repoRoot, path string) {
 		t.Fatalf("git commit: %v\n%s", err, out)
 	}
 }
-

@@ -166,6 +166,9 @@ func TestReleaseClientsWorkflowHasExpectedJobGraph(t *testing.T) {
 	gateName := findGateJob(t, wf)
 
 	gate := wf.Jobs[gateName]
+	if gate.RunsOn != "macos-14" {
+		t.Errorf("gate job %q runs-on = %q, want pinned macos-14 so otool can inspect real Mach-O metadata", gateName, gate.RunsOn)
+	}
 	needSet := map[string]bool{}
 	for _, n := range gate.Needs {
 		needSet[n] = true
@@ -207,6 +210,7 @@ func TestGateJobDownloadsBothPlatformArtifactsAndRunsAssembleThenVerify(t *testi
 	gate := wf.Jobs[gateName]
 
 	var downloadedNames []string
+	var downloadPaths []string
 	assembleIdx, verifyIdx := -1, -1
 	checkoutIdx := -1
 	for i, s := range gate.Steps {
@@ -216,6 +220,9 @@ func TestGateJobDownloadsBothPlatformArtifactsAndRunsAssembleThenVerify(t *testi
 		if s.Uses != "" && strings.HasPrefix(s.Uses, "actions/download-artifact@") {
 			if name, ok := s.With["name"].(string); ok {
 				downloadedNames = append(downloadedNames, name)
+			}
+			if path, ok := s.With["path"].(string); ok {
+				downloadPaths = append(downloadPaths, path)
 			}
 		}
 		if strings.Contains(s.Run, "release-artifact-gate") && strings.Contains(s.Run, " assemble") {
@@ -236,6 +243,15 @@ func TestGateJobDownloadsBothPlatformArtifactsAndRunsAssembleThenVerify(t *testi
 			t.Errorf("gate job downloads artifacts %v, want %v", downloadedNames, wantNames)
 		}
 	}
+	const wantFlatPath = "${{ runner.temp }}/release-bundle"
+	if len(downloadPaths) != len(wantNames) {
+		t.Fatalf("gate job download paths %v, want one explicit flat path for each platform artifact", downloadPaths)
+	}
+	for _, path := range downloadPaths {
+		if path != wantFlatPath {
+			t.Errorf("gate job artifact download path = %q, want shared explicit flat path %q", path, wantFlatPath)
+		}
+	}
 
 	if checkoutIdx == -1 {
 		t.Fatal("gate job does not check out the repository (no actions/checkout step)")
@@ -247,7 +263,12 @@ func TestGateJobDownloadsBothPlatformArtifactsAndRunsAssembleThenVerify(t *testi
 		t.Fatal("gate job never runs `release-artifact-gate verify`")
 	}
 	if !(checkoutIdx < assembleIdx && assembleIdx < verifyIdx) {
-		t.Errorf("expected step order checkout(%d) < assemble(%d) < verify(%d)", checkoutIdx, assembleIdx, verifyIdx)
+		t.Errorf("expected step order checkout(%d) < downloads < assemble(%d) < verify(%d)", checkoutIdx, assembleIdx, verifyIdx)
+	}
+	for i, s := range gate.Steps {
+		if s.Uses != "" && strings.HasPrefix(s.Uses, "actions/download-artifact@") && i >= assembleIdx {
+			t.Errorf("artifact download step %q at index %d must occur before assemble at index %d", s.Name, i, assembleIdx)
+		}
 	}
 }
 

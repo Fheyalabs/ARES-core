@@ -52,14 +52,14 @@ let package = Package(
 // deliberately broken fixture instead of hand-corrupting zip bytes after
 // the fact. The zero value builds a complete, valid, gate-accepted bundle.
 type Opts struct {
-	AppleSlices                   []string
-	AndroidABIs                   []string
-	AndroidLibsOverride           map[string][]string // abi -> lib list; overrides the default full set for that ABI only
-	AresRevOverride               string              // if set, used for BOTH platform manifests instead of the fixture repo's real HEAD
-	AndroidAresRevOverride        string              // if set, used only for the android manifest (creates a cross-platform mismatch)
-	AndroidOpenFHEVersionOverride string              // if set, used only for the android manifest
-	SwiftManifestOverride         string              // if set, replaces Package.release.swift content
-	AppleMACOSDeploymentTargetOverride string         // if set, used instead of AppleMACOSDeploymentTarget in the Apple manifest
+	AppleSlices                        []string
+	AndroidABIs                        []string
+	AndroidLibsOverride                map[string][]string // abi -> lib list; overrides the default full set for that ABI only
+	AresRevOverride                    string              // if set, used for BOTH platform manifests instead of the fixture repo's real HEAD
+	AndroidAresRevOverride             string              // if set, used only for the android manifest (creates a cross-platform mismatch)
+	AndroidOpenFHEVersionOverride      string              // if set, used only for the android manifest
+	SwiftManifestOverride              string              // if set, replaces Package.release.swift content
+	AppleMACOSDeploymentTargetOverride string              // if set, used instead of AppleMACOSDeploymentTarget in the Apple manifest
 }
 
 // NewRepoRoot creates a real, tiny, committed git repository shaped like
@@ -207,6 +207,11 @@ func writeAndroidStagingSet(t testing.TB, bundleDir string, abis []string, libsO
 // COpenFHEBridge module headers.
 func buildAppleFixtureZip(t testing.TB, path string, slices []string) {
 	t.Helper()
+	macOSArchive := buildFixtureMacOSStaticArchive(t)
+	macOSArchiveBytes, err := os.ReadFile(macOSArchive)
+	if err != nil {
+		t.Fatal(err)
+	}
 	f, err := os.Create(path)
 	if err != nil {
 		t.Fatal(err)
@@ -215,13 +220,40 @@ func buildAppleFixtureZip(t testing.TB, path string, slices []string) {
 	zw := zip.NewWriter(f)
 	addZipFile(t, zw, "AresPrivacyCore.xcframework/Info.plist", "fake plist")
 	for _, slice := range slices {
-		addZipFile(t, zw, "AresPrivacyCore.xcframework/"+slice+"/libAresPrivacyCore.a", "fake static lib for "+slice)
+		libraryPath := "AresPrivacyCore.xcframework/" + slice + "/libAresPrivacyCore.a"
+		if slice == "macos-arm64" {
+			addZipBytes(t, zw, libraryPath, macOSArchiveBytes)
+		} else {
+			addZipFile(t, zw, libraryPath, "fake static lib for "+slice)
+		}
 		addZipFile(t, zw, "AresPrivacyCore.xcframework/"+slice+"/Headers/openfhe_wrapper.h", "fake header")
 		addZipFile(t, zw, "AresPrivacyCore.xcframework/"+slice+"/Headers/module.modulemap", "module COpenFHEBridge { header \"openfhe_wrapper.h\" export * }")
 	}
 	if err := zw.Close(); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// buildFixtureMacOSStaticArchive creates the minimal real metadata fixture
+// the release gate requires: a macos-arm64 static archive whose Mach-O
+// LC_BUILD_VERSION minos exactly matches the fixture's tracked pin. This is
+// intentionally tiny and never builds OpenFHE.
+func buildFixtureMacOSStaticArchive(t testing.TB) string {
+	t.Helper()
+	dir := t.TempDir()
+	source := filepath.Join(dir, "fixture.c")
+	writeFile(t, source, []byte("int fixture(void) { return 0; }\n"))
+	object := filepath.Join(dir, "fixture.o")
+	cmd := exec.Command("clang", "-mmacosx-version-min="+AppleMACOSDeploymentTarget, "-c", source, "-o", object)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("clang fixture Mach-O: %v\n%s", err, out)
+	}
+	archive := filepath.Join(dir, "libAresPrivacyCore.a")
+	cmd = exec.Command("ar", "rcs", archive, object)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("ar fixture Mach-O archive: %v\n%s", err, out)
+	}
+	return archive
 }
 
 // buildAndroidFixtureAAR writes a zip shaped like a real
@@ -254,12 +286,16 @@ func buildAndroidFixtureAAR(t testing.TB, path string, abis []string, libsOverri
 }
 
 func addZipFile(t testing.TB, zw *zip.Writer, name, content string) {
+	addZipBytes(t, zw, name, []byte(content))
+}
+
+func addZipBytes(t testing.TB, zw *zip.Writer, name string, content []byte) {
 	t.Helper()
 	w, err := zw.Create(name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Write([]byte(content)); err != nil {
+	if _, err := w.Write(content); err != nil {
 		t.Fatal(err)
 	}
 }
