@@ -14,7 +14,7 @@ import (
 func TestAssembleProducesDeterministicReleaseCacheManifest(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 
-	m, err := releasebundle.Assemble(bundleDir, repoRoot)
+	m, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -52,7 +52,7 @@ func TestAssembleProducesDeterministicReleaseCacheManifest(t *testing.T) {
 
 	// Re-assembling the same untouched bundle must be byte-for-byte
 	// deterministic aside from generated_at.
-	m2, err := releasebundle.Assemble(bundleDir, repoRoot)
+	m2, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err != nil {
 		t.Fatalf("second Assemble: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestAssembleRejectsMismatchedSourceRevision(t *testing.T) {
 		AndroidAresRevOverride: "0000000000000000000000000000000000dead",
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on mismatched ares_core_source_revision between platform artifacts, got nil error")
 	}
@@ -83,7 +83,7 @@ func TestAssembleRejectsMismatchedArtifactHash(t *testing.T) {
 	// computed, simulating a corrupted or substituted artifact.
 	releasebundletest.TamperFile(t, bundleDir+"/AresPrivacyCore-v1.5.1-apple.xcframework.zip")
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on mismatched artifact hash, got nil error")
 	}
@@ -109,7 +109,7 @@ let package = Package(
 `,
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on local SwiftPM path dependency, got nil error")
 	}
@@ -134,7 +134,7 @@ let package = Package(
 `,
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on environment-driven dependency substitution, got nil error")
 	}
@@ -155,7 +155,7 @@ let package = Package(
 `,
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject a release manifest whose required bridge target exists only in a comment")
 	}
@@ -179,7 +179,7 @@ let package = Package(
 `,
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject a release manifest whose required bridge target exists only in a string literal")
 	}
@@ -206,7 +206,7 @@ func TestAssembleRejectsSymlinkedStagedArtifact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = releasebundle.Assemble(bundleDir, repoRoot)
+	_, err = releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject a staged artifact symlink even when its target has the expected hash")
 	}
@@ -233,7 +233,7 @@ func TestAssembleRejectsSymlinkedStagingManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = releasebundle.Assemble(bundleDir, repoRoot)
+	_, err = releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject a staging-manifest symlink")
 	}
@@ -249,7 +249,7 @@ func TestAssembleRejectsAbsentAndroidABIJNILibrary(t *testing.T) {
 		},
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on an ABI missing the JNI bridge library, got nil error")
 	}
@@ -263,7 +263,7 @@ func TestAssembleRejectsAbsentAndroidABI(t *testing.T) {
 		AndroidABIs: []string{"arm64-v8a"}, // missing the required x86_64 ABI entirely
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on a bundle missing a required Android ABI, got nil error")
 	}
@@ -277,7 +277,7 @@ func TestAssembleRejectsPinDrift(t *testing.T) {
 		AndroidOpenFHEVersionOverride: "v1.5.0",
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail when an artifact's OpenFHE version does not match the tracked pin, got nil error")
 	}

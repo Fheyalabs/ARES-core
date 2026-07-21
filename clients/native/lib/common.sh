@@ -72,9 +72,8 @@ require_version_output() {
 # read_pin KEY reads one field from the checked-in, tracked pin file. The
 # pin file is the sole source of truth for what OpenFHE source/version is
 # releasable; it is never overridable by an ordinary environment variable,
-# so a build cannot silently point at an unpinned source the way
-# clients/swift/FheyaClient/Package.swift's FHEYA_ARES_CORE_SWIFT_PATH does
-# for local development. A test-only, explicitly-named escape hatch
+# so a release build cannot silently point at an unpinned source. A
+# test-only, explicitly-named escape hatch
 # (ARES_NATIVE_TEST_OPENFHE_SOURCE_URL) exists solely so this script can be
 # tested without a real network clone; see resolve_openfhe_source_url.
 read_pin() {
@@ -326,24 +325,39 @@ apple_version_gt() {
   return 1
 }
 
-# require_apple_version_format LABEL VALUE fails closed unless VALUE is a
-# well-formed MAJOR.MINOR version string (both components present and
-# purely numeric) -- an empty, non-numeric, or single-component value is
-# rejected rather than guessed at.
+# is_canonical_apple_version_component VALUE accepts decimal zero or a
+# nonzero decimal without leading zeroes.
+is_canonical_apple_version_component() {
+  local value="$1"
+  case "${value}" in
+    0) return 0 ;;
+    [1-9]*)
+      case "${value}" in
+        *[!0-9]*) return 1 ;;
+        *) return 0 ;;
+      esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+
+# require_apple_version_format LABEL VALUE fails closed unless VALUE is the
+# unique canonical MAJOR.MINOR representation: exactly one dot, decimal
+# components, and no signs, whitespace, empty components, or leading zeroes.
 require_apple_version_format() {
   local label="$1" value="$2"
+  case "${value}" in
+    ''|*[!0-9.]*|*.*.*) die "${label} is not a canonical MAJOR.MINOR version: ${value}" ;;
+  esac
   local major="${value%%.*}"
   local minor="${value#*.}"
-  minor="${minor%%.*}"
-  case "${major}" in
-    ''|*[!0-9]*) die "${label} has a malformed major version component (want MAJOR.MINOR): ${value}" ;;
-  esac
   if [ "${minor}" = "${value}" ]; then
     die "${label} is missing a minor version component (want MAJOR.MINOR): ${value}"
   fi
-  case "${minor}" in
-    ''|*[!0-9]*) die "${label} has a malformed minor version component (want MAJOR.MINOR): ${value}" ;;
-  esac
+  is_canonical_apple_version_component "${major}" \
+    || die "${label} has a non-canonical major version component: ${value}"
+  is_canonical_apple_version_component "${minor}" \
+    || die "${label} has a non-canonical minor version component: ${value}"
 }
 
 # require_macos_deployment_target reads, validates, and prints the pinned
@@ -363,6 +377,15 @@ require_macos_deployment_target() {
   require_cmd sw_vers
   local host_version
   host_version="$(sw_vers -productVersion)"
+  case "${host_version}" in
+    *.*.*.*) die "host macOS version has too many components: ${host_version}" ;;
+    *.*.*)
+      local host_patch="${host_version##*.}"
+      is_canonical_apple_version_component "${host_patch}" \
+        || die "host macOS version has a non-canonical patch component: ${host_version}"
+      host_version="${host_version%.*}"
+      ;;
+  esac
   if [ "${host_version#*.}" = "${host_version}" ]; then
     host_version="${host_version}.0"
   fi

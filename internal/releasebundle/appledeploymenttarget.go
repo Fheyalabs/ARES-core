@@ -9,10 +9,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 )
 
-const canonicalAppleMacOSLibraryMember = "AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a"
+const (
+	canonicalAppleMacOSLibraryMember = "AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a"
+	trustedSystemOtoolPath           = "/usr/bin/otool"
+)
 
 // appleDeploymentTargetPinFile mirrors clients/native/apple-deployment-target.pin.json's
 // single tracked field: the declared minimum macOS deployment target every
@@ -63,7 +67,7 @@ func validateAppleVersionFormat(value string) error {
 // inspects its actual Mach-O LC_BUILD_VERSION/LC_VERSION_MIN_MACOSX minos
 // values, rejecting the bundle if any differ from the declared target --
 // producer metadata alone is never sufficient.
-func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactManifest, artifactPath string) error {
+func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactManifest, artifactPath string, inspectDeploymentTarget appleDeploymentTargetInspector) error {
 	if err := validateAppleVersionFormat(apple.AppleMACOSDeploymentTarget); err != nil {
 		return fmt.Errorf("apple artifact staging manifest has an invalid apple_macos_deployment_target: %w", err)
 	}
@@ -76,7 +80,7 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 			apple.AppleMACOSDeploymentTarget, declared)
 	}
 
-	inspectedMinOS, err := inspectAppleMacOSSliceDeploymentTarget(artifactPath)
+	inspectedMinOS, err := inspectDeploymentTarget(artifactPath)
 	if err != nil {
 		return fmt.Errorf("inspecting real Mach-O deployment target metadata in %s: %w", artifactPath, err)
 	}
@@ -98,16 +102,51 @@ func verifyAppleDeploymentTarget(bundleDir, repoRoot string, apple *ArtifactMani
 // LC_VERSION_MIN_MACOSX "minos" value found. It fails closed when otool is
 // unavailable or the archive member is not a real Mach-O object.
 func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, error) {
-	otoolPath, err := exec.LookPath("otool")
+	otoolPath, err := verifiedSystemOtoolPath()
 	if err != nil {
-		return nil, fmt.Errorf("required otool is unavailable: %w", err)
+		return nil, err
 	}
+	return inspectAppleMacOSSliceDeploymentTargetWithRunner(artifactPath, func(extractedPath string) ([]byte, error) {
+		out, err := exec.Command(otoolPath, "-l", extractedPath).CombinedOutput()
+		if err != nil {
+			return nil, fmt.Errorf("%s -l failed: %w (%s)", otoolPath, err, string(out))
+		}
+		if strings.Contains(string(out), "is not an object file") {
+			return nil, fmt.Errorf("trusted %s rejected the extracted member as non-Mach-O", otoolPath)
+		}
+		return out, nil
+	})
+}
+
+func verifiedSystemOtoolPath() (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("Mach-O deployment-target inspection requires Darwin and trusted %s (runtime is %s)", trustedSystemOtoolPath, runtime.GOOS)
+	}
+	if !filepath.IsAbs(trustedSystemOtoolPath) || filepath.Clean(trustedSystemOtoolPath) != trustedSystemOtoolPath {
+		return "", fmt.Errorf("trusted otool path is not canonical and absolute: %s", trustedSystemOtoolPath)
+	}
+	info, err := os.Lstat(trustedSystemOtoolPath)
+	if err != nil {
+		return "", fmt.Errorf("trusted system otool is unavailable at %s: %w", trustedSystemOtoolPath, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", fmt.Errorf("trusted system otool path %s is not a regular executable", trustedSystemOtoolPath)
+	}
+	return trustedSystemOtoolPath, nil
+}
+
+type otoolRunner func(string) ([]byte, error)
+
+func inspectAppleMacOSSliceDeploymentTargetWithRunner(artifactPath string, runOtool otoolRunner) ([]string, error) {
 
 	r, err := zip.OpenReader(artifactPath)
 	if err != nil {
 		return nil, fmt.Errorf("opening apple artifact as zip: %w", err)
 	}
 	defer r.Close()
+	if err := validateZIPMemberNames(r.File); err != nil {
+		return nil, fmt.Errorf("apple artifact %s: %w", artifactPath, err)
+	}
 
 	var matches []*zip.File
 	for _, f := range r.File {
@@ -143,14 +182,10 @@ func inspectAppleMacOSSliceDeploymentTarget(artifactPath string) ([]string, erro
 		return nil, fmt.Errorf("closing extracted Mach-O temp file: %w", err)
 	}
 
-	out, err := exec.Command(otoolPath, "-l", tmpPath).CombinedOutput()
+	out, err := runOtool(tmpPath)
 	if err != nil {
-		return nil, fmt.Errorf("otool -l failed on extracted %s: %w (%s)", member.Name, err, string(out))
+		return nil, fmt.Errorf("otool -l failed on extracted %s: %w", member.Name, err)
 	}
-	if strings.Contains(string(out), "is not an object file") {
-		return nil, fmt.Errorf("extracted %s is not a Mach-O archive", member.Name)
-	}
-
 	var values []string
 	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)

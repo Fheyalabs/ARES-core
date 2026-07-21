@@ -61,7 +61,10 @@ func TestAppleXCFrameworkFailsClosedOnMissingDeploymentTargetPin(t *testing.T) {
 }
 
 func TestAppleXCFrameworkFailsClosedOnMalformedDeploymentTargetPin(t *testing.T) {
-	for _, malformed := range []string{"", "14", "abc", "14.x"} {
+	for _, malformed := range []string{
+		"", "14", "abc", "14.x", "014.0", "14.00", "14.0.1",
+		"+14.0", "-14.0", " 14.0", "14.0 ", ".0", "14.", "14..0",
+	} {
 		t.Run(malformed, func(t *testing.T) {
 			url, commit := newFakeOpenFHETagRepo(t, applePinnedVersion)
 			pin := writeTestPin(t, applePinnedVersion, url, commit)
@@ -78,6 +81,9 @@ func TestAppleXCFrameworkFailsClosedOnMalformedDeploymentTargetPin(t *testing.T)
 			}
 			if !strings.Contains(res.stderr, "macos_minimum_deployment_target") {
 				t.Fatalf("expected a macos_minimum_deployment_target-related failure, got stderr=%s", res.stderr)
+			}
+			if strings.Contains(res.stderr, "cloning pinned OpenFHE") {
+				t.Fatalf("malformed deployment target %q reached source cloning instead of failing at the producer boundary", malformed)
 			}
 		})
 	}

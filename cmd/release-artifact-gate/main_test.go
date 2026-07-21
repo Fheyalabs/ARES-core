@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,9 +34,12 @@ func buildGateBinary(t *testing.T) string {
 }
 
 func TestEndToEndAssembleThenVerifyAcceptsAValidBundle(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("positive production CLI Mach-O inspection requires Darwin")
+	}
 	bin := buildGateBinary(t)
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
-	releasebundletest.RequireHermeticOtool(t)
+	stageRealMatchingMachO(t, bundleDir)
 	manifestPath := filepath.Join(t.TempDir(), "release-cache-manifest.json")
 
 	assembleOut, err := exec.Command(bin, "assemble",
@@ -66,7 +70,7 @@ func TestEndToEndAssembleThenVerifyAcceptsAValidBundle(t *testing.T) {
 	}
 }
 
-func TestEndToEndAssembleFailsClosedWithoutOtool(t *testing.T) {
+func TestEndToEndAssembleFailsClosedWithoutTrustedMachOInspection(t *testing.T) {
 	bin := buildGateBinary(t)
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 	manifestPath := filepath.Join(t.TempDir(), "release-cache-manifest.json")
@@ -87,13 +91,35 @@ func TestEndToEndAssembleFailsClosedWithoutOtool(t *testing.T) {
 	cmd.Env = environmentWithPath(toolDir)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
-		t.Fatalf("expected assemble to fail without otool, got success:\n%s", out)
+		t.Fatalf("expected assemble to fail without trusted Mach-O inspection, got success:\n%s", out)
 	}
 	if !strings.Contains(string(out), "otool") {
 		t.Errorf("failure does not identify unavailable otool: %s", out)
 	}
 	if _, statErr := os.Stat(manifestPath); statErr == nil {
 		t.Fatal("assemble must not write a manifest when otool is unavailable")
+	}
+}
+
+func TestEndToEndAssembleRejectsPATHShadowedOtool(t *testing.T) {
+	bin := buildGateBinary(t)
+	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	shadowPath := releasebundletest.InstallPATHShadowOtool(t)
+	if resolved, err := exec.LookPath("otool"); err != nil || resolved != shadowPath {
+		t.Fatalf("test did not shadow otool through PATH: resolved=%q err=%v", resolved, err)
+	}
+	manifestPath := filepath.Join(t.TempDir(), "release-cache-manifest.json")
+
+	out, err := exec.Command(bin, "assemble",
+		"-bundle-dir="+bundleDir,
+		"-repo-root="+repoRoot,
+		"-out="+manifestPath,
+	).CombinedOutput()
+	if err == nil {
+		t.Fatalf("PATH-shadowed fake otool made the production gate pass:\n%s", out)
+	}
+	if _, statErr := os.Stat(manifestPath); statErr == nil {
+		t.Fatal("assemble must not write a manifest after rejecting a PATH-shadowed otool")
 	}
 }
 
@@ -109,8 +135,12 @@ func environmentWithPath(path string) []string {
 }
 
 func TestEndToEndVerifyRejectsATamperedArtifact(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("positive production CLI assembly requires Darwin")
+	}
 	bin := buildGateBinary(t)
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
+	stageRealMatchingMachO(t, bundleDir)
 	manifestPath := filepath.Join(t.TempDir(), "release-cache-manifest.json")
 
 	if out, err := exec.Command(bin, "assemble",
@@ -144,6 +174,32 @@ func TestEndToEndVerifyRejectsATamperedArtifact(t *testing.T) {
 	if !strings.Contains(string(out), "release-artifact-gate:") {
 		t.Errorf("verify stderr does not look like our fail() output: %s", out)
 	}
+}
+
+func stageRealMatchingMachO(t *testing.T, bundleDir string) {
+	t.Helper()
+	if runtime.GOOS != "darwin" {
+		t.Skip("real Mach-O fixture requires Darwin")
+	}
+	for _, tool := range []string{"clang", "ar"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skipf("%s is unavailable: %v", tool, err)
+		}
+	}
+	dir := t.TempDir()
+	sourcePath := filepath.Join(dir, "fixture.c")
+	if err := os.WriteFile(sourcePath, []byte("int ares_release_gate_fixture(void) { return 0; }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	objectPath := filepath.Join(dir, "fixture.o")
+	if out, err := exec.Command("clang", "-mmacosx-version-min="+releasebundletest.AppleMACOSDeploymentTarget, "-c", sourcePath, "-o", objectPath).CombinedOutput(); err != nil {
+		t.Fatalf("compiling real Mach-O fixture: %v\n%s", err, out)
+	}
+	libraryPath := filepath.Join(dir, "libAresPrivacyCore.a")
+	if out, err := exec.Command("ar", "rcs", libraryPath, objectPath).CombinedOutput(); err != nil {
+		t.Fatalf("archiving real Mach-O fixture: %v\n%s", err, out)
+	}
+	releasebundletest.ReplaceAppleMacOSLibrary(t, bundleDir, libraryPath)
 }
 
 func TestEndToEndAssembleRejectsMismatchedSourceRevision(t *testing.T) {

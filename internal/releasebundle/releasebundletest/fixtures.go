@@ -11,10 +11,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/Fheyalabs/ares-core/internal/releasebundle"
@@ -65,6 +65,7 @@ type Opts struct {
 	AppleMACOSDeploymentTargetOverride  string              // if set, used instead of AppleMACOSDeploymentTarget in the Apple manifest
 	AppleMachOMinosOverride             string              // if set, encoded in the canonical macOS library for the hermetic otool fixture
 	AppleDecoyFirstMachOMinos           string              // if set, adds a matching-looking decoy before the canonical macOS library
+	AppleExtraZipMembers                []string            // additional member names used by ZIP-name mutation tests
 	OmitCanonicalAppleMacOSLibrary      bool                // if set, only headers (and any requested decoy) are staged for macos-arm64
 	DuplicateCanonicalAppleMacOSLibrary bool                // if set, writes the exact canonical member twice
 }
@@ -105,7 +106,6 @@ func NewRepoRoot(t testing.TB, swiftManifest string) (repoRoot, commit string) {
 // matching fixture repo root, per opts.
 func NewBundle(t testing.TB, opts Opts) (bundleDir, repoRoot string) {
 	t.Helper()
-	installHermeticOtool(t)
 
 	swiftManifest := ValidSwiftReleaseManifest
 	if opts.SwiftManifestOverride != "" {
@@ -225,6 +225,9 @@ func buildAppleFixtureZip(t testing.TB, path string, slices []string, opts Opts)
 	if opts.AppleDecoyFirstMachOMinos != "" {
 		addZipFile(t, zw, "decoy/macos-arm64/libAresPrivacyCore.a", appleMachOMinosMarker+opts.AppleDecoyFirstMachOMinos+"\n")
 	}
+	for _, name := range opts.AppleExtraZipMembers {
+		addZipFile(t, zw, name, appleMachOMinosMarker+AppleMACOSDeploymentTarget+"\n")
+	}
 	macOSMachOMinos := AppleMACOSDeploymentTarget
 	if opts.AppleMachOMinosOverride != "" {
 		macOSMachOMinos = opts.AppleMachOMinosOverride
@@ -249,11 +252,10 @@ func buildAppleFixtureZip(t testing.TB, path string, slices []string, opts Opts)
 	}
 }
 
-// installHermeticOtool gives shared bundle and CLI tests a cross-platform
-// inspector without weakening production: releasebundle still resolves and
-// invokes `otool` normally, while this test fixture controls PATH and encodes
-// the reported minos value in the staged member bytes.
-func installHermeticOtool(t testing.TB) {
+// InstallPATHShadowOtool puts a marker-reading fake otool first on PATH.
+// Adversarial subprocess tests use it to prove the production CLI ignores
+// PATH and invokes only the fixed trusted system tool.
+func InstallPATHShadowOtool(t testing.TB) string {
 	t.Helper()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "otool")
@@ -281,23 +283,74 @@ printf '%s\n' \
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return path
 }
 
-// RequireHermeticOtool asserts the positive-path fixture is independent of
-// any host Darwin toolchain before bundle or CLI behavior is exercised.
-func RequireHermeticOtool(t testing.TB) {
+// ReplaceAppleMacOSLibrary rewrites the canonical macOS archive member and
+// refreshes the Apple staging manifest hash. It is used only by Darwin-scoped
+// production CLI tests that compile a tiny real Mach-O archive.
+func ReplaceAppleMacOSLibrary(t testing.TB, bundleDir, libraryPath string) {
 	t.Helper()
-	path, err := exec.LookPath("otool")
-	if err != nil {
-		t.Fatalf("hermetic otool is unavailable: %v", err)
-	}
-	raw, err := os.ReadFile(path)
+	artifactPath := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.xcframework.zip")
+	r, err := zip.OpenReader(artifactPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(raw), appleMachOMinosMarker) {
-		t.Fatalf("otool at %s is not the hermetic release-bundle fixture", path)
+	library, err := os.ReadFile(libraryPath)
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	rewritten := artifactPath + ".rewritten"
+	out, err := os.Create(rewritten)
+	if err != nil {
+		t.Fatal(err)
+	}
+	zw := zip.NewWriter(out)
+	replaced := 0
+	for _, file := range r.File {
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if file.Name == canonicalMacOSLibraryMember {
+			content = library
+			replaced++
+		}
+		addZipBytes(t, zw, file.Name, content)
+	}
+	if replaced != 1 {
+		t.Fatalf("replaced %d canonical macOS members, want 1", replaced)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(rewritten, artifactPath); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestPath := filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-apple.staging-manifest.json")
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest releasebundle.ArtifactManifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	manifest.ArtifactSHA256 = sha256OfFile(t, artifactPath)
+	writeFile(t, manifestPath, mustJSON(t, manifest))
 }
 
 // buildAndroidFixtureAAR writes a zip shaped like a real

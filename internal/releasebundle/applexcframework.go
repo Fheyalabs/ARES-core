@@ -3,7 +3,6 @@ package releasebundle
 import (
 	"archive/zip"
 	"fmt"
-	"strings"
 )
 
 // checkAppleXCFrameworkContents fails closed unless every platform slice in
@@ -17,27 +16,22 @@ func checkAppleXCFrameworkContents(path string, requiredPlatforms []string) erro
 		return fmt.Errorf("opening apple artifact %s as zip: %w", path, err)
 	}
 	defer r.Close()
+	if err := validateZIPMemberNames(r.File); err != nil {
+		return fmt.Errorf("apple artifact %s: %w", path, err)
+	}
 
-	names := make([]string, 0, len(r.File))
+	present := make(map[string]bool, len(r.File))
 	for _, f := range r.File {
-		names = append(names, f.Name)
+		present[f.Name] = true
 	}
 
 	for _, slice := range requiredPlatforms {
-		prefix := "/" + slice + "/"
-		var hasLib, hasHeader, hasModulemap bool
-		for _, name := range names {
-			if !strings.Contains("/"+name, prefix) {
-				continue
-			}
-			switch {
-			case strings.HasSuffix(name, "libAresPrivacyCore.a"):
-				hasLib = true
-			case strings.HasSuffix(name, "openfhe_wrapper.h"):
-				hasHeader = true
-			case strings.HasSuffix(name, "module.modulemap"):
-				hasModulemap = true
-			}
+		prefix := "AresPrivacyCore.xcframework/" + slice + "/"
+		hasLib := present[prefix+"libAresPrivacyCore.a"]
+		hasHeader := present[prefix+"Headers/openfhe_wrapper.h"]
+		hasModulemap := present[prefix+"Headers/module.modulemap"]
+		if slice == "macos-arm64" && !hasLib {
+			return fmt.Errorf("apple artifact %s is missing canonical macOS library member %s", path, canonicalAppleMacOSLibraryMember)
 		}
 		if !hasLib || !hasHeader || !hasModulemap {
 			return fmt.Errorf("apple artifact %s is missing required bridge module contents for slice %s (lib=%v header=%v modulemap=%v)", path, slice, hasLib, hasHeader, hasModulemap)

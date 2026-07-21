@@ -20,9 +20,8 @@ import (
 
 func TestAssembleRecordsAppleDeploymentTargetInReleaseCacheManifest(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
-	releasebundletest.RequireHermeticOtool(t)
 
-	m, err := releasebundle.Assemble(bundleDir, repoRoot)
+	m, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -42,7 +41,7 @@ func TestAssembleRejectsMissingAppleDeploymentTarget(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 	overwriteAppleManifestField(t, bundleDir, "apple_macos_deployment_target", "")
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on a missing apple_macos_deployment_target, got nil error")
 	}
@@ -57,7 +56,7 @@ func TestAssembleRejectsMalformedAppleDeploymentTarget(t *testing.T) {
 			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 			overwriteAppleManifestField(t, bundleDir, "apple_macos_deployment_target", malformed)
 
-			_, err := releasebundle.Assemble(bundleDir, repoRoot)
+			_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 			if err == nil {
 				t.Fatalf("expected Assemble to fail on malformed apple_macos_deployment_target %q, got nil error", malformed)
 			}
@@ -74,7 +73,7 @@ func TestAssembleRejectsAppleDeploymentTargetNewerThanDeclaredPin(t *testing.T) 
 		AppleMACOSDeploymentTargetOverride: "15.0",
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail when the recorded deployment target is newer than the declared pin, got nil error")
 	}
@@ -91,7 +90,7 @@ func TestAssembleRejectsAppleDeploymentTargetOlderThanDeclaredPin(t *testing.T) 
 		AppleMACOSDeploymentTargetOverride: "12.0",
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject a recorded deployment target older than the declared pin, got nil error")
 	}
@@ -100,28 +99,19 @@ func TestAssembleRejectsAppleDeploymentTargetOlderThanDeclaredPin(t *testing.T) 
 	}
 }
 
-func TestAssembleFailsClosedWhenOtoolIsUnavailable(t *testing.T) {
+func TestAssembleProductionInspectorRejectsPATHShadowedOtool(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
-	// NewBundle finishes its git setup before PATH is isolated, leaving this
-	// Assemble call unable to discover the required real-Mach-O inspector.
-	// Keep git available because Assemble separately verifies the fixture
-	// checkout's source revision before reaching the inspection boundary.
-	toolDir := t.TempDir()
-	gitPath, err := exec.LookPath("git")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink(gitPath, filepath.Join(toolDir, "git")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", toolDir)
+	releasebundletest.InstallPATHShadowOtool(t)
 
-	_, err = releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.Assemble(bundleDir, repoRoot)
 	if err == nil {
-		t.Fatal("expected Assemble to fail closed when otool is unavailable, got nil error")
+		t.Fatal("expected production Assemble to reject marker metadata from a PATH-shadowed otool, got nil error")
 	}
-	if !strings.Contains(err.Error(), "otool") {
-		t.Errorf("error does not name unavailable otool: %v", err)
+	if runtime.GOOS == "darwin" && !strings.Contains(err.Error(), "/usr/bin/otool") {
+		t.Errorf("Darwin failure does not identify the trusted system otool: %v", err)
+	}
+	if runtime.GOOS != "darwin" && !strings.Contains(err.Error(), "requires Darwin") {
+		t.Errorf("non-Darwin failure does not identify the runtime requirement: %v", err)
 	}
 }
 
@@ -139,7 +129,7 @@ func TestAssembleRejectsMissingAppleDeploymentTargetPinFile(t *testing.T) {
 	commitRemoval(t, repoRoot, pinPath)
 	retargetStagedRevision(t, bundleDir, repoRoot)
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail when the declared Apple deployment-target pin file is missing, got nil error")
 	}
@@ -157,7 +147,7 @@ func TestAssembleRejectsMalformedAppleDeploymentTargetPin(t *testing.T) {
 	commitAll(t, repoRoot, "corrupt apple deployment-target pin")
 	retargetStagedRevision(t, bundleDir, repoRoot)
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to fail on a malformed declared Apple deployment-target pin, got nil error")
 	}
@@ -177,7 +167,7 @@ func TestAssembleRejectsNonCanonicalAppleDeploymentTargetPin(t *testing.T) {
 			commitAll(t, repoRoot, "write non-canonical apple deployment-target pin")
 			retargetStagedRevision(t, bundleDir, repoRoot)
 
-			_, err := releasebundle.Assemble(bundleDir, repoRoot)
+			_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 			if err == nil {
 				t.Fatalf("expected Assemble to reject non-canonical declared Apple deployment target %q, got nil error", nonCanonical)
 			}
@@ -195,7 +185,7 @@ func TestAssembleRejectsNonCanonicalInspectedMachOMinOS(t *testing.T) {
 				AppleMachOMinosOverride: nonCanonical,
 			})
 
-			_, err := releasebundle.Assemble(bundleDir, repoRoot)
+			_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 			if err == nil {
 				t.Fatalf("expected Assemble to reject non-canonical inspected Mach-O minos %q, got nil error", nonCanonical)
 			}
@@ -212,7 +202,7 @@ func TestAssembleInspectsCanonicalMacOSMemberDespiteDecoyFirst(t *testing.T) {
 		AppleMachOMinosOverride:   "15.0",
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject the canonical macOS member's 15.0 minos despite a decoy-first 14.0 member, got nil error")
 	}
@@ -227,7 +217,7 @@ func TestAssembleRejectsMissingCanonicalMacOSMemberDespiteDecoy(t *testing.T) {
 		OmitCanonicalAppleMacOSLibrary: true,
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject an Apple archive with only a matching-looking decoy macOS member, got nil error")
 	}
@@ -241,12 +231,62 @@ func TestAssembleRejectsDuplicateCanonicalMacOSMembers(t *testing.T) {
 		DuplicateCanonicalAppleMacOSLibrary: true,
 	})
 
-	_, err := releasebundle.Assemble(bundleDir, repoRoot)
+	_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err == nil {
 		t.Fatal("expected Assemble to reject duplicate canonical macOS members, got nil error")
 	}
 	if !strings.Contains(err.Error(), "duplicate") {
 		t.Errorf("error does not identify duplicate canonical macOS members: %v", err)
+	}
+}
+
+func TestAssembleRejectsUnsafeAppleZIPMemberNames(t *testing.T) {
+	for _, name := range []string{
+		"../outside",
+		"/absolute/member",
+		"C:/absolute/member",
+		"AresPrivacyCore.xcframework\\macos-arm64\\libAresPrivacyCore.a",
+		"unrelated//repeated/member",
+		"unrelated/./member",
+	} {
+		t.Run(name, func(t *testing.T) {
+			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+				AppleExtraZipMembers: []string{name},
+			})
+
+			_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
+			if err == nil {
+				t.Fatalf("expected Assemble to reject unsafe Apple ZIP member %q, got nil error", name)
+			}
+			if !strings.Contains(err.Error(), "ZIP member") {
+				t.Errorf("error does not identify an unsafe ZIP member: %v", err)
+			}
+		})
+	}
+}
+
+func TestAssembleRejectsAppleZIPAliasesOfCanonicalMacOSMember(t *testing.T) {
+	const canonical = "AresPrivacyCore.xcframework/macos-arm64/libAresPrivacyCore.a"
+	for _, alias := range []string{
+		"./" + canonical,
+		"AresPrivacyCore.xcframework/macos-arm64/../macos-arm64/libAresPrivacyCore.a",
+		"AresPrivacyCore.xcframework//macos-arm64/libAresPrivacyCore.a",
+		"/" + canonical,
+		"AresPrivacyCore.xcframework\\macos-arm64\\libAresPrivacyCore.a",
+	} {
+		t.Run(alias, func(t *testing.T) {
+			bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{
+				AppleExtraZipMembers: []string{alias},
+			})
+
+			_, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
+			if err == nil {
+				t.Fatalf("expected Assemble to reject canonical-member alias %q, got nil error", alias)
+			}
+			if !strings.Contains(err.Error(), "ZIP member") {
+				t.Errorf("error does not identify an unsafe or colliding ZIP member: %v", err)
+			}
+		})
 	}
 }
 
@@ -277,19 +317,14 @@ func retargetStagedRevision(t *testing.T, bundleDir, repoRoot string) {
 // miss, exactly the bug class described in this task (a build that
 // records/claims one target but actually links a newer one).
 func TestAssembleInspectsRealMachODeploymentTargetOnDarwin(t *testing.T) {
-	hostPath := os.Getenv("PATH")
 	if runtime.GOOS != "darwin" {
 		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
-	}
-	if _, err := exec.LookPath("otool"); err != nil {
-		t.Skip("otool is unavailable")
 	}
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang is unavailable")
 	}
 
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
-	t.Setenv("PATH", hostPath)
 	realLib := compileRealMachOStaticLib(t, "15.0") // newer than the fixture's declared/recorded 14.0
 	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
 
@@ -303,19 +338,14 @@ func TestAssembleInspectsRealMachODeploymentTargetOnDarwin(t *testing.T) {
 }
 
 func TestAssembleRejectsRealMachOOlderThanDeclaredPinOnDarwin(t *testing.T) {
-	hostPath := os.Getenv("PATH")
 	if runtime.GOOS != "darwin" {
 		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
-	}
-	if _, err := exec.LookPath("otool"); err != nil {
-		t.Skip("otool is unavailable")
 	}
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang is unavailable")
 	}
 
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
-	t.Setenv("PATH", hostPath)
 	realLib := compileRealMachOStaticLib(t, "12.0") // older than the fixture's declared/recorded 14.0
 	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
 
@@ -333,19 +363,14 @@ func TestAssembleRejectsRealMachOOlderThanDeclaredPinOnDarwin(t *testing.T) {
 // exactly matches the declared pin must not be rejected by the inspection
 // step.
 func TestAssembleAcceptsRealMachOMatchingDeploymentTargetOnDarwin(t *testing.T) {
-	hostPath := os.Getenv("PATH")
 	if runtime.GOOS != "darwin" {
 		t.Skip("real Mach-O deployment-target inspection only runs on darwin")
-	}
-	if _, err := exec.LookPath("otool"); err != nil {
-		t.Skip("otool is unavailable")
 	}
 	if _, err := exec.LookPath("clang"); err != nil {
 		t.Skip("clang is unavailable")
 	}
 
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
-	t.Setenv("PATH", hostPath)
 	realLib := compileRealMachOStaticLib(t, releasebundletest.AppleMACOSDeploymentTarget)
 	replaceAppleXCFrameworkMacOSSlice(t, bundleDir, realLib)
 

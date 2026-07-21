@@ -17,11 +17,10 @@ a release staging directory. It declares a `COpenFHEBridge` binary target at
 environment switch, or workstation dependency. The tracked `Package.swift`
 remains the development manifest and is intentionally not a release input.
 
-**Scope boundary:** the scripts do not publish a Maven coordinate, alter a
-consumer Gradle dependency, or build Fheya's independently-owned Rust privacy
-core. Fheya's release assembler must combine these ARES-core artifacts with
-that separate binding and provenance evidence before invoking its complete
-release-artifact gate.
+**Scope boundary:** the scripts stage only the native artifacts owned by this
+repository. They do not publish package coordinates, alter downstream
+dependencies, or assemble a consumer product release. Downstream consumers
+remain responsible for their own bindings, provenance, and release gates.
 
 ## Pins
 
@@ -37,10 +36,9 @@ release-artifact gate.
   as `014.0` or `14.00` are not canonical release values.
 
 These files are the sole tracked source of truth for what is releasable.
-Neither script accepts an ordinary environment variable to redirect them —
-that would reopen exactly the bypass `clients/swift/FheyaClient/Package.swift`'s
-`FHEYA_ARES_CORE_SWIFT_PATH` local-development escape hatch represents for a
-release build. The only override is `ARES_NATIVE_TEST_MODE=1` plus an
+Neither script accepts an ordinary environment variable to redirect them;
+release builds cannot substitute workstation or downstream-consumer inputs.
+The only override is `ARES_NATIVE_TEST_MODE=1` plus an
 explicitly-named `ARES_NATIVE_TEST_*` variable, gated so it can never
 activate by accident; see "Testing" below.
 
@@ -148,15 +146,11 @@ check regardless of signing state.
 omitted for `android_aar`. The Apple build records the tracked value only
 after inspecting the produced macOS libraries with `otool`.
 
-This is deliberately shaped to compose with the sibling Fheya-server
-release-audit gate's schema
-(`internal/releaseaudit.NativeArtifact{Path,SHA256,BuiltFromRevision,AresCoreRevision}`
-plus `HashedFile{Path,SHA256}` for SBOM/provenance, see
-`ARES/internal/releaseaudit/README.md` in that repo's release-gate
-worktrees) — `ares_core_source_revision` here is what a consuming manifest
-would record as `built_from_revision`/`ares_core_revision`. Wiring this
-gate's output into that verifier is future integration work; this repo does
-not depend on or import anything from it.
+The schema is intended for product-neutral downstream integration.
+`ares_core_source_revision` binds the staged artifacts to this repository's
+exact source revision; consumers can include that value and the accompanying
+artifact, SBOM, and provenance hashes in their own release evidence without
+this repository depending on a consumer-specific assembler.
 
 ## Disk usage and RSS
 
@@ -279,11 +273,11 @@ None of the above is re-derived from the native build scripts or their
 staged files and recomputes everything itself, the same fail-closed
 posture as the scripts that produced them.
 
-The production release gate requires macOS and a working `otool`; missing
-inspection tooling is a hard failure, not permission to trust producer
-metadata. `.github/workflows/release-clients.yml` therefore pins the gate
-job to `macos-14`. Running the production CLI on Linux without `otool` also
-fails closed.
+The production release gate requires Darwin and the verified system tool at
+`/usr/bin/otool`; it does not resolve the inspector through `PATH`. A missing
+or invalid system tool is a hard failure, not permission to trust producer
+metadata. `.github/workflows/release-clients.yml` therefore pins the gate job
+to `macos-14`, and the production CLI fails closed on every non-Darwin runtime.
 
 `release-artifact-gate verify -manifest=... -bundle-dir=... -repo-root=...`
 re-assembles the bundle from scratch and requires the result to be
@@ -350,12 +344,14 @@ including a tampered-artifact rejection case, so the exit-code and
 stdout/stderr contract is exercised end to end, not just the underlying Go
 functions.
 
-The shared positive fixtures install an explicit test-only `otool` in their
-subprocess `PATH` and encode deterministic `minos` values in fixture archive
-members. This keeps `.github/workflows/go.yml`'s ordinary `ubuntu-latest`
-`go test ./...` run hermetic without adding a production environment bypass.
-Darwin-only tests separately compile tiny real Mach-O archives and inspect
-them with the host `otool`; neither test path runs an OpenFHE build.
+In-process bundle tests use a `_test.go`-only metadata runner and deterministic
+`minos` markers while retaining the production ZIP validation and member
+selection code. This keeps `.github/workflows/go.yml`'s ordinary
+`ubuntu-latest` `go test ./...` run hermetic without exposing an inspector
+override to the production CLI. Darwin-only subprocess tests compile tiny
+real Mach-O archives and inspect them with the verified `/usr/bin/otool`;
+adversarial tests prove a PATH-shadowed fake cannot satisfy the gate. Neither
+test path runs an OpenFHE build.
 
 ```
 go test ./internal/releasebundle/... ./cmd/release-artifact-gate/... -v -count=1

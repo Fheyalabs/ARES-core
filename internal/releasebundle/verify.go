@@ -18,11 +18,15 @@ import (
 // individual fail-closed rule in Assemble would otherwise have nothing to
 // object to about the hand-edited values in isolation.
 func Verify(bundleDir, repoRoot string, m *ReleaseCacheManifest) error {
+	return verify(bundleDir, repoRoot, m, inspectAppleMacOSSliceDeploymentTarget)
+}
+
+func verify(bundleDir, repoRoot string, m *ReleaseCacheManifest, inspectDeploymentTarget appleDeploymentTargetInspector) error {
 	if m == nil {
 		return fmt.Errorf("release-cache manifest is nil")
 	}
 
-	fresh, err := Assemble(bundleDir, repoRoot)
+	fresh, err := assemble(bundleDir, repoRoot, inspectDeploymentTarget)
 	if err != nil {
 		return fmt.Errorf("bundle no longer assembles cleanly: %w", err)
 	}

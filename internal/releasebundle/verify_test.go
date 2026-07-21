@@ -13,7 +13,7 @@ import (
 func TestVerifyAcceptsFreshlyAssembledManifest(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 
-	m, err := releasebundle.Assemble(bundleDir, repoRoot)
+	m, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -23,7 +23,7 @@ func TestVerifyAcceptsFreshlyAssembledManifest(t *testing.T) {
 	}
 
 	loaded := readManifest(t, manifestPath)
-	if err := releasebundle.Verify(bundleDir, repoRoot, loaded); err != nil {
+	if err := releasebundle.VerifyForTest(bundleDir, repoRoot, loaded); err != nil {
 		t.Fatalf("Verify rejected a freshly assembled, untampered manifest: %v", err)
 	}
 }
@@ -31,7 +31,7 @@ func TestVerifyAcceptsFreshlyAssembledManifest(t *testing.T) {
 func TestVerifyRejectsHandEditedManifest(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 
-	m, err := releasebundle.Assemble(bundleDir, repoRoot)
+	m, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -41,7 +41,7 @@ func TestVerifyRejectsHandEditedManifest(t *testing.T) {
 	tampered := *m
 	tampered.Apple.ArtifactSHA256 = "0000000000000000000000000000000000000000000000000000000000000"
 
-	if err := releasebundle.Verify(bundleDir, repoRoot, &tampered); err == nil {
+	if err := releasebundle.VerifyForTest(bundleDir, repoRoot, &tampered); err == nil {
 		t.Fatal("expected Verify to reject a hand-edited manifest whose claims do not match a fresh assembly of the bundle")
 	}
 }
@@ -49,7 +49,7 @@ func TestVerifyRejectsHandEditedManifest(t *testing.T) {
 func TestVerifyRejectsWhenUnderlyingBundleNoLongerAssembles(t *testing.T) {
 	bundleDir, repoRoot := releasebundletest.NewBundle(t, releasebundletest.Opts{})
 
-	m, err := releasebundle.Assemble(bundleDir, repoRoot)
+	m, err := releasebundle.AssembleForTest(bundleDir, repoRoot)
 	if err != nil {
 		t.Fatalf("Assemble: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestVerifyRejectsWhenUnderlyingBundleNoLongerAssembles(t *testing.T) {
 	// post-assembly.
 	releasebundletest.TamperFile(t, filepath.Join(bundleDir, "AresPrivacyCore-v1.5.1-android.aar"))
 
-	if err := releasebundle.Verify(bundleDir, repoRoot, m); err == nil {
+	if err := releasebundle.VerifyForTest(bundleDir, repoRoot, m); err == nil {
 		t.Fatal("expected Verify to reject a manifest whose bundle no longer re-assembles cleanly")
 	}
 }

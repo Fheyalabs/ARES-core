@@ -25,6 +25,12 @@ import (
 // git state and tracked pin files. Any mismatch fails closed with no
 // manifest produced.
 func Assemble(bundleDir, repoRoot string) (*ReleaseCacheManifest, error) {
+	return assemble(bundleDir, repoRoot, inspectAppleMacOSSliceDeploymentTarget)
+}
+
+type appleDeploymentTargetInspector func(string) ([]string, error)
+
+func assemble(bundleDir, repoRoot string, inspectDeploymentTarget appleDeploymentTargetInspector) (*ReleaseCacheManifest, error) {
 	apple, err := loadStagingManifest(bundleDir, ArtifactKindAppleXCFramework)
 	if err != nil {
 		return nil, err
@@ -72,7 +78,7 @@ func Assemble(bundleDir, repoRoot string) (*ReleaseCacheManifest, error) {
 	if err := checkAppleXCFrameworkContents(appleArtifactPath, RequiredApplePlatforms); err != nil {
 		return nil, err
 	}
-	if err := verifyAppleDeploymentTarget(bundleDir, repoRoot, apple, appleArtifactPath); err != nil {
+	if err := verifyAppleDeploymentTarget(bundleDir, repoRoot, apple, appleArtifactPath, inspectDeploymentTarget); err != nil {
 		return nil, err
 	}
 	androidArtifactPath := filepath.Join(bundleDir, filepath.Base(android.ArtifactPath))
