@@ -239,6 +239,8 @@ func TestAutomaticMacOSReleaseSecurityWorkflow(t *testing.T) {
 			"cmd/release-artifact-gate/**",
 			"clients/native/**",
 			"internal/releaseworkflow/**",
+			"clients/swift/Package.release.swift",
+			".github/workflows/go.yml",
 			".github/workflows/release-security-macos.yml",
 		} {
 			if !paths[required] {
