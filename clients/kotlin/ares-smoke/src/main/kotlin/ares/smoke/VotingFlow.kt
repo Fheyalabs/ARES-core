@@ -215,7 +215,8 @@ object VotingFlow {
      * We extract the `onions` JSON array from the raw frame text using a
      * regex (mirrors Swift extractPayload / decodeOnions helpers).
      */
-    private fun decodeOnions(rawFrame: String): List<ByteArray> {
+    internal fun decodeOnions(rawBytes: ByteArray): List<ByteArray> {
+        val rawFrame = strictUTF8(rawBytes)
         // Extract the value of "payload": {...} from the outer WireFrame JSON.
         // The payload is inlined verbatim, so it is a JSON object nested inside
         // the outer frame object.  We search for the "onions" array directly.

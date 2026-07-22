@@ -14,8 +14,9 @@ import ares.client.transport.Orchestrator
 import kotlin.math.sqrt
 
 object BoundCheckFlow {
-    /** Extract a JSON string-to-string map from a raw JSON object string. */
-    private fun extractStringMap(raw: String, key: String): Map<String, String> {
+    /** Extract a JSON string-to-string map from the transport's raw frame. */
+    internal fun extractStringMap(rawBytes: ByteArray, key: String): Map<String, String> {
+        val raw = strictUTF8(rawBytes)
         val start = raw.indexOf("\"$key\":{")
         if (start == -1) return emptyMap()
         var i = start + key.length + 4
